@@ -1,0 +1,77 @@
+OASISFormat:      0.3
+OCamlVersion:     >= 4.00.0
+FindlibVersion:   >= 1.3.2
+Name:             jenga
+Version:          109.14.00
+Synopsis:         Build system
+Authors:          Jane Street Capital LLC <opensource@janestreet.com>
+Copyrights:       (C) 2013 Jane Street Capital LLC <opensource@janestreet.com>
+Maintainers:      Jane Street Capital LLC <opensource@janestreet.com>
+License:          Apache-2.0
+LicenseFile:      LICENSE.txt
+Homepage:         https://github.com/janestreet/jenga
+Plugins:          StdFiles (0.3), DevFiles (0.3), META (0.3)
+XStdFilesAUTHORS: false
+XStdFilesREADME:  false
+BuildTools:       ocamlbuild, camlp4o
+
+Library jenga_lib
+  Path:               lib
+  FindlibName:        jenga
+  Pack:               true
+  Modules:            Api,
+                      Build,
+                      Command_line,
+                      Config,
+                      Copy_of_find,
+                      Description,
+                      Discovered_graph,
+                      Effort,
+                      For_user,
+                      Fs,
+                      Generic_mutable_graph,
+                      Glob_to_re,
+                      Heart,
+                      Jenga_root_interface,
+                      Job_scheduler,
+                      Load_root,
+                      Message,
+                      Misc,
+                      Path,
+                      Pattern,
+                      Persist,
+                      Repo_root,
+                      Run,
+                      Tenacious
+  BuildDepends:       sexplib,
+                      sexplib.syntax,
+                      fieldslib,
+                      fieldslib.syntax,
+                      comparelib,
+                      comparelib.syntax,
+                      core,
+                      core_extended,
+                      async,
+                      async_shell,
+                      async_inotify,
+                      pcre,
+                      ocaml_plugin,
+                      threads
+  XMETARequires:      sexplib,
+                      fieldslib,
+                      comparelib,
+                      core,
+                      core_extended,
+                      async,
+                      async_shell,
+                      async_inotify,
+                      pcre,
+                      ocaml_plugin,
+                      threads
+
+Executable jenga
+  Path:               bin
+  MainIs:             jenga.ml
+  CompiledObject:     best
+  BuildDepends:       jenga,
+                      threads
