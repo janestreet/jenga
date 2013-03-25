@@ -1,6 +1,9 @@
 
 open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
+
+let (=) = Int.(=)
 
 module Digest = Fs.Digest
 module Glob = Fs.Glob
@@ -11,29 +14,38 @@ module Alias  = struct
   (* an id which associates to a set of deps
      - bit like an omake phony, but with no action *)
 
-  type t = {
-    dir : Path.t;
-    name : string;
-  } with sexp, compare
+  module T = struct
+    type t = {
+      dir : Path.t;
+      name : string;
+    } with sexp, compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make(T)
 
   let create ~dir name = { dir; name; }
   let split t = t.dir, t.name
   let default ~dir = create ~dir "DEFAULT"
 
   let to_string t =
-    if t.dir = Path.the_root
+    if Path.equal t.dir Path.the_root
     then t.name
     else sprintf "%s/.%s" (Path.to_rrr_string t.dir) t.name
 
   let directory t = t.dir
 
-  let equal = (=)
-
 end
 
 module Scan_id = struct
 
-  type t = Sexp.t with sexp, compare
+  module T = struct
+    type t = Sexp.t with sexp, compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make(T)
+
   let of_sexp x = x
   let to_sexp x = x
   let to_string t = Sexp.to_string t
@@ -42,10 +54,9 @@ end
 
 module Action_id = struct
 
-  type t = Sexp.t with sexp
+  type t = Sexp.t with sexp, compare
   let of_sexp x = x
   let to_sexp x = x
-  let equal = (=)
   let to_string t = Sexp.to_string t
 
 end
@@ -71,7 +82,8 @@ module Dep = struct
 
   module T = struct
     type t = [
-    | `goal of Goal.t
+    | `path of Path.t
+    | `alias of Alias.t
     | `scan of t list * Scan_id.t
     | `glob of Glob.t
     | `null
@@ -83,8 +95,8 @@ module Dep = struct
   include Hashable.Make(T)
 
   let case t = t
-  let path path = `goal (Goal.path path)
-  let alias alias = `goal (Goal.alias alias)
+  let path path = `path path
+  let alias alias = `alias alias
   let glob glob = `glob glob
   let scan1 ts id = `scan (ts,id)
   let scan ts sexp = `scan (ts,Scan_id.of_sexp sexp)
@@ -92,7 +104,8 @@ module Dep = struct
 
   let rec to_string t =
     match t with
-    | `goal goal -> Goal.to_string goal
+    | `path path -> Path.to_rrr_string path
+    | `alias alias -> Alias.to_string alias
     | `scan (deps,_) ->
       sprintf "scan: %s" (String.concat ~sep:" " (List.map deps ~f:to_string))
     | `glob glob -> sprintf "glob: %s" (Fs.Glob.to_string glob)
@@ -126,7 +139,7 @@ module Xaction = struct
     dir : Path.t;
     prog : string;
     args : string list;
-  } with sexp
+  } with sexp, compare
 
   let shell ~dir ~prog ~args = { dir ; prog; args; }
 
@@ -136,21 +149,20 @@ module Xaction = struct
 
   let to_string t = sprintf "%s %s" t.prog (concat_args_quoting_spaces t.args)
 
-  let equal = (=)
-
 end
 
 module Action = struct
 
-  type t = X of Xaction.t | I of Action_id.t with sexp
+  type t = X of Xaction.t | I of Action_id.t
+  with sexp, compare
 
   let case = function
     | X x -> `xaction x
     | I x -> `id x
+
   let xaction x = X x
   let internal1 i = I i
   let internal sexp = I (Action_id.of_sexp sexp)
-  let equal = (=)
 
   let shell ~dir ~prog ~args =
     xaction (Xaction.shell ~dir ~prog ~args)
@@ -163,12 +175,20 @@ end
 
 module Target_rule = struct
 
-  type t = {
-    targets : Path.t list;
-    deps : Dep.t list;
-    action : Action.t;
-  }
-  with sexp,fields
+  module T = struct
+
+    type t = {
+      targets : Path.t list;
+      deps : Dep.t list;
+      action : Action.t;
+    }
+    with sexp, compare, fields
+
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make(T)
+
 
   let create ~targets ~deps ~action =
     (* Sort targets/deps on construction.
@@ -220,7 +240,7 @@ module Rule  = struct
 
   let defines_alias_for a1 = function
     | `target _ -> false
-    | `alias (a2,_) -> Alias.equal a1 a2
+    | `alias (a2,_) -> Alias.compare a1 a2 = 0
 
   let case t = t
 
@@ -234,10 +254,17 @@ module Rule  = struct
 end
 
 module Gen_key = struct
-  type t = {
-    tag : string;
-    dir : Path.t;
-  } with sexp
+
+  module T = struct
+    type t = {
+      tag : string;
+      dir : Path.t;
+    } with sexp, compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make(T)
+
   let create ~tag ~dir = { tag; dir; }
   let to_string t = sprintf "%s:%s" t.tag (Path.to_rrr_string t.dir)
 end

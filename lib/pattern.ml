@@ -1,9 +1,12 @@
 
 open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
 module Pat : sig
 
   type t with sexp
+  include Hashable with type t := t
+
   val to_string : t -> string
   val create_from_glob_string : string -> t
   val create_from_regexp_string : string -> t
@@ -12,15 +15,23 @@ module Pat : sig
 
 end = struct
 
-  type t = [`glob_string of string | `regex_string of string] with sexp, compare
+  module T = struct
+    type t = Glob of string | Regexp of string
+    with sexp, compare
+    let hash = function
+      | Glob s -> String.hash s
+      | Regexp s -> String.hash s
+  end
+  include T
+  include Hashable.Make(T)
 
   let to_string t =
     match t with
-    | `glob_string g -> g
-    | `regex_string r -> sprintf "%s[regexp]" r
+    | Glob g -> g
+    | Regexp r -> sprintf "%s[regexp]" r
 
-  let create_from_glob_string g = `glob_string g
-  let create_from_regexp_string r = `regex_string r
+  let create_from_glob_string g = Glob g
+  let create_from_regexp_string r = Regexp r
 
   let to_pcre =
     (*let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in*)
@@ -28,8 +39,8 @@ end = struct
       (*let u = genU() in*)
       let re_string =
         match t with
-        | `regex_string r -> r
-        | `glob_string g -> Glob_to_re.convert g
+        | Regexp r -> r
+        | Glob g -> Glob_to_re.convert g
       in
       (*Message.message "pat[%d]: %s -> %s" u (to_string t) re_string;*)
       Pcre.regexp re_string
@@ -46,7 +57,7 @@ module V2 = struct
     pat : Pat.t;
   }
 
-  let the_pat_cache : (Pat.t, Pcre.regexp) Hashtbl.t = Hashtbl.Poly.create()
+  let the_pat_cache : (Pat.t, Pcre.regexp) Hashtbl.t = Pat.Table.create()
 
   let create pat =
     let () =

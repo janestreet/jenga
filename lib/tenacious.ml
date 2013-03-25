@@ -1,6 +1,10 @@
 
 open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
+
+let (=) = Int.(=)
+let (>) = Int.(>)
 
 module T = struct
 

@@ -1,5 +1,6 @@
 
 open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
 let lstat_counter = Effort.Counter.create "lstat"
@@ -82,9 +83,9 @@ end = struct
     kind : Kind.t;
     size : int64;
     mtime : float;
-  } with sexp
+  } with sexp, compare
 
-  let equal = (=)
+  let equal t1 t2 = Int.(=) 0 (compare t1 t2)
 
   let kind t = t.kind
 
@@ -169,69 +170,58 @@ module Listing : sig
 
   module Restriction : sig
     type t with sexp
-    val create : Kind.t list -> Pattern.t -> t
+    val create : Pattern.t -> t
     val to_string : t -> string
     val compare : t -> t -> int
   end
 
   val restrict : t -> Restriction.t -> t
-  (*val inspect : t -> (Path.t * Kind.t) list*)
   val paths : t -> Path.t list
   val equal : t -> t -> bool
 
 end = struct
 
-  module Find = Copy_of_find
-
   type t = {
-    listing : (Path.t * Kind.t) list
-  } with sexp
+    listing : Path.t list
+  } with sexp, compare
 
   let run_ls ~dir =
     Effort.track ls_counter (fun () ->
-      trace "RUN_LS: %s" (Path.to_absolute_string dir);
       try_with (fun () ->
-        Find.find_all
-          ~options:{
-            Find.Options.
-            max_depth = Some 0;
-            follow_links = true;
-            on_open_errors = Find.Options.Ignore;
-            on_stat_errors = Find.Options.Ignore;
-            filter = None;
-            skip_dir = None
-          }
-          (Path.to_absolute_string dir)
-      )
-      >>= fun res ->
-      match res with
-      | Error exn -> return (Error (Error.of_exn exn))
-      | Ok xs ->
-        let listing =
-          List.filter_map xs ~f:fun (name,stats) ->
-            match name with
-            | "." | ".." -> None  (* removing . and .. *)
-            | _ ->
-              let path = Path.create_from_absolute name in
-              let kind = Unix.Stats.kind stats in
-              Some (path,kind)
+        let path_string = Path.to_absolute_string dir in
+        Unix.opendir path_string >>= fun dir_handle ->
+        let close () =
+          don't_wait_for (
+            try_with (fun () -> Unix.closedir dir_handle) >>| function | Ok () -> ()
+            | Error exn ->
+              Message.error "Unix.closedir failed: %s\n%s" path_string (Exn.to_string exn)
+          )
         in
-        trace "RUN_LS: %s - done" (Path.to_absolute_string dir);
-        return (Ok { listing })
+        let rec loop acc =
+          try_with (fun () -> Unix.readdir dir_handle) >>= function
+          | Ok "." -> loop acc
+          | Ok ".." -> loop acc
+          | Ok string ->
+            let path = Path.relative ~dir string in
+            loop (path :: acc)
+          | Error exn ->
+            match Monitor.extract_exn exn with
+            | End_of_file -> close(); return acc
+            | exn -> close(); raise exn
+        in
+        loop []
+      )
+      >>= function
+      | Error exn -> return (Error (Error.of_exn exn))
+      | Ok paths -> return (Ok { listing = paths })
     )
 
   module Restriction = struct
     type t = {
-      kinds : Kind.t list;
       pat : Pattern.t;
     } with sexp, compare
 
-    let create kinds pat = { kinds; pat; }
-
-    (*let to_string t =
-      sprintf "%s(%s)"
-        (Pattern.to_string t.pat)
-        (String.concat ~sep:"," (List.map t.kinds ~f:Kind.to_string))*)
+    let create pat = { pat; }
 
     let to_string t = sprintf "%s" (Pattern.to_string t.pat)
 
@@ -239,15 +229,13 @@ end = struct
 
   let restrict t r = {
     listing =
-      List.filter t.listing ~f:fun (path,kind) ->
-        List.mem r.Restriction.kinds kind
-        && Pattern.matches r.Restriction.pat (Path.basename path)
+      List.filter t.listing ~f:fun path ->
+        Pattern.matches r.Restriction.pat (Path.basename path)
   }
 
   let equal t1 t2 = Int.(=) 0 (compare t1 t2)
 
-  (*let inspect t = t.listing*)
-  let paths t = List.map t.listing ~f:fst
+  let paths t = t.listing
 
 end
 
@@ -269,7 +257,7 @@ end = struct
 
   type t = {
     notifier : Inotify.t ;
-    glass_hearts : (Path.t, what * Heart.Glass.t) Hashtbl.t;
+    glass_hearts : (what * Heart.Glass.t) Path.Table.t;
   }
 
   let paths_of_event =
@@ -315,7 +303,7 @@ end = struct
   let create () =
     (* Have to pass a path at creation - what a pain, dont have one yet! *)
     Inotify.create ~recursive:false ~watch_new_dirs:false "/" >>= fun (notifier,_) ->
-    let glass_hearts = Hashtbl.Poly.create () in
+    let glass_hearts = Path.Table.create () in
     let t = {notifier; glass_hearts} in
     suck_notifier_pipe t (Inotify.pipe notifier);
     return t
@@ -374,12 +362,12 @@ end = struct
   type computation = Stats.t Or_error.t Tenacious.t
   type t = {
     watcher : Watcher.t;
-    cache : (Path.t, computation) Hashtbl.Poly.t;
+    cache : computation Path.Table.t;
   }
 
   let create watcher = {
     watcher;
-    cache = Hashtbl.Poly.create ();
+    cache = Path.Table.create ();
   }
 
   let lstat t ~what path =
@@ -447,11 +435,11 @@ module Digest_persist : sig
 end = struct
 
   type t = {
-    cache : (Path.t, Stats.t * Digest.t) Hashtbl.Poly.t;
+    cache : (Stats.t * Digest.t) Path.Table.t;
   } with sexp
 
   let create () = {
-    cache = Hashtbl.Poly.create ();
+    cache = Path.Table.create ();
   }
 
   let is_file stats =
@@ -504,11 +492,11 @@ module Listing_persist : sig
 end = struct
 
   type t = {
-    cache : (Path.t, Stats.t * Listing.t) Hashtbl.Poly.t;
+    cache : (Stats.t * Listing.t) Path.Table.t;
   } with sexp
 
   let create () = {
-    cache = Hashtbl.Poly.create ();
+    cache = Path.Table.create ();
   }
 
   let is_dir stats =
@@ -602,7 +590,7 @@ end = struct
 
   type computation = Digest_result.t Tenacious.t
   type t = {
-    cache : (Path.t, computation) Hashtbl.Poly.t;
+    cache : computation Path.Table.t;
   }
 
   let digest_file t dp sm ~file =
@@ -614,7 +602,7 @@ end = struct
       tenacious
 
   let create () = {
-    cache = Hashtbl.Poly.create ();
+    cache = Path.Table.create ();
   }
 
 end
@@ -639,7 +627,7 @@ end = struct
 
   type computation = Listing_result.t Tenacious.t
   type t = {
-    cache : (Path.t, computation) Hashtbl.Poly.t;
+    cache : computation Path.Table.t;
   }
 
   let list_dir t dp sm ~dir =
@@ -651,7 +639,7 @@ end = struct
       tenacious
 
   let create () = {
-    cache = Hashtbl.Poly.create ();
+    cache = Path.Table.create ();
   }
 
 end
@@ -764,9 +752,8 @@ end = struct
       (Listing.Restriction.to_string t.restriction)
 
   let create ~dir ~glob_string =
-    let kinds = [`File;`Directory] in
     let pat = Pattern.create_from_glob_string glob_string in
-    let restriction = Listing.Restriction.create kinds pat in
+    let restriction = Listing.Restriction.create pat in
     { dir ; restriction }
 
   let exec_no_cutoff glob fs  =

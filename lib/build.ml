@@ -1,8 +1,9 @@
 
 open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+let (<>) = Int.(<>)
 
 open Description
 
@@ -15,16 +16,15 @@ module DG = Discovered_graph
   Effort
 ----------------------------------------------------------------------*)
 
-let generation_calls = Effort.Counter.create "GEN"
-let scanner_calls = Effort.Counter.create "SCAN"
-let external_action_counter = Effort.Counter.create "JOB"
+let generation_calls = Effort.Counter.create "gen"
+let scanner_calls = Effort.Counter.create "scan"
+let external_action_counter = Effort.Counter.create "act"
 
 let the_effort =
   Effort.create ~tag:"effort" [
     Fs.lstat_counter;
     Fs.digest_counter;
     Fs.ls_counter;
-    Copy_of_find.xlstat_counter;
     generation_calls;
     scanner_calls;
     external_action_counter;
@@ -128,7 +128,7 @@ end = struct
     (* stage 2 *)
     let dups = ref [] in
     let push_dups tag = (dups := tag :: !dups) in
-    let h_schemes = Hashtbl.Poly.create () in
+    let h_schemes = String.Table.create () in
     let () =
       List.iter schemes ~f:(fun (_pat,scheme_opt) ->
         match scheme_opt with
@@ -199,8 +199,8 @@ end = struct
   }
 
   let create rules =
-    let by_target = Hashtbl.Poly.create () in
-    let by_alias = Hashtbl.Poly.create () in
+    let by_target = Path.Table.create () in
+    let by_alias = Alias.Table.create () in
     let dups = ref [] in
     let () =
       List.iter rules ~f:(fun rule ->
@@ -447,12 +447,12 @@ end = struct
     | I (i1,rp1), I (i2,rp2) ->
       if not (Root_proxy.equal rp1 rp2) then
         Some `root_changed
-      else if not (Action_id.equal i1 i2) then
+      else if Action_id.compare i1 i2 <> 0 then
         Some `action_changed
       else
         None
     | X x1, X x2 ->
-      if not (Xaction.equal x1 x2) then
+      if Xaction.compare x1 x2 <> 0 then
         Some `action_changed
       else
         None
@@ -502,6 +502,12 @@ module Reason = struct
 
   | Cycle_report                      of Dep.t * DG.Item.t list
 
+
+  let item_to_string = function
+    | DG.Item.Root -> "ROOT"
+    | DG.Item.Dep dep -> (*sprintf "DEP: %s"*) (Dep.to_string dep)
+    | DG.Item.Target_rule tr -> sprintf "RULE: %s" (Target_rule.to_string tr)
+    | DG.Item.Gen_key g -> sprintf "GEN: %s" (Gen_key.to_string g)
 
   let rec to_string = function
 
@@ -555,7 +561,7 @@ module Reason = struct
       sprintf "Cyclic dependencies: %s"
         (String.concat (
           List.map items ~f:(fun item ->
-            sprintf "\n- %s" (DG.Item.to_string item))))
+            sprintf "\n- %s" (item_to_string item))))
 
 
 end
@@ -566,7 +572,7 @@ end
 
 (* TODO: special case Error for Error_in_dep *)
 (* distinuish Source as special case of Built *)
-(* Make this status be the same type as DG.Status *)
+(* Make this status be the same type as Dot.Status *)
 module Status = struct
   type t =
   | Considering | Waiting | Running of string
@@ -577,10 +583,10 @@ module Progress : sig
 
   type t
   val create : unit -> t
-  val ht : t -> (Dep.t, Status.t) Hashtbl.Poly.t
+  val ht : t -> Status.t Dep.Table.t
   val message_errors : t -> unit
 
-  val dg_status : t  -> Dep.t -> DG.Status.t
+  val dg_status : t  -> Dep.t -> Dot.Status.t
 
   module Counts : sig
     type t
@@ -594,23 +600,23 @@ module Progress : sig
 
 end = struct
 
-  type t = (Dep.t, Status.t) Hashtbl.Poly.t
+  type t = Status.t Dep.Table.t
 
-  let create () = Hashtbl.Poly.create()
+  let create () = Dep.Table.create()
   let ht t = t
 
   let dg_status t dep =
     match (Hashtbl.find t dep) with
-    | None -> DG.Status.Unknown
+    | None -> Dot.Status.Unknown
     | Some status ->
-      let cat x =  DG.Status.Cat x in
+      let cat x =  Dot.Status.Cat x in
       match status with
-      | Status.Considering                    -> cat DG.Catagory.Waiting
-      | Status.Waiting                        -> cat DG.Catagory.Waiting
-      | Status.Running _                      -> cat DG.Catagory.Working
-      | Status.Built                          -> cat DG.Catagory.Good
-      | Status.Error (Reason.Error_in_deps _) -> cat DG.Catagory.Child_error
-      | Status.Error _                        -> cat DG.Catagory.Error
+      | Status.Considering                    -> cat Dot.Catagory.Waiting
+      | Status.Waiting                        -> cat Dot.Catagory.Waiting
+      | Status.Running _                      -> cat Dot.Catagory.Working
+      | Status.Built                          -> cat Dot.Catagory.Good
+      | Status.Error (Reason.Error_in_deps _) -> cat Dot.Catagory.Child_error
+      | Status.Error _                        -> cat Dot.Catagory.Error
 
   let final_status_to_string = function
     | Status.Considering    -> "unexpectedly Considering"
@@ -890,15 +896,15 @@ module Persist = struct
      so they can be saved to file.  *)
 
   type t = {
-    scanned : (Scan_id.t, (Rooted_proxy.t * Dep.t list)) Hashtbl.Poly.t;
-    generated : (Gen_key.t, (Rooted_proxy.t * Rule_set.t)) Hashtbl.Poly.t;
-    actioned : (Path.t, Rule_proxy.t) Hashtbl.Poly.t;
+    scanned     : (Rooted_proxy.t * Dep.t list) Scan_id.Table.t;
+    generated   : (Rooted_proxy.t * Rule_set.t) Gen_key.Table.t;
+    actioned    : Rule_proxy.t Path.Table.t;
   } with sexp
 
   let create () = {
-    scanned = Hashtbl.Poly.create();
-    generated = Hashtbl.Poly.create();
-    actioned = Hashtbl.Poly.create();
+    scanned = Scan_id.Table.create();
+    generated = Gen_key.Table.create();
+    actioned = Path.Table.create();
   }
 
 end
@@ -916,16 +922,16 @@ module Memo = struct
      computatations *)
 
   type t = {
-    generating : (Gen_key.t, Rule_set.t   Builder.t * DG.Node.t) Hashtbl.Poly.t;
-    building   : (Dep.t    , Proxy_map.t  Builder.t * DG.Node.t) Hashtbl.t;
-    ruling : (Target_rule.t, PPs.t        Builder.t * DG.Node.t) Hashtbl.Poly.t;
-    root : (Env1.t * Root_proxy.t) Builder.t option ref;
+    generating  : (Rule_set.t   Builder.t * DG.Node.t) Gen_key.Table.t;
+    building    : (Proxy_map.t  Builder.t * DG.Node.t) Dep.Table.t;
+    ruling      : (PPs.t        Builder.t * DG.Node.t) Target_rule.Table.t;
+    root        : (Env1.t * Root_proxy.t) Builder.t option ref;
   }
 
   let create () = {
-    generating = Hashtbl.Poly.create();
+    generating = Gen_key.Table.create();
     building = Dep.Table.create();
-    ruling = Hashtbl.Poly.create();
+    ruling = Target_rule.Table.create();
     root = ref None;
   }
 
@@ -950,8 +956,9 @@ type t = {
   (* know dep being worked on, so can set the status *)
   me : Dep.t;
 
-  (* pointer into discovered graph structure - used for cycle checking *)
-  build_node : DG.Node.t;
+  (* discovered_graph structure & current node - used for cycle checking *)
+  discovered_graph : DG.t;
+  node : DG.Node.t;
 
 } with fields
 
@@ -959,8 +966,8 @@ type t = {
 let set_status t status =
   Hashtbl.set (Progress.ht t.progress) ~key:(t.me) ~data:status
 
-let push_build_item t item =
-  {t with build_node = DG.Node.new_child t.build_node item}
+let push_dependency t item =
+  {t with node = DG.create_dependency t.discovered_graph t.node item}
 
 
 let scanned t = t.persist.Persist.scanned
@@ -997,21 +1004,21 @@ let share_and_check_for_cycles :
     ) =
   fun t ~key ~memo ~item ~f ->
     match (Hashtbl.find memo key) with
-    | Some (builder,build_node) ->
+    | Some (builder,node) ->
       begin
-        match (DG.Node.link_parents build_node ~additional:t.build_node) with
+        match (DG.link_dependants t.discovered_graph node ~additional:t.node) with
         | `ok -> builder
-        | `cycle_report items -> error (Reason.Cycle_report (t.me, items))
+        | `cycle items -> error (Reason.Cycle_report (t.me, items))
       end
     | None ->
-      let t = push_build_item t item in
+      let t = push_dependency t item in
       let builder =
         Builder.when_do_or_redo (fun () ->
           f t
-        ) ~f:(fun () -> DG.Node.kill_existing_children t.build_node)
+        ) ~f:(fun () -> DG.remove_all_dependencies t.node)
       in
       (* we use add_exn, because each key will be memoized exactly once *)
-      Hashtbl.add_exn memo ~key ~data:(builder,t.build_node);
+      Hashtbl.add_exn memo ~key ~data:(builder,t.node);
       builder
 
 
@@ -1336,7 +1343,8 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
   fun t dep ->
     match (Dep.case dep) with
     | `scan (scan_deps,scan_id) -> build_scanner t scan_deps scan_id
-    | `goal goal                -> build_goal t goal
+    | `path path                -> build_goal t (Goal.path path)
+    | `alias alias              -> build_goal t (Goal.alias alias)
     | `glob glob                -> need_glob t.fs glob
     | `null                     -> return Proxy_map.empty
 
@@ -1378,7 +1386,7 @@ let build_one_root_dep :
       Fs.t ->
       Persist.t ->
       Memo.t ->
-      DG.Graph.t ->
+      DG.t ->
       Progress.t ->
       demanded:Dep.t ->
       unit Tenacious.t
@@ -1388,8 +1396,8 @@ let build_one_root_dep :
      And here we break out of the Builder monad, and revert to the plain
      tenacious monad - ignoring the proxy map or any errors.
   *)
-  fun ~jenga_root_path js fs persist memo build_graph progress ~demanded ->
-    let build_node = DG.Node.create build_graph ~root:DG.Item.Root in
+  fun ~jenga_root_path js fs persist memo discovered_graph progress ~demanded ->
+    let node = DG.create_root discovered_graph in
     let t = {
       fs;
       js;
@@ -1399,7 +1407,8 @@ let build_one_root_dep :
       jenga_root_path;
       recurse_build_dep = build_dep;
       me = demanded;
-      build_node;
+      discovered_graph;
+      node;
     } in
     let builder = build_dep t demanded in
     let tenacious =
@@ -1453,11 +1462,11 @@ let show_effort_and_progress_reports ~fin progress =
 
 
 
-let make_graph_dumper build_graph progress =
+let make_graph_dumper discovered_graph progress =
   let status_of_dep dep = Progress.dg_status progress dep in
   `dump (fun () ->
     Message.message "dumping graph...";
-    DG.Graph.dump build_graph ~status_of_dep >>= function
+    Dot.dump_graph discovered_graph ~status_of_dep >>= function
     | Error e ->
       Message.message "dumping graph - error: %s" (Error.to_string_hum e);
       Deferred.unit
@@ -1520,7 +1529,7 @@ let build_forever =
   fun config ~jenga_root_path ~top_level_demands fs persist ~when_polling ->
 
     let memo = Memo.create () in
-    let build_graph = DG.Graph.create () in
+    let discovered_graph = DG.create () in
     let progress = Progress.create () in
 
     let js =
@@ -1534,13 +1543,13 @@ let build_forever =
       Tenacious.all_unit (
         List.map top_level_demands ~f:(fun demanded ->
           build_one_root_dep
-            ~jenga_root_path js fs persist memo build_graph progress
+            ~jenga_root_path js fs persist memo discovered_graph progress
             ~demanded
         )
       )
     in
 
-    let `dump dump_graph = make_graph_dumper build_graph progress in
+    let `dump dump_graph = make_graph_dumper discovered_graph progress in
 
     let rec build_and_poll ()  = (* never finishes if polling *)
 

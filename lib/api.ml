@@ -1,5 +1,6 @@
 
-open Core.Std let _ = _squelch_unused_module_warning_
+open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_ let _ = _squelch_unused_module_warning_
 open Async.Std
 
 open Description
@@ -45,7 +46,7 @@ module Raw_sexp_makefile_rule = struct
       let acc = front :: acc in
       match xs with
       | [] -> List.rev acc
-      | colon::xs -> assert (colon = ":"); loop acc xs
+      | colon::xs -> assert (String.equal colon ":"); loop acc xs
     in
     loop []
 

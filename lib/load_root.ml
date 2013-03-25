@@ -1,5 +1,6 @@
 
 open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
 module P = Ocaml_plugin.Std

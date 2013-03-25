@@ -1,14 +1,31 @@
 
 open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
 (* todo - should the failwiths in this file be soft errors? *)
 
-type t = {
-  rrr : string (* "rrr" = repo-root-relative *)
-} with sexp
+module T = struct
+
+  type t = {
+    rrr : string (* "rrr" = repo-root-relative *)
+  }
+
+  let hash t = String.hash t.rrr
+  let equal t1 t2 = String.equal t1.rrr t2.rrr
+  let compare t1 t2 = String.compare t1.rrr t2.rrr
+
+  (* avoid "rrr" in sexp conversion *)
+  let sexp_of_t t = String.sexp_of_t t.rrr
+  let t_of_sexp sexp = { rrr = String.t_of_sexp sexp }
+
+end
+
+include T
+include Hashable.Make(T)
 
 let starts_with_slash s =
-  s <> "" && (String.get s 0 = '/')
+  (match s with "" -> false | _ -> true)
+  && (match (String.get s 0) with | '/' -> true | _-> false)
 
 let create ~rrr =
   assert (not (starts_with_slash rrr));
@@ -20,7 +37,7 @@ let create_from_absolute =
   fun s ->
   let repo_root = Repo_root.get() in
     let repo_root_slash = repo_root ^ "/" in
-    if s = repo_root then the_root else
+    if String.equal s repo_root then the_root else
       match String.chop_prefix s ~prefix:repo_root_slash with
       | Some rrr ->
         create ~rrr
@@ -33,30 +50,27 @@ let create_from_absolute =
 let relative =
   let check_not_special s =
     if starts_with_slash s then failwithf "Path.relative, starts with / - %s" s ()
-    else if s = "." then failwith "Path.relative, s=."
-    else if s = ".." then failwith "Path.relative, s=.."
+    else if String.(=) s "." then failwith "Path.relative, s=."
+    else if String.(=) s ".." then failwith "Path.relative, s=.."
     else ()
   in
   fun ~dir s ->
     check_not_special s;
-    create ~rrr:(if dir = the_root then s else dir.rrr ^ "/" ^ s)
+    create ~rrr:(if T.equal dir the_root then s else dir.rrr ^ "/" ^ s)
 
 let suffix t s = create ~rrr:(t.rrr ^ s)
 
 let to_rrr_string t =
   (* Special case for repo_root. Represented as ""; Displayed as "." *)
-  if t.rrr = "" then "." else t.rrr
+  if String.equal t.rrr "" then "." else t.rrr
 
 let to_absolute_string t =
-  if t = the_root
+  if equal t the_root
   then Repo_root.get()
   else Repo_root.get() ^ "/" ^ t.rrr
 
-let equal = (=)
-let compare t1 t2 = String.compare t1.rrr t2.rrr
-
 let split t =
-  if t = the_root then failwith "Path.split, cant split the_root" else
+  if equal t the_root then failwith "Path.split, cant split the_root" else
   match String.rsplit2 t.rrr ~on:'/' with
   | Some (dir,base) -> { rrr = dir }, base
   | None -> the_root, t.rrr

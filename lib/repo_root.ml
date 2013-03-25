@@ -1,5 +1,6 @@
 
 open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
 let r = ref None
 
@@ -13,7 +14,7 @@ let discover ~marker =
   let rec loop dir =
     match Sys.file_exists (dir ^/ marker) with
       | `No | `Unknown ->
-        if dir = Filename.root
+        if String.equal dir Filename.root
         then `cant_find_root
         else loop (Filename.dirname dir)
       | `Yes -> set ~dir; `ok dir

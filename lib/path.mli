@@ -2,6 +2,7 @@
 open Core.Std
 
 type t with sexp
+include Hashable with type t := t
 
 val create_from_absolute : string -> t (* check starts with a / - wont be exposed to user*)
 (* todo: make it return an option - which caller can check and error on if desired *)

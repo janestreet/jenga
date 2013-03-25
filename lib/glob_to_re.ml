@@ -1,7 +1,7 @@
 
 open Core.Std
 
-(* copied from some old Till code -- dev/repo_utils/lib/glob.ml
+(* copied from some old code -- dev/repo_utils/lib/glob.ml
    todo - clean this up.
 *)
 

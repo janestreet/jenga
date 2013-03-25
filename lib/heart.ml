@@ -1,5 +1,6 @@
 
 open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
 type state = Broken | Fragile of (unit -> unit) list
@@ -90,7 +91,7 @@ let collect pred t =
   match t with
   | Unbreakable -> []
   | Breakable h ->
-    let visited = Hash_set.Poly.create() in
+    let visited = Int.Hash_set.create() in
     let rec walk acc h =
       if Hash_set.mem visited h.u then acc else (
         Hash_set.add visited h.u;

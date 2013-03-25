@@ -4,6 +4,7 @@ open Async.Std
 
 module Alias : sig
   type t with sexp
+  include Hashable with type t := t
   val create : dir: Path.t -> string -> t (* aliases are directory relative *)
   val split : t -> Path.t * string
   val default : dir:Path.t -> t
@@ -12,16 +13,16 @@ end
 
 module Scan_id : sig
   type t with sexp
+  include Hashable with type t := t
   val of_sexp : Sexp.t -> t
   val to_sexp : t -> Sexp.t
   val to_string : t -> string
 end
 
 module Action_id : sig
-  type t with sexp
+  type t with sexp,compare
   val of_sexp : Sexp.t -> t
   val to_sexp : t -> Sexp.t
-  val equal : t -> t -> bool
   val to_string : t -> string
 end
 
@@ -38,7 +39,8 @@ module Dep : sig
   type t with sexp
   include Hashable with type t := t
   val case : t -> [
-  | `goal of Goal.t
+  | `path of Path.t
+  | `alias of Alias.t
   | `scan of t list * Scan_id.t
   | `glob of Fs.Glob.t
   | `null
@@ -57,25 +59,24 @@ module Dep : sig
 end
 
 module Xaction : sig
-  type t = {dir : Path.t; prog : string; args : string list;} with sexp
+  type t = {dir : Path.t; prog : string; args : string list;} with sexp,compare
   val shell : dir:Path.t -> prog:string -> args:string list -> t
   val to_string : t -> string
-  val equal : t -> t -> bool
 end
 
 module Action : sig
-  type t with sexp
+  type t with sexp,compare
   val case : t -> [ `xaction of Xaction.t | `id of Action_id.t ]
   val xaction : Xaction.t -> t
   val internal1 : Action_id.t -> t
   val internal : Sexp.t -> t
-  val equal : t -> t -> bool
   val shell : dir:Path.t -> prog:string -> args:string list -> t
   val to_string : t -> string
 end
 
 module Target_rule : sig
   type t with sexp
+  include Hashable with type t := t
   val create : targets:Path.t list -> deps:Dep.t list -> action:Action.t -> t
   val triple : t -> Path.t list * Dep.t list * Action.t
   val targets : t -> Path.t list
@@ -101,6 +102,7 @@ end
 
 module Gen_key : sig
   type t = {tag : string; dir : Path.t;} with sexp
+  include Hashable with type t := t
   val create : tag:string -> dir:Path.t -> t
   val to_string : t -> string
 end

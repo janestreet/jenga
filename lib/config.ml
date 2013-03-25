@@ -1,5 +1,6 @@
 
-open Core.Std let _ = _squelch_unused_module_warning_
+open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_ let _ = _squelch_unused_module_warning_
 
 type t = {
   j_number : int;

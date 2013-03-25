@@ -1,5 +1,6 @@
 
 open Core.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
 module type S = sig
   val setup : unit -> Description.Env.t
