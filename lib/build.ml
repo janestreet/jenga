@@ -1526,11 +1526,10 @@ let build_once :
 let build_forever =
   (* co-ordinate the build-forever process *)
 
-  fun config ~jenga_root_path ~top_level_demands fs persist ~when_polling ->
+  fun config progress ~jenga_root_path ~top_level_demands fs persist ~when_polling ->
 
     let memo = Memo.create () in
     let discovered_graph = DG.create () in
-    let progress = Progress.create () in
 
     let js =
       let delay_for_dev = Config.delay_for_dev config in

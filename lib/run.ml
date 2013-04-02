@@ -50,6 +50,10 @@ let run config =
   trace "Root: %s" root_dir;
   trace "Start: %s" (Path.to_rrr_string start_dir);
 
+  let progress = Build.Progress.create () in
+
+  Rpc_server.go ~root_dir progress >>= fun () ->
+
   (* remember original CWD as start_dir, the chdir to ROOT
      This is necessary for internal actions, which assume this! *)
   Sys.chdir root_dir >>= fun () ->
@@ -72,7 +76,7 @@ let run config =
 
   let bs = Persist.build_persist persist in
 
-  Build.build_forever config
+  Build.build_forever config progress
     ~jenga_root_path ~top_level_demands fs bs ~when_polling
 
   >>= fun () ->
@@ -80,6 +84,14 @@ let run config =
   Persist.save_now persist >>= fun () ->
   Message.flushed () >>= fun () ->
   return 0 (* for non-polling, should return non-zero if have any errors *)
+
+
+let install_signal_handlers () =
+  trace "install_signal_handlers..";
+  Signal.handle Signal.terminating ~f:(fun s ->
+    trace "handling signal: %s, calling shutdown" (Signal.to_string s);
+    Shutdown.shutdown 1;
+  )
 
 let main config =
   For_user.install_config_for_user_rules config;
@@ -93,4 +105,5 @@ let main config =
     | None -> ()
     | Some cutoff -> Scheduler.report_long_cycle_times ~cutoff ()
   );
+  install_signal_handlers();
   never_returns (Scheduler.go ~raise_unhandled_exn:true ())

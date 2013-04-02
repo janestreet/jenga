@@ -25,6 +25,7 @@ val root_relative : string -> t
 val db_basename : string
 val log_basename : string
 val dot_basename : string
+val lock_basename : string
 
 val is_special_jenga_path : t -> bool
 

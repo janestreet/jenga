@@ -7,8 +7,19 @@ module Persist : sig
   val create : unit -> t
 end
 
+module Progress : sig
+  type t
+  val create : unit -> t
+  module Counts : sig
+    type t
+    val fraction : t -> (int*int)
+  end
+  val snap : t -> Counts.t
+end
+
 val build_forever :
   Config.t ->
+  Progress.t ->
   jenga_root_path: Path.LR.t ->
   top_level_demands : Description.Dep.t list ->
   Fs.t ->

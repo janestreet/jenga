@@ -93,6 +93,7 @@ let special suf = special_prefix ^ suf
 let log_basename = special ".debug"
 let db_basename = special ".db"
 let dot_basename = special ".dot"
+let lock_basename = special ".lock"
 
 
 type path = t with sexp
