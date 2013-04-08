@@ -3,7 +3,7 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
-let lstat_counter = Effort.Counter.create "lstat"
+let lstat_counter = Effort.Counter.create "stat"
 let digest_counter = Effort.Counter.create "digest"
 let ls_counter = Effort.Counter.create "ls"
 
@@ -187,6 +187,7 @@ end = struct
 
   let run_ls ~dir =
     Effort.track ls_counter (fun () ->
+     (*Message.message "LS: %s..." (Path.to_absolute_string dir);*)
       try_with (fun () ->
         let path_string = Path.to_absolute_string dir in
         Unix.opendir path_string >>= fun dir_handle ->
@@ -645,7 +646,149 @@ end = struct
 end
 
 (*----------------------------------------------------------------------
- Memo = combination of 3 memos - stat, digest, listing
+ Glob
+----------------------------------------------------------------------*)
+
+module Glob : sig
+
+  type t with sexp
+  include Hashable with type t := t
+
+  val create : dir:Path.t -> glob_string:string -> t
+  val to_string : t -> string
+  val compare : t -> t -> int
+
+  val exec : t ->
+    Listing_memo.t ->
+    Persist.t ->
+    Stat_memo.t ->
+    Listing_result.t Tenacious.t
+
+end = struct
+
+  module Key = struct
+    module T = struct
+      type t = {
+        dir : Path.t;
+        glob_string : string;
+      } with sexp,compare
+      let hash = Hashtbl.hash
+    end
+    include T
+    include Hashable.Make(T)
+  end
+
+  module T = struct
+    type t = {
+      dir : Path.t;
+      restriction : Listing.Restriction.t;
+    } with sexp, compare
+    let hash = Hashtbl.hash
+  end
+
+  include T
+  include Hashable.Make(T)
+
+  let to_string t =
+    sprintf "%s/%s"
+      (Path.to_rrr_string t.dir)
+      (Listing.Restriction.to_string t.restriction)
+
+  let raw_create ~dir ~glob_string =
+    let pat = Pattern.create_from_glob_string glob_string in
+    let restriction = Listing.Restriction.create pat in
+    let t = { dir ; restriction } in
+    (*Message.message "Glob.create: %s" (to_string t);*)
+    t
+
+  (* cache glob construction *)
+  let the_cache : (Key.t, t) Hashtbl.t = Key.Table.create()
+
+  let create ~dir ~glob_string =
+    let key = {Key. dir; glob_string} in
+    match (Hashtbl.find the_cache key) with
+    | Some glob -> glob
+    | None ->
+      let glob = raw_create ~dir ~glob_string in
+      Hashtbl.add_exn the_cache ~key ~data:glob;
+      glob
+
+
+  let exec_no_cutoff glob lm per sm  =
+    Listing_memo.list_dir lm per sm ~dir:glob.dir *>>= function
+    | `listing listing ->
+      Tenacious.return (`listing (Listing.restrict listing glob.restriction))
+    | x ->
+      Tenacious.return x
+
+  let exec glob lm per sm =
+    (*Message.message "Glob.exec: %s" (to_string glob);*)
+    Tenacious.lift (fun () ->
+      let my_glass =
+        let desc = Heart.Desc.create (to_string glob) in
+        Heart.Glass.create desc
+      in
+      Tenacious.exec (exec_no_cutoff glob lm per sm) >>= fun (res,heart) ->
+      don't_wait_for (
+        let rec loop heart =
+          Heart.when_broken heart >>= fun () ->
+          Tenacious.exec (exec_no_cutoff glob lm per sm) >>= fun (res2,heart) ->
+          if (Listing_result.equal res res2)
+          then loop heart
+          else (
+              (*Message.file_changed (Heart.Glass.desc my_glass);*)
+            Heart.Glass.break my_glass;
+            Deferred.return ()
+          )
+        in
+        loop heart
+      );
+      let my_heart = Heart.of_glass my_glass in
+      Deferred.return (res, my_heart)
+    )
+
+end
+
+(*----------------------------------------------------------------------
+ Glob_memo
+----------------------------------------------------------------------*)
+
+module Glob_memo : sig
+
+  type t
+  val create : unit -> t
+
+  val list_glob :
+    t ->
+    Listing_memo.t ->
+    Persist.t ->
+    Stat_memo.t ->
+    Glob.t ->
+    Listing_result.t Tenacious.t
+
+end = struct
+
+  type computation = Listing_result.t Tenacious.t
+  type t = {
+    cache : computation Glob.Table.t;
+  }
+
+  let list_glob t lm per sm glob =
+    match (Hashtbl.find t.cache glob) with
+    | Some tenacious -> tenacious
+    | None ->
+      let tenacious = Glob.exec glob lm per sm in
+      Hashtbl.add_exn t.cache ~key:glob ~data:tenacious;
+      tenacious
+
+  let create () = {
+    cache = Glob.Table.create ();
+  }
+
+end
+
+(*----------------------------------------------------------------------
+ Memo = combination of 4 memos - stat, digest, listing, glob
 ----------------------------------------------------------------------*)
 
 module Memo : sig
@@ -659,10 +802,10 @@ module Memo : sig
     file:Path.t ->
     Digest_result.t Tenacious.t
 
-  val list_dir :
+  val list_glob :
     t ->
     Persist.t ->
-    dir:Path.t ->
+    Glob.t ->
     Listing_result.t Tenacious.t
 
 end = struct
@@ -671,17 +814,19 @@ end = struct
     sm : Stat_memo.t;
     dm : Digest_memo.t;
     lm : Listing_memo.t;
+    gm : Glob_memo.t;
   }
 
   let create watcher = {
     sm = Stat_memo.create watcher;
     dm = Digest_memo.create();
     lm = Listing_memo.create();
+    gm = Glob_memo.create();
   }
 
   let digest_file t per ~file = Digest_memo.digest_file t.dm per t.sm ~file
 
-  let list_dir t per ~dir = Listing_memo.list_dir t.lm per t.sm ~dir
+  let list_glob t per glob = Glob_memo.list_glob t.gm t.lm per t.sm glob
 
 end
 
@@ -699,9 +844,9 @@ module Fs : sig
     file:Path.t ->
     Digest_result.t Tenacious.t
 
-  val list_dir :
+  val list_glob :
     t ->
-    dir:Path.t ->
+    Glob.t ->
     Listing_result.t Tenacious.t
 
 end = struct
@@ -719,86 +864,9 @@ end = struct
 
   let digest_file t ~file = Memo.digest_file t.memo t.persist ~file
 
-  let list_dir t ~dir = Memo.list_dir t.memo t.persist ~dir
-
-end
-
-
-(*----------------------------------------------------------------------
- Glob
-----------------------------------------------------------------------*)
-
-module Glob : sig
-
-  type t with sexp
-  val create : dir:Path.t -> glob_string:string -> t
-
-  val to_string : t -> string
-
-  val exec : t -> Fs.t -> Listing_result.t Tenacious.t
-
-  val compare : t -> t -> int
-
-end = struct
-
-  type t = {
-    dir : Path.t;
-    restriction : Listing.Restriction.t;
-  } with sexp, compare
-
-  let to_string t =
-    sprintf "%s/%s"
-      (Path.to_rrr_string t.dir)
-      (Listing.Restriction.to_string t.restriction)
-
-  let create ~dir ~glob_string =
-    let pat = Pattern.create_from_glob_string glob_string in
-    let restriction = Listing.Restriction.create pat in
-    { dir ; restriction }
-
-  let exec_no_cutoff glob fs  =
-    Fs.list_dir fs ~dir:glob.dir *>>= function
-    | `listing listing ->
-      Tenacious.return (`listing (Listing.restrict listing glob.restriction))
-    | x ->
-      Tenacious.return x
-
-  let exec_cutoff glob fs =
-    Tenacious.lift (fun () ->
-      let my_glass =
-        let desc = Heart.Desc.create (to_string glob) in
-        Heart.Glass.create desc
-      in
-      Tenacious.exec (exec_no_cutoff glob fs) >>= fun (res,heart) ->
-      don't_wait_for (
-        let rec loop heart =
-          Heart.when_broken heart >>= fun () ->
-          Tenacious.exec (exec_no_cutoff glob fs) >>= fun (res2,heart) ->
-          if (Listing_result.equal res res2)
-          then loop heart
-          else (
-            (*Message.file_changed (Heart.Glass.desc my_glass);*)
-            Heart.Glass.break my_glass;
-            Deferred.return ()
-          )
-        in
-        loop heart
-      );
-      let my_heart = Heart.of_glass my_glass in
-      Deferred.return (res, my_heart)
-    )
-
-  let exec = exec_cutoff
+  let list_glob t glob = Memo.list_glob t.memo t.persist glob
 
 end
 
 
 include Fs
-
-let list_glob t glob = Glob.exec glob t
-
-
-(* old non-tenacious interface... *)
-
-let old_digest_file t ~file = Tenacious.exec (digest_file t ~file)
-let old_list_glob t glob = Tenacious.exec (list_glob t glob)

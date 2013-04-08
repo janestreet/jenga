@@ -16,6 +16,7 @@ module Job_start = struct
   type t = {
     uid : int;
     need : string;
+    stdout_expected : bool;
     where : string;
     prog : string;
     args : string list;
@@ -50,8 +51,8 @@ module Event = struct
   | Load_sexp_error of Path.t * [`loc of int * int] * exn
   | Job_started of Job_start.t
   | Job_completed of Job_start.t * Job_finish.t * Job_output.t
-  | Build_done of Time.Span.t * [`u of int] * int
-  | Build_failed of Time.Span.t * [`u of int] * (int*int)
+  | Build_done of Time.Span.t * [`u of int] * int * string
+  | Build_failed of Time.Span.t * [`u of int] * (int*int) * string
   | Progress of (int*int)
   | Polling
   | Sensitized_on of Heart.Desc.t
@@ -115,9 +116,9 @@ let load_sexp_error path ~loc exn =
 
 let job_started =
   let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-  fun ~need ~where ~prog ~args ->
+  fun ~need ~stdout_expected ~where ~prog ~args ->
   let uid = genU() in
-  let started = { Job_start. uid; need; where; prog; args } in
+  let started = { Job_start. uid; need; stdout_expected; where; prog; args } in
   let event = Event.Job_started started in
   T.dispatch the_log event;
   started
@@ -128,11 +129,11 @@ let job_finished start ~outcome ~duration ~stdout ~stderr =
   let event = Event.Job_completed (start,finish,output) in
   T.dispatch the_log event
 
-let build_done ~duration ~u ~total =
-  T.dispatch the_log (Event.Build_done (duration, `u u, total))
+let build_done ~duration ~u ~total s =
+  T.dispatch the_log (Event.Build_done (duration, `u u, total, s))
 
-let build_failed ~duration ~u ~fraction =
-  T.dispatch the_log (Event.Build_failed (duration, `u u,fraction))
+let build_failed ~duration ~u ~fraction s =
+  T.dispatch the_log (Event.Build_failed (duration, `u u,fraction,s))
 
 let progress ~fraction =
   T.dispatch the_log (Event.Progress fraction)
@@ -204,7 +205,7 @@ let omake_style_logger config event =
       put "File \"%s\", line %d, characters %d-%d:" file line col col;
       put "Error: sexp_conversion failed\n%s\n" (Exn.to_string exn)
     )
-  | Event.Job_started {Job_start. where; need; prog=_; args=_; uid=_} ->
+  | Event.Job_started {Job_start.where; need; stdout_expected=_; prog=_; args=_; uid=_} ->
     if not quiet then (
       (* if verbose, show the "- build" line when the job starts *)
       if verbose then (
@@ -212,7 +213,7 @@ let omake_style_logger config event =
       )
     )
   | Event.Job_completed (
-    {Job_start. where; need; prog; args; uid=_},
+    {Job_start. where; need; stdout_expected; prog; args; uid=_},
     {Job_finish. outcome; duration},
     {Job_output. stdout; stderr}
   ) ->
@@ -220,12 +221,11 @@ let omake_style_logger config event =
       let job_failed =
         match outcome with | `success -> false | `error _ -> true
       in
-      let job_has_ouput =
-        match stdout,stderr with
-        | [],[] -> false
-        | _,_ -> true
+      let has_stderr_or_unexpected_stdout =
+        (match stderr with [] -> false | _ -> true)
+        || (not stdout_expected && (match stdout with [] -> false | _ -> true))
       in
-      let show_something = job_failed  || job_has_ouput || verbose in
+      let show_something = job_failed  || has_stderr_or_unexpected_stdout || verbose in
       if show_something then (
         let duration_string = Time.Span.to_string duration in
         if not verbose then (
@@ -243,13 +243,13 @@ let omake_style_logger config event =
         put "- exit %s %s, %s, %s" where need duration_string status_string;
       )
     )
-  | Event.Build_done (duration,`u u,total) ->
+  | Event.Build_done (duration,`u u,total,s) ->
     jput "%d/%d targets are up to date" total total;
-    jput "done (#%d, %s) -- HURRAH" u (Time.Span.to_string duration)
+    jput "done (#%d, %s, %s) -- HURRAH" u (Time.Span.to_string duration) s
 
-  | Event.Build_failed (duration, `u u,(num,den)) -> (
+  | Event.Build_failed (duration, `u u,(num,den),s) -> (
     jput "%d/%d targets are up to date" num den;
-    jput "failed (#%d, %s)" u (Time.Span.to_string duration);
+    jput "failed (#%d, %s, %s)" u (Time.Span.to_string duration) s;
   )
 
   | Event.Progress (num,den) -> (

@@ -19,11 +19,12 @@ let lines s =
 
 
 let run_shell =
-  fun ~delay_for_dev ~need ~dir ~prog ~args ->
+  fun ~delay_for_dev ~need ~dir ~prog ~args ~stdout_expected ~get_result ->
+
     let where = Path.to_rrr_string dir in
 
     let job_start =
-      Message.job_started ~need ~where ~prog ~args
+      Message.job_started ~need ~stdout_expected ~where ~prog ~args
     in
     let start_time = Time.now() in
     try_with (fun () ->
@@ -37,11 +38,12 @@ let run_shell =
 
     match result with
     | Ok (stdout,stderr) ->
+      let result = get_result ~stdout in
       let stdout = lines stdout in
       let stderr = lines stderr in
       let outcome = `success in
       Message.job_finished job_start ~outcome ~duration ~stdout ~stderr;
-      return (Ok ())
+      return (Ok result)
 
     | Error exn ->
       let exn = Monitor.extract_exn exn in
@@ -77,6 +79,17 @@ module Scheduler = struct
   let shell t ~need ~dir ~prog ~args =
     Throttle.enqueue t.throttle (fun () ->
       run_shell ~delay_for_dev:t.delay_for_dev ~need ~dir ~prog ~args
+        (* ignore stdout for commands run for effect *)
+        ~stdout_expected:false
+        ~get_result:(fun ~stdout:_ -> ())
+    )
+
+  let shell_stdout t ~need ~dir ~prog ~args =
+    Throttle.enqueue t.throttle (fun () ->
+      run_shell ~delay_for_dev:t.delay_for_dev ~need ~dir ~prog ~args
+        (* grab stdout for commands run as scanner *)
+        ~stdout_expected:true
+        ~get_result:(fun ~stdout -> stdout)
     )
 
 end

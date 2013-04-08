@@ -27,7 +27,12 @@ let globre ~path s =
             res ^= ".*";
             aux (pos+2)
           end else begin
-            res ^= "[^/]*";
+            (if pos = 0
+             (* special case for leading * to not match hidden . filename *)
+             (* be careful to still allow * to match empty string *)
+             then res ^= "(?:|[^/.][^/]*)"
+             else res ^= "[^/]*"
+            );
             aux (pos+1)
           end
       | '?' ->

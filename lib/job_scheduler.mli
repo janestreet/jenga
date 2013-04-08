@@ -13,3 +13,13 @@ val shell : t -> need:string -> dir: Path.t -> prog:string -> args:string list -
    | `other_error of exn
    ]
   ) Result.t Deferred.t
+
+(* for scanners *)
+val shell_stdout : t -> need:string -> dir: Path.t -> prog:string -> args:string list ->
+  (string,
+   [
+   | `non_zero_status of Core_extended.Std.Shell.Process.status
+   | `other_error of exn
+   ]
+  ) Result.t Deferred.t
+

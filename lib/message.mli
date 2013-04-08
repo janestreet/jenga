@@ -18,6 +18,7 @@ val dev : ('a, unit, string, unit) format4 -> 'a
 
 val job_started :
   need:string ->
+  stdout_expected:bool -> (* scanner job; output expected *)
   where:string ->
   prog:string ->
   args:string list ->
@@ -35,8 +36,8 @@ val load_jenga_root : Path.LR.t -> unit
 val load_jenga_root_done : Path.LR.t -> Time.Span.t -> unit
 val load_sexp_error : Path.t -> loc:(int*int) -> exn -> unit
 
-val build_done : duration:Time.Span.t -> u:int -> total:int -> unit
-val build_failed : duration:Time.Span.t -> u:int -> fraction:(int*int) -> unit
+val build_done : duration:Time.Span.t -> u:int -> total:int -> string -> unit
+val build_failed : duration:Time.Span.t -> u:int -> fraction:(int*int) -> string -> unit
 val progress : fraction:(int * int) -> unit
 
 val polling : unit -> unit

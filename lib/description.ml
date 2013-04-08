@@ -78,61 +78,6 @@ module Goal = struct
 
 end
 
-module Dep = struct
-
-  module T = struct
-    type t = [
-    | `path of Path.t
-    | `alias of Alias.t
-    | `scan of t list * Scan_id.t
-    | `glob of Glob.t
-    | `null
-    ]
-    with sexp, compare
-    let hash = Hashtbl.hash
-  end
-  include T
-  include Hashable.Make(T)
-
-  let case t = t
-  let path path = `path path
-  let alias alias = `alias alias
-  let glob glob = `glob glob
-  let scan1 ts id = `scan (ts,id)
-  let scan ts sexp = `scan (ts,Scan_id.of_sexp sexp)
-  let null = `null
-
-  let rec to_string t =
-    match t with
-    | `path path -> Path.to_rrr_string path
-    | `alias alias -> Alias.to_string alias
-    | `scan (deps,_) ->
-      sprintf "scan: %s" (String.concat ~sep:" " (List.map deps ~f:to_string))
-    | `glob glob -> sprintf "glob: %s" (Fs.Glob.to_string glob)
-    | `null -> "null"
-
-  let default ~dir = alias (Alias.default ~dir)
-
-  let parse_string ~dir string = (* for command-line selection of  top-level demands *)
-    (* syntax...
-       foo             - target
-       path/to/foo     - target
-       .foo            - alias
-       path/to/.foo    - alias
-    *)
-    let dir,base =
-      match String.rsplit2 string ~on:'/' with
-      | None -> dir, string
-      | Some (rel_dir_string,base) -> Path.relative ~dir rel_dir_string, base
-    in
-    match String.chop_prefix base ~prefix:"." with
-    | None ->  path (Path.relative ~dir base)
-    | Some after_dot -> alias (Alias.create ~dir after_dot)
-
-  let compare = compare (* polymorphic compare ok *)
-
-end
-
 module Xaction = struct
 
   type t = {
@@ -170,6 +115,95 @@ module Action = struct
   let to_string = function
     | X x -> Xaction.to_string x
     | I x -> sprintf "INTERNAL:%s"(Action_id.to_string x)
+
+end
+
+module Scanner = struct
+
+  module T = struct
+
+    type t = [
+    | `old_internal of Scan_id.t
+    | `local_deps of Path.t * Action.t
+    ] with sexp,compare
+
+    let hash = Hashtbl.hash
+
+  end
+  include T
+  include Hashable.Make(T)
+
+  let old_internal sexp = `old_internal (Scan_id.of_sexp sexp)
+  let local_deps ~dir action = `local_deps (dir,action)
+
+  let to_string = function
+    | `old_internal id -> Scan_id.to_string id
+    | `local_deps (dir,action) ->
+      sprintf "local-deps (%s): %s" (Path.to_rrr_string dir) (Action.to_string action)
+
+end
+
+module Dep = struct
+
+  module T = struct
+
+    type t = [
+    | `path of Path.t
+    | `alias of Alias.t
+    | `scan of t list * Scanner.t
+    | `glob of Glob.t
+    | `null
+    ]
+    with sexp, compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make(T)
+
+  let case t = t
+  let path path = `path path
+  let alias alias = `alias alias
+  let glob glob = `glob glob
+  let scanner ts scanner = `scan (ts,scanner)
+  let scan1 ts id = `scan (ts,`old_internal id)
+  let scan ts sexp = `scan (ts,`old_internal (Scan_id.of_sexp sexp))
+  let null = `null
+
+  let rec to_string t =
+    match t with
+    | `path path -> Path.to_rrr_string path
+    | `alias alias -> Alias.to_string alias
+    | `scan (deps,_) ->
+      sprintf "scan: %s" (String.concat ~sep:" " (List.map deps ~f:to_string))
+    | `glob glob -> sprintf "glob: %s" (Fs.Glob.to_string glob)
+    | `null -> "null"
+
+  let default ~dir = alias (Alias.default ~dir)
+
+  let parse_string ~dir string = (* for command-line selection of  top-level demands *)
+    (* syntax...
+       foo             - target
+       path/to/foo     - target
+       .foo            - alias
+       path/to/.foo    - alias
+    *)
+    let dir,base =
+      match String.rsplit2 string ~on:'/' with
+      | None -> dir, string
+      | Some (rel_dir_string,base) -> Path.relative ~dir rel_dir_string, base
+    in
+    match String.chop_prefix base ~prefix:"." with
+    | None ->  path (Path.relative ~dir base)
+    | Some after_dot -> alias (Alias.create ~dir after_dot)
+
+  let parse_string_as_deps ~dir string =
+    let string = String.tr string ~target:'\n' ~replacement:' ' in
+    let words = String.split string ~on:' ' in
+    let words = List.filter words ~f:(function | "" -> false | _ -> true) in
+    let deps = List.map words ~f:(parse_string ~dir) in
+    deps
+
+  let compare = compare (* polymorphic compare ok *)
 
 end
 

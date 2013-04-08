@@ -21,7 +21,7 @@ let scanner_calls = Effort.Counter.create "scan"
 let external_action_counter = Effort.Counter.create "act"
 
 let the_effort =
-  Effort.create ~tag:"effort" [
+  Effort.create [
     Fs.lstat_counter;
     Fs.digest_counter;
     Fs.ls_counter;
@@ -478,7 +478,14 @@ end
   (error) reason
 ----------------------------------------------------------------------*)
 
+let item_to_string = function
+  | DG.Item.Root -> "ROOT"
+  | DG.Item.Dep dep -> (*sprintf "DEP: %s"*) (Dep.to_string dep)
+  | DG.Item.Target_rule tr -> sprintf "RULE: %s" (Target_rule.to_string tr)
+  | DG.Item.Gen_key g -> sprintf "GEN: %s" (Gen_key.to_string g)
+
 module Reason = struct
+
   type t =
   | Error_in_deps                     of (Dep.t * t) list
   | Digest_error
@@ -503,12 +510,6 @@ module Reason = struct
   | Cycle_report                      of Dep.t * DG.Item.t list
 
 
-  let item_to_string = function
-    | DG.Item.Root -> "ROOT"
-    | DG.Item.Dep dep -> (*sprintf "DEP: %s"*) (Dep.to_string dep)
-    | DG.Item.Target_rule tr -> sprintf "RULE: %s" (Target_rule.to_string tr)
-    | DG.Item.Gen_key g -> sprintf "GEN: %s" (Gen_key.to_string g)
-
   let rec to_string = function
 
     | Error_in_deps xs ->
@@ -521,11 +522,11 @@ module Reason = struct
 
     | Digest_error -> "unable to digest file"
     | Glob_error s -> sprintf "glob error: %s" s
-    | Jenga_root_problem s -> sprintf "Problem with JengaRoot: %s" s
+    | Jenga_root_problem s -> sprintf "Problem with JengaRoot.ml: %s" s
 
     | No_definition_for_alias -> "No definition found for alias"
     | No_rule_or_source -> "No rule or source found for target"
-    | Non_zero_status -> "External action completed with non-zero exist exit code"
+    | Non_zero_status -> "External action completed with non-zero exit code"
 
     | Duplicate_scheme_ids xs ->
       sprintf "Duplicate schemes with ids: %s"
@@ -584,6 +585,7 @@ module Progress : sig
   type t
   val create : unit -> t
   val ht : t -> Status.t Dep.Table.t
+
   val message_errors : t -> unit
 
   val dg_status : t  -> Dep.t -> Dot.Status.t
@@ -810,9 +812,11 @@ module RR = struct
   let to_string t = Sexp.to_string (sexp_of_t t)
 end
 
+
 (*----------------------------------------------------------------------
   running things - generator, scanners, actions
 ----------------------------------------------------------------------*)
+
 
 let run_generator : (RR.t -> Gen_key.t -> Rule_generator.t -> Rule_set.t Builder.t) =
   fun rr gen_key generator ->
@@ -828,14 +832,37 @@ let run_generator : (RR.t -> Gen_key.t -> Rule_generator.t -> Rule_set.t Builder
     | `dups paths -> error (Reason.Duplicate_rules_for_paths paths)
 
 
-let run_scan_id : (RR.t -> Env1.t -> Scan_id.t -> Dep.t list Builder.t) =
-  fun rr env1 scan_id ->
-    Message.reason "Running scanner (%s) %s" (RR.to_string rr) (Scan_id.to_string scan_id);
-    Builder.try_deferred ~err:(fun exn -> Reason.Scanner_raised exn) (fun () ->
-      Effort.track scanner_calls (fun () ->
-        Env1.run_scanner env1 scan_id
+exception Scanning_with_internal_action_not_supported of Action_id.t
+
+let run_scanner :
+    (RR.t -> Env1.t -> Job_scheduler.t -> Scanner.t -> Dep.t list Builder.t) =
+  fun rr env1 js scanner ->
+    Message.reason "Running scanner (%s) %s" (RR.to_string rr) (Scanner.to_string scanner);
+    match scanner with
+    | `old_internal scan_id ->
+      Builder.try_deferred ~err:(fun exn -> Reason.Scanner_raised exn) (fun () ->
+        Effort.track scanner_calls (fun () ->
+          Env1.run_scanner env1 scan_id
+        )
       )
-    )
+    | `local_deps (dir1,action) ->
+      match Action.case action with
+      (* todo - think about combining (internal) scanner-actions with internal action *)
+      | `id action_id ->
+        error (Reason.Scanner_raised
+                 (Scanning_with_internal_action_not_supported action_id))
+      | `xaction x ->
+        Builder.deferred (
+          Effort.track external_action_counter (fun () ->
+            let {Xaction.dir;prog;args} = x in
+            let need = "scanner" in
+            Job_scheduler.shell_stdout js ~need ~dir ~prog ~args
+          )
+        ) *>>= function
+        | Ok stdout                  -> return (Dep.parse_string_as_deps ~dir:dir1 stdout)
+        | Error (`non_zero_status _) -> error Reason.Non_zero_status
+        | Error (`other_error exn)   -> error (Reason.Running_external_action_raised exn)
+
 
 let run_action :
     (RR.t -> Env1.t -> Job_scheduler.t -> Action.t -> need:string -> unit Builder.t)=
@@ -896,13 +923,13 @@ module Persist = struct
      so they can be saved to file.  *)
 
   type t = {
-    scanned     : (Rooted_proxy.t * Dep.t list) Scan_id.Table.t;
+    scanned     : (Rooted_proxy.t * Dep.t list) Scanner.Table.t;
     generated   : (Rooted_proxy.t * Rule_set.t) Gen_key.Table.t;
     actioned    : Rule_proxy.t Path.Table.t;
   } with sexp
 
   let create () = {
-    scanned = Scan_id.Table.create();
+    scanned = Scanner.Table.create();
     generated = Gen_key.Table.create();
     actioned = Path.Table.create();
   }
@@ -1146,23 +1173,29 @@ let generate_ruleset_if_necessary : (t -> Gen_key.t -> Rule_set.t Builder.t) =
       ~f: (fun t -> generate_ruleset_if_necessary t gen_key)
 
 
-let run_scanner_if_necessary : (t -> Dep.t list -> Scan_id.t -> Dep.t list Builder.t) =
+let run_scanner_if_necessary : (t -> Dep.t list -> Scanner.t -> Dep.t list Builder.t) =
   (* Run a scanner iff
      - it has never been run before
      - or the scanner_proxy indicated it is out of date.
      Record a successful run in the persistent state.
   *)
-  fun t scanner_deps scan_id ->
+  fun t scanner_deps scanner ->
     jenga_root t *>>= fun (env1,root_proxy) ->
+    let root_proxy =
+      match scanner with
+      | `old_internal _ -> root_proxy
+      (* external scanners are not dependant on the JengaRoot.ml *)
+      | `local_deps _ -> Root_proxy.create None
+    in
     build_deps t scanner_deps *>>= fun proxy_map ->
     let rooted_proxy = Rooted_proxy.create root_proxy proxy_map in
     let run_and_cache rr =
       set_status t (Status.Running "scanner");
-      run_scan_id rr env1 scan_id *>>= fun scanned_deps ->
-      Hashtbl.set (scanned t) ~key:scan_id ~data:(rooted_proxy,scanned_deps);
+      run_scanner rr env1 t.js scanner *>>= fun scanned_deps ->
+      Hashtbl.set (scanned t) ~key:scanner ~data:(rooted_proxy,scanned_deps);
       return scanned_deps
     in
-    match (Hashtbl.find (scanned t) scan_id) with
+    match (Hashtbl.find (scanned t) scanner) with
     | None -> run_and_cache RR.No_record_of_being_run_before
     | Some (prev,scanned_deps) ->
       match Rooted_proxy.diff prev rooted_proxy with
@@ -1326,11 +1359,11 @@ let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
       end
 
 
-let build_scanner : (t -> Dep.t list -> Scan_id.t -> Proxy_map.t Builder.t) =
+let build_scanner : (t -> Dep.t list -> Scanner.t -> Proxy_map.t Builder.t) =
   (* run the scanner; build the scanned dependencies
   *)
-  fun t scan_deps scan_id ->
-    run_scanner_if_necessary t scan_deps scan_id *>>= fun scanned_deps ->
+  fun t deps scanner ->
+    run_scanner_if_necessary t deps scanner *>>= fun scanned_deps ->
     build_deps t scanned_deps
 
 
@@ -1342,7 +1375,7 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
   (* Build a dependency by considering cases *)
   fun t dep ->
     match (Dep.case dep) with
-    | `scan (scan_deps,scan_id) -> build_scanner t scan_deps scan_id
+    | `scan (deps,scanner)      -> build_scanner t deps scanner
     | `path path                -> build_goal t (Goal.path path)
     | `alias alias              -> build_goal t (Goal.alias alias)
     | `glob glob                -> need_glob t.fs glob
@@ -1444,7 +1477,7 @@ let message_effort_and_progress progress =
   let counts = Progress.snap progress in
   (* more detailed message than just progress-fraction *)
   let num,den = Progress.Counts.fraction counts in
-  Message.message "%s { %s } -- %d / %d"
+  Message.message "[ %s ] { %s } -- %d / %d"
     (Effort.Snapped.to_string (Effort.snap the_effort))
     (Progress.Counts.to_string counts)
     num den
@@ -1487,11 +1520,45 @@ let periodically_while_not_fin ~span ~fin ~f =
 
 
 (*----------------------------------------------------------------------
+ remove_unreachable_targets_from_progress_monitor
+----------------------------------------------------------------------*)
+
+let dg_iter_reachable dg ~f =
+  let visiting_or_visited = DG.Node.Hash_set.create () in
+  let rec walk node =
+    let stop = Hash_set.mem visiting_or_visited node in
+    if stop then () else (
+      Hash_set.add visiting_or_visited node;
+      f node;
+      List.iter (DG.dependencies node) ~f:walk
+    )
+  in
+  List.iter (DG.roots dg) ~f:walk
+
+let remove_unreachable_targets_from_progress_monitor : (Progress.t -> DG.t -> unit) =
+  fun progress dg ->
+    let removal_candidates = Dep.Hash_set.create () in
+    Hashtbl.iter (Progress.ht progress) ~f:(fun ~key:dep ~data:_ ->
+      Hash_set.add removal_candidates dep; (* add dep as candiate for removal *)
+    );
+    dg_iter_reachable dg ~f:(fun node ->
+      match (DG.lookup_item dg node) with
+      | DG.Item.Dep dep ->
+        Hash_set.remove removal_candidates dep (* dep is reachable; dont remove *)
+      | _ -> ()
+    );
+    (* anything now left in removal_candidates is unreachable, and should be removed *)
+    Hash_set.iter removal_candidates ~f:(fun dep ->
+      Hashtbl.remove (Progress.ht progress) dep;
+    )
+
+
+(*----------------------------------------------------------------------
   build_once
 ----------------------------------------------------------------------*)
 
 let build_once :
-    (Config.t -> Progress.t -> unit Tenacious.t -> Heart.t Deferred.t) =
+    (Config.t -> DG.t -> Progress.t -> unit Tenacious.t -> Heart.t Deferred.t) =
   (* Make a single build using the top level tenacious builder
      Where a single build means we've done all we can
      (maybe we are complete, or maybe some targets are in error)
@@ -1499,25 +1566,32 @@ let build_once :
      And now we are just polling of file-system changes.
   *)
   let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-  fun config progress top_tenacious ->
+  fun config dg progress top_tenacious ->
     let u = genU() in (* count of the times we reach polling *)
     let start_time = Time.now() in
     Tenacious.exec top_tenacious >>= fun ((),heart) ->
+
+    (* to avoid reporting of stale errors etc... *)
+    remove_unreachable_targets_from_progress_monitor progress dg;
+
     let counts = Progress.snap progress in
     let duration = Time.diff (Time.now()) start_time in
+
+    let effort_string = Effort.Snapped.to_string (Effort.snap the_effort) in
+    Effort.reset_to_zero the_effort;
+
     if Progress.Counts.completed counts then (
       let total = Progress.Counts.total counts in
-      Message.build_done ~duration ~u ~total
+      Message.build_done ~duration ~u ~total effort_string
     ) else (
       let fraction = Progress.Counts.fraction counts in
-      Message.build_failed ~duration ~u ~fraction
+      Message.build_failed ~duration ~u ~fraction effort_string
     );
     let quiet = Config.quiet config in
     if not quiet then (
       Progress.message_errors progress;
     );
     Deferred.return heart
-
 
 (*----------------------------------------------------------------------
   entry point -- build_forever
@@ -1572,7 +1646,7 @@ let build_forever =
       );
 
       (* do the build once *)
-      build_once config progress top_tenacious >>= fun heart ->
+      build_once config discovered_graph progress top_tenacious >>= fun heart ->
 
       fin := true;
       when_polling() >>= fun () ->
@@ -1581,9 +1655,6 @@ let build_forever =
         then dump_graph ()
         else Deferred.return ()
       end >>= fun () ->
-      if Config.show_working_on config then (
-        message_effort_and_progress progress
-      );
 
       match Config.poll_forever config with
       | false -> Deferred.return ()
@@ -1602,7 +1673,6 @@ let build_forever =
           Message.file_changed desc
         );
         Message.rebuilding ();
-        Effort.reset_to_zero the_effort;
         build_and_poll ()
 
     in

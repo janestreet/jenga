@@ -13,7 +13,7 @@ val track : Counter.t -> (unit -> 'a Deferred.t) -> 'a Deferred.t
 
 type t
 
-val create : tag:string -> Counter.t list -> t
+val create : Counter.t list -> t
 
 val reset_to_zero : t -> unit
 

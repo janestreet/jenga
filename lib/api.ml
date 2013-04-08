@@ -14,7 +14,8 @@ module Glob = struct
   let create ~dir glob_string = create ~dir ~glob_string
 
   let exec glob =
-    Fs.old_list_glob (For_user.fs()) glob >>| fun (res,_heart) ->
+    let fs = For_user.fs() in
+    Tenacious.exec (Fs.list_glob fs glob) >>| fun (res,_heart) ->
     match res with
     | `listing listing -> Fs.Listing.paths listing
     | _ -> failwith "Glob.exec"
@@ -22,6 +23,7 @@ module Glob = struct
 end
 
 module Alias = Alias
+module Scanner = Scanner
 module Dep = Dep
 module Xaction = Xaction
 module Action = Action

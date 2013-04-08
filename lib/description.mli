@@ -35,29 +35,6 @@ module Goal : sig
   val directory : t -> Path.t
 end
 
-module Dep : sig
-  type t with sexp
-  include Hashable with type t := t
-  val case : t -> [
-  | `path of Path.t
-  | `alias of Alias.t
-  | `scan of t list * Scan_id.t
-  | `glob of Fs.Glob.t
-  | `null
-  ]
-  val to_string : t -> string
-  val path : Path.t -> t
-  val glob : Fs.Glob.t -> t
-  val scan1 : t list -> Scan_id.t -> t
-  val scan : t list -> Sexp.t -> t
-  val alias : Alias.t -> t
-  val null : t
-  val to_string : t -> string
-  val default : dir:Path.t -> t
-  val parse_string : dir:Path.t -> string -> t
-  val compare : t -> t -> int
-end
-
 module Xaction : sig
   type t = {dir : Path.t; prog : string; args : string list;} with sexp,compare
   val shell : dir:Path.t -> prog:string -> args:string list -> t
@@ -72,6 +49,44 @@ module Action : sig
   val internal : Sexp.t -> t
   val shell : dir:Path.t -> prog:string -> args:string list -> t
   val to_string : t -> string
+end
+
+module Scanner : sig
+  type t = [
+  | `old_internal of Scan_id.t
+  | `local_deps of Path.t * Action.t
+  ]
+  include Hashable with type t := t
+  val to_string : t -> string
+  val old_internal : Sexp.t -> t
+  val local_deps : dir:Path.t -> Action.t -> t
+end
+
+module Dep : sig
+  type t with sexp
+  include Hashable with type t := t
+
+  val case : t -> [
+  | `path of Path.t
+  | `alias of Alias.t
+  | `scan of t list * Scanner.t
+  | `glob of Fs.Glob.t
+  | `null
+  ]
+
+  val to_string : t -> string
+  val path : Path.t -> t
+  val glob : Fs.Glob.t -> t
+  val scan1 : t list -> Scan_id.t -> t
+  val scan : t list -> Sexp.t -> t
+  val scanner : t list -> Scanner.t -> t
+  val alias : Alias.t -> t
+  val null : t
+  val to_string : t -> string
+  val default : dir:Path.t -> t
+  val parse_string : dir:Path.t -> string -> t
+  val parse_string_as_deps : dir:Path.t -> string -> t list
+  val compare : t -> t -> int
 end
 
 module Target_rule : sig

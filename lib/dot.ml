@@ -105,7 +105,7 @@ module Dump = struct
         | Item.Dep dep ->
           match Dep.case dep with
           | `null -> ""
-          | `scan (_,scan_id) -> sprintf "scan: %s" (Scan_id.to_string scan_id)
+          | `scan (_,scan_id) -> sprintf "scan: %s" (Scanner.to_string scan_id)
           | `glob glob -> sprintf "glob: %s" (Fs.Glob.to_string glob)
           | `path path -> Path.to_rrr_string path
           | `alias alias -> sprintf "alias: %s" (Alias.to_string alias)

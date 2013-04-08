@@ -82,11 +82,10 @@ let track counter f =
 
 
 type t = {
-  tag : string;
   counters : Counter.t list;
 }
 
-let create ~tag counters = { tag; counters; }
+let create counters = { counters; }
 
 let reset_to_zero t =
   List.iter t.counters ~f:Counter.reset_to_zero
@@ -94,18 +93,15 @@ let reset_to_zero t =
 module Snapped = struct
 
   type t = {
-    tag : string;
     snapped : Counter.Snapped.t list;
   }
 
   let to_string t =
-    sprintf "%s=[%s]" t.tag
-      (String.concat ~sep:", " (List.map t.snapped ~f:Counter.Snapped.to_string))
+    String.concat ~sep:", " (List.map t.snapped ~f:Counter.Snapped.to_string)
 
 end
 
 let snap t = {
   Snapped.
-  tag = t.tag;
   snapped = List.map t.counters ~f:Counter.snap;
 }

@@ -29,19 +29,27 @@ module Alias : sig
   val create : dir: Path.t -> string -> t
 end
 
-module Dep : sig
-  type t
-  val path : Path.t -> t
-  val glob : Glob.t -> t
-  val scan : t list -> Sexp.t -> t
-  val alias : Alias.t -> t
-  val null : t
-end
-
 module Action : sig
   type t
   val internal : Sexp.t -> t
   val shell : dir:Path.t -> prog:string -> args:string list -> t
+end
+
+module Scanner : sig
+  type t
+  val old_internal : Sexp.t -> t
+  val local_deps : dir:Path.t -> Action.t -> t
+end
+
+module Dep : sig
+  type t
+  val path : Path.t -> t
+  val glob : Glob.t -> t
+  val scan : t list -> Sexp.t -> t (* TODO: remove, in favour of more general scanner *)
+  val scanner : t list -> Scanner.t -> t
+  val alias : Alias.t -> t
+  val null : t
+  val parse_string : dir:Path.t -> string -> t
 end
 
 module Rule : sig

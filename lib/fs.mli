@@ -56,11 +56,3 @@ end
 
 val digest_file : t -> file:Path.t -> Digest_result.t Tenacious.t
 val list_glob : t -> Glob.t -> Listing_result.t Tenacious.t
-
-
-(* old interface... (to be removed) *)
-val old_digest_file :
-  t -> file:Path.t -> (Digest_result.t * Heart.t) Deferred.t
-val old_list_glob :
-  t -> Glob.t -> (Listing_result.t * Heart.t) Deferred.t
-
