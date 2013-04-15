@@ -55,7 +55,7 @@ let run_shell =
         let stdout = lines res.SP.stdout in
         let stderr = lines res.SP.stderr in
         Message.job_finished job_start ~outcome ~duration ~stdout ~stderr;
-        return (Error (`non_zero_status res.SP.status))
+        return (Error `non_zero_status)
 
       | _ -> (* what? *)
         let outcome = `error (Exn.to_string exn) in

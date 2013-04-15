@@ -2,6 +2,8 @@
 open Core.Std
 open Async.Std
 
+val external_action_counter : Effort.Counter.t
+
 module Alias : sig
   type t with sexp
   include Hashable with type t := t
@@ -39,6 +41,10 @@ module Xaction : sig
   type t = {dir : Path.t; prog : string; args : string list;} with sexp,compare
   val shell : dir:Path.t -> prog:string -> args:string list -> t
   val to_string : t -> string
+  val run_now : t -> Job_scheduler.t -> need:string ->
+    (unit, [ `non_zero_status | `other_error of exn]) Result.t Deferred.t
+  val run_now_stdout : t -> Job_scheduler.t -> need:string ->
+    (string, [ `non_zero_status | `other_error of exn]) Result.t Deferred.t
 end
 
 module Action : sig

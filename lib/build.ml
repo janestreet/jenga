@@ -12,13 +12,18 @@ module Glob = Fs.Glob
 module DG = Discovered_graph
 
 
+
+let insensitive_scanners_and_internal_actions =
+  match Core.Std.Sys.getenv "JENGA_INSENSITIVE_SCANNERS_AND_INTERNAL_ACTIONS" with
+  | None -> false
+  | Some _ -> true
+
 (*----------------------------------------------------------------------
   Effort
 ----------------------------------------------------------------------*)
 
 let generation_calls = Effort.Counter.create "gen"
 let scanner_calls = Effort.Counter.create "scan"
-let external_action_counter = Effort.Counter.create "act"
 
 let the_effort =
   Effort.create [
@@ -27,7 +32,7 @@ let the_effort =
     Fs.ls_counter;
     generation_calls;
     scanner_calls;
-    external_action_counter;
+    Description.external_action_counter;
   ]
 
 (*----------------------------------------------------------------------
@@ -391,7 +396,7 @@ module Root_proxy : sig
 
   type t with sexp
   val create : Digest.t option -> t
-  val equal : t -> t -> bool
+  val equal : insensitive:bool -> t -> t -> bool
 
 end = struct
 
@@ -400,7 +405,8 @@ end = struct
   } with sexp
 
   let create root = { root }
-  let equal t1 t2 = Option.equal Fs.Digest.equal t1.root t2.root
+  let equal ~insensitive t1 t2 =
+    insensitive || Option.equal Fs.Digest.equal t1.root t2.root
 
 end
 
@@ -408,7 +414,8 @@ module Rooted_proxy : sig
 
   type t with sexp
   val create : Root_proxy.t -> Proxy_map.t -> t
-  val diff : t -> t -> [`root_changed | `proxy_map_changed of Pm_key.t list] option
+  val diff : insensitive:bool ->
+    t -> t -> [`root_changed | `proxy_map_changed of Pm_key.t list] option
 
 end = struct
 
@@ -419,8 +426,8 @@ end = struct
 
   let create rp pm = { rp; pm; }
 
-  let diff t1 t2 =
-    if not (Root_proxy.equal t1.rp t2.rp) then Some `root_changed
+  let diff ~insensitive t1 t2 =
+    if not (Root_proxy.equal ~insensitive t1.rp t2.rp) then Some `root_changed
     else
       match (Proxy_map.diff t1.pm t2.pm) with
       | None -> None
@@ -445,7 +452,8 @@ end = struct
   let diff t1 t2 =
     match t1,t2 with
     | I (i1,rp1), I (i2,rp2) ->
-      if not (Root_proxy.equal rp1 rp2) then
+      let insensitive = insensitive_scanners_and_internal_actions in
+      if not (Root_proxy.equal ~insensitive rp1 rp2) then
         Some `root_changed
       else if Action_id.compare i1 i2 <> 0 then
         Some `action_changed
@@ -489,6 +497,7 @@ module Reason = struct
   type t =
   | Error_in_deps                     of (Dep.t * t) list
   | Digest_error
+  | Undigestable
   | Glob_error                        of string
   | Jenga_root_problem                of string
 
@@ -521,6 +530,7 @@ module Reason = struct
          )))
 
     | Digest_error -> "unable to digest file"
+    | Undigestable -> "undigestable file kind"
     | Glob_error s -> sprintf "glob error: %s" s
     | Jenga_root_problem s -> sprintf "Problem with JengaRoot.ml: %s" s
 
@@ -852,15 +862,11 @@ let run_scanner :
         error (Reason.Scanner_raised
                  (Scanning_with_internal_action_not_supported action_id))
       | `xaction x ->
-        Builder.deferred (
-          Effort.track external_action_counter (fun () ->
-            let {Xaction.dir;prog;args} = x in
-            let need = "scanner" in
-            Job_scheduler.shell_stdout js ~need ~dir ~prog ~args
-          )
-        ) *>>= function
+        let need = "scanner" in
+        Builder.deferred (Description.Xaction.run_now_stdout x js ~need)
+        *>>= function
         | Ok stdout                  -> return (Dep.parse_string_as_deps ~dir:dir1 stdout)
-        | Error (`non_zero_status _) -> error Reason.Non_zero_status
+        | Error `non_zero_status     -> error Reason.Non_zero_status
         | Error (`other_error exn)   -> error (Reason.Running_external_action_raised exn)
 
 
@@ -874,14 +880,10 @@ let run_action :
         Env1.run_internal_action env1 action_id
       )
     | `xaction x ->
-      Builder.deferred (
-        Effort.track external_action_counter (fun () ->
-          let {Xaction.dir;prog;args} = x in
-          Job_scheduler.shell js ~need ~dir ~prog ~args
-        )
-      ) *>>= function
+      Builder.deferred (Description.Xaction.run_now x js ~need)
+      *>>= function
       | Ok ()                      -> return ()
-      | Error (`non_zero_status _) -> error Reason.Non_zero_status
+      | Error `non_zero_status     -> error Reason.Non_zero_status
       | Error (`other_error exn)   -> error (Reason.Running_external_action_raised exn)
 
 (*----------------------------------------------------------------------
@@ -892,9 +894,10 @@ let digest_path
     : (Fs.t -> Path.t -> [ `file of Digest.t | `directory | `missing ] Builder.t) =
   fun fs path ->
     Builder.tenacious (Fs.digest_file fs ~file:path) *>>= function
-    | `digest_error _ -> error Reason.Digest_error
     | `stat_error _   -> return `missing
-    | `not_a_file     -> return `directory
+    | `directory      -> return `directory
+    | `undigestable   -> error Reason.Undigestable
+    | `digest_error _ -> error Reason.Digest_error
     | `digest digest  -> return (`file digest)
 
 let look_for_source : (Fs.t -> Path.t -> Proxy.t option Builder.t) =
@@ -1156,7 +1159,8 @@ let generate_ruleset_if_necessary : (t -> Gen_key.t -> Rule_set.t Builder.t) =
     match (Hashtbl.find (generated t) gen_key) with
     | None -> run_and_cache RR.No_record_of_being_run_before
     | Some (prev,ruleset) ->
-      match Rooted_proxy.diff prev rooted_proxy with
+      let insensitive = false in (* always be correct/conservative for generators *)
+      match Rooted_proxy.diff ~insensitive prev rooted_proxy with
       | Some `root_changed -> run_and_cache RR.Jenga_root_changed
       | Some (`proxy_map_changed keys) -> run_and_cache (RR.Deps_have_changed keys)
       | None ->
@@ -1198,7 +1202,8 @@ let run_scanner_if_necessary : (t -> Dep.t list -> Scanner.t -> Dep.t list Build
     match (Hashtbl.find (scanned t) scanner) with
     | None -> run_and_cache RR.No_record_of_being_run_before
     | Some (prev,scanned_deps) ->
-      match Rooted_proxy.diff prev rooted_proxy with
+      let insensitive = insensitive_scanners_and_internal_actions in
+      match Rooted_proxy.diff ~insensitive prev rooted_proxy with
       | Some `root_changed -> run_and_cache RR.Jenga_root_changed
       | Some (`proxy_map_changed keys) -> run_and_cache (RR.Deps_have_changed keys)
       | None ->

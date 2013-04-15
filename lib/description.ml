@@ -3,6 +3,8 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
+let external_action_counter = Effort.Counter.create "act"
+
 let (=) = Int.(=)
 
 module Digest = Fs.Digest
@@ -93,6 +95,18 @@ module Xaction = struct
   let concat_args_quoting_spaces xs = String.concat ~sep:" " (List.map xs ~f:quote_arg)
 
   let to_string t = sprintf "%s %s" t.prog (concat_args_quoting_spaces t.args)
+
+  let run_now t js ~need =
+    Effort.track external_action_counter (fun () ->
+      let {dir;prog;args} = t in
+      Job_scheduler.shell js ~need ~dir ~prog ~args
+    )
+
+  let run_now_stdout t js ~need =
+    Effort.track external_action_counter (fun () ->
+      let {dir;prog;args} = t in
+      Job_scheduler.shell_stdout js ~need ~dir ~prog ~args
+    )
 
 end
 

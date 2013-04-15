@@ -112,6 +112,17 @@ end = struct
 
 end
 
+let is_dir stats =
+  match Stats.kind stats with
+  | `Directory -> true
+  | _ -> false
+
+let is_digestable stats =
+  match Stats.kind stats with
+  | `File -> true
+  | `Link -> true
+  | _ -> false
+
 
 (*----------------------------------------------------------------------
  Compute_digest (count!)
@@ -394,7 +405,8 @@ end
 module Digest_result = struct
   type t = [
   | `stat_error of Error.t
-  | `not_a_file
+  | `directory
+  | `undigestable
   | `digest_error of Error.t
   | `digest of Digest.t
   ]
@@ -443,17 +455,13 @@ end = struct
     cache = Path.Table.create ();
   }
 
-  let is_file stats =
-    match Stats.kind stats with
-    | `File -> true
-    | _ -> false
-
   let digest_file t sm ~file =
     let remove() = Hashtbl.remove t.cache file in
     Stat_memo.lstat sm ~what:`file file *>>= function
     | Error e -> (remove(); Tenacious.return (`stat_error e))
     | Ok stats ->
-      if not (is_file stats) then Tenacious.return `not_a_file else
+      if is_dir stats then Tenacious.return `directory else
+      if not (is_digestable stats) then Tenacious.return `undigestable else
         match (
           match (Hashtbl.find t.cache file) with
           | None -> None
@@ -499,11 +507,6 @@ end = struct
   let create () = {
     cache = Path.Table.create ();
   }
-
-  let is_dir stats =
-    match Stats.kind stats with
-    | `Directory -> true
-    | _ -> false
 
   let list_dir t sm ~dir =
     let remove() = Hashtbl.remove t.cache dir in
