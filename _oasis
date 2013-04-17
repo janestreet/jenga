@@ -74,9 +74,17 @@ Library jenga_lib
                       ocaml_plugin,
                       threads
 
-Executable jenga
+Executable jenga_main
+  Install:            false
   Path:               bin
   MainIs:             jenga.ml
+  CompiledObject:     best
+  BuildDepends:       jenga,
+                      threads
+
+Executable jenga
+  Path:               bin
+  MainIs:             jenga_standalone.ml
   CompiledObject:     best
   BuildDepends:       jenga,
                       threads

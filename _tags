@@ -113,3 +113,4 @@
 <bin/*.ml{,i}>: pkg_sexplib.syntax
 # OASIS_STOP
 <lib/*.ml{,i}>: syntax_camlp4o
+<**/*_standalone.native>: linkall
