@@ -78,6 +78,7 @@ module Dump = struct
         | Item.Gen_key _ -> "white"
         | Item.Root -> "black"
         | Item.Target_rule tr -> colour_target_rule tr
+        | Item.Scanner _ -> "green"
         | Item.Dep dep ->
           match Dep.case dep with
           | `glob _ -> "cyan"
@@ -89,6 +90,7 @@ module Dump = struct
         | Item.Gen_key _ -> "circle"
         | Item.Root -> "circle"
         | Item.Target_rule _ -> "box"
+        | Item.Scanner _ -> "trapezium"
         | Item.Dep dep ->
           match Dep.case dep with
           | `null -> "circle"
@@ -101,11 +103,12 @@ module Dump = struct
       let label_item = function
         | Item.Gen_key _ -> "rule-gen"
         | Item.Root -> ""
-        | Item.Target_rule tr -> Target_rule.to_action_string tr
+        | Item.Target_rule tr -> let _,_,a = Target_rule.triple tr in Action.to_string a
+        | Item.Scanner scanner -> sprintf "scanner: %s" (Scanner.to_string scanner)
         | Item.Dep dep ->
           match Dep.case dep with
           | `null -> ""
-          | `scan (_,scan_id) -> sprintf "scan: %s" (Scanner.to_string scan_id)
+          | `scan (_,scanner) -> sprintf "scan: %s" (Scanner.to_string scanner)
           | `glob glob -> sprintf "glob: %s" (Fs.Glob.to_string glob)
           | `path path -> Path.to_rrr_string path
           | `alias alias -> sprintf "alias: %s" (Alias.to_string alias)

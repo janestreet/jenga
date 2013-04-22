@@ -69,7 +69,7 @@ module Scheduler = struct
 
   type t = {
     delay_for_dev : Time.Span.t option;
-    throttle : Throttle.t;
+    throttle : unit Throttle.t;
   }
 
   let create ~delay_for_dev ~max_concurrent_jobs =

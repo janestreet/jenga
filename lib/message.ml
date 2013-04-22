@@ -38,7 +38,7 @@ module Job_output = struct
 end
 
 module Tag = struct
-  (* Error, Message(info), Verbose, Reason, Checked, A(Considering), Trace, Dev *)
+  (* Error, Message(info), Verbose, Reason, Checked, A(Considering Advice), Trace, Dev *)
   type t = E | M | V | R | C | A | T | D with sexp_of
   let to_string t = Sexp.to_string (sexp_of_t t)
 end

@@ -1,9 +1,10 @@
 
 open Core.Std
+open Async.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
 module type S = sig
-  val setup : unit -> Description.Env.t
+  val setup : unit -> Description.Env.t Deferred.t
 end
 
 let univ_constr =

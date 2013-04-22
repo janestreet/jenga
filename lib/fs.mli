@@ -9,6 +9,7 @@ open Async.Std
 val lstat_counter : Effort.Counter.t
 val digest_counter : Effort.Counter.t
 val ls_counter : Effort.Counter.t
+val mkdir_counter : Effort.Counter.t
 
 module Digest : sig (* proxy for file contents *)
   type t with sexp
@@ -36,11 +37,15 @@ end
 type t (* handle to the file-system *)
 val create : Persist.t -> t Deferred.t
 
+module Kind : sig
+  type t
+  val to_string : t -> string
+end
+
 module Digest_result : sig
   type t = [
   | `stat_error of Error.t
-  | `directory
-  | `undigestable
+  | `undigestable of Kind.t
   | `digest_error of Error.t
   | `digest of Digest.t
   ]
@@ -55,5 +60,10 @@ module Listing_result : sig
   ]
 end
 
+module Ensure_directory_result : sig
+  type t = [`ok | `failed | `not_a_dir]
+end
+
 val digest_file : t -> file:Path.t -> Digest_result.t Tenacious.t
 val list_glob : t -> Glob.t -> Listing_result.t Tenacious.t
+val ensure_directory : t -> dir:Path.t -> Ensure_directory_result.t Tenacious.t

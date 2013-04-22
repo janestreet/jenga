@@ -15,7 +15,7 @@ module Glob = struct
 
   let exec glob =
     let fs = For_user.fs() in
-    Tenacious.exec (Fs.list_glob fs glob) >>| fun (res,_heart) ->
+    Tenacious.exec1 (Fs.list_glob fs glob) >>| fun (res,_heart) ->
     match res with
     | `listing listing -> Fs.Listing.paths listing
     | _ -> failwith "Glob.exec"
@@ -97,7 +97,7 @@ let parse_rules_from_simple_makefile path =
 
 let js_run_now =
   let delay_for_dev = None in
-  let max_concurrent_jobs = 1 in
+  let max_concurrent_jobs = 100 in
   Job_scheduler.create ~delay_for_dev ~max_concurrent_jobs
 
 

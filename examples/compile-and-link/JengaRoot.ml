@@ -96,6 +96,8 @@ let scheme1 =
   )
 
 let setup () =
-  Env.create [
-    "**", Some scheme1 (* Use of ** matches filenames in subdirs *)
-  ]
+  return (
+    Env.create [
+      "**", Some scheme1 (* Use of ** matches filenames in subdirs *)
+    ]
+  )

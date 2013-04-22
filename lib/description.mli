@@ -88,7 +88,6 @@ module Dep : sig
   val scanner : t list -> Scanner.t -> t
   val alias : Alias.t -> t
   val null : t
-  val to_string : t -> string
   val default : dir:Path.t -> t
   val parse_string : dir:Path.t -> string -> t
   val parse_string_as_deps : dir:Path.t -> string -> t list
@@ -102,8 +101,6 @@ module Target_rule : sig
   val triple : t -> Path.t list * Dep.t list * Action.t
   val targets : t -> Path.t list
   val head_and_rest_targets : t -> Path.t * Path.t list
-  val to_string : t -> string
-  val to_action_string : t -> string
   val to_string : t -> string
 end
 

@@ -6,6 +6,7 @@ open Async.Std
 let lstat_counter = Effort.Counter.create "stat"
 let digest_counter = Effort.Counter.create "digest"
 let ls_counter = Effort.Counter.create "ls"
+let mkdir_counter = Effort.Counter.create "mkdir"
 
 
 (* Naming...
@@ -34,11 +35,15 @@ let trace =
         ()
       ) fmt
 
+(*----------------------------------------------------------------------
+ Kind
+----------------------------------------------------------------------*)
+
 module Kind = struct
   type t =
     [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
   with sexp, compare
-  (*let to_string t = Sexp.to_string (sexp_of_t t)*)
+  let to_string t = Sexp.to_string (sexp_of_t t)
 end
 
 (*----------------------------------------------------------------------
@@ -123,6 +128,29 @@ let is_digestable stats =
   | `Link -> true
   | _ -> false
 
+
+
+(*----------------------------------------------------------------------
+ ensure_directory
+----------------------------------------------------------------------*)
+
+module Ensure_directory_result = struct
+  type t = [`ok | `failed | `not_a_dir]
+end
+
+let ensure_directory ~dir =
+  Stats.lstat dir >>= function
+  | Ok stats -> return (if is_dir stats then `ok else `not_a_dir)
+  | Error _e ->
+    (*Message.message "mkdir: %s" (Path.to_rrr_string dir);*)
+    Effort.track mkdir_counter (fun () ->
+      try_with (fun () ->
+        Unix.mkdir ~p:() (Path.to_absolute_string dir)
+      )
+    ) >>= fun res ->
+    match res with
+    | Ok () -> return `ok
+    | Error _ -> return `failed
 
 (*----------------------------------------------------------------------
  Compute_digest (count!)
@@ -345,8 +373,8 @@ end = struct
           Inotify.add t.notifier path_string
         ) >>| function
         | Ok () -> ()
-        | Error exn ->
-          Message.error "Unable to watch path: %s\n%s" path_string (Exn.to_string exn)
+        | Error _exn ->
+          Message.error "Unable to watch path: %s" path_string (*(Exn.to_string exn)*)
       );
       Heart.of_glass glass
 
@@ -387,7 +415,7 @@ end = struct
     | Some tenacious -> tenacious
     | None ->
       let tenacious =
-        Tenacious.lift (fun () ->
+        Tenacious.lift1 (fun () ->
           let heart = Watcher.watch t.watcher ~what path in
           Stats.lstat path >>= fun res ->
           return (res,heart)
@@ -405,8 +433,7 @@ end
 module Digest_result = struct
   type t = [
   | `stat_error of Error.t
-  | `directory
-  | `undigestable
+  | `undigestable of Kind.t
   | `digest_error of Error.t
   | `digest of Digest.t
   ]
@@ -460,8 +487,8 @@ end = struct
     Stat_memo.lstat sm ~what:`file file *>>= function
     | Error e -> (remove(); Tenacious.return (`stat_error e))
     | Ok stats ->
-      if is_dir stats then Tenacious.return `directory else
-      if not (is_digestable stats) then Tenacious.return `undigestable else
+      let kind = Stats.kind stats in
+      if not (is_digestable stats) then Tenacious.return (`undigestable kind) else
         match (
           match (Hashtbl.find t.cache file) with
           | None -> None
@@ -472,7 +499,7 @@ end = struct
         ) with
         | Some old_good_digest -> Tenacious.return (`digest old_good_digest)
         | None ->
-          Tenacious.lift (fun () ->
+          Tenacious.lift1 (fun () ->
             Compute_digest.of_file file >>| fun digest -> (digest,Heart.unbreakable)
           ) *>>= function
           | Error e -> (remove(); Tenacious.return (`digest_error e))
@@ -524,7 +551,7 @@ end = struct
         ) with
         | Some old_good_listing -> Tenacious.return (`listing old_good_listing)
         | None ->
-          Tenacious.lift (fun () ->
+          Tenacious.lift1 (fun () ->
             Listing.run_ls ~dir >>| fun listing -> (listing,Heart.unbreakable)
           ) *>>= function
           | Error e -> (remove(); Tenacious.return (`listing_error e))
@@ -726,16 +753,16 @@ end = struct
 
   let exec glob lm per sm =
     (*Message.message "Glob.exec: %s" (to_string glob);*)
-    Tenacious.lift (fun () ->
+    Tenacious.lift1 (fun () ->
       let my_glass =
         let desc = Heart.Desc.create (to_string glob) in
         Heart.Glass.create desc
       in
-      Tenacious.exec (exec_no_cutoff glob lm per sm) >>= fun (res,heart) ->
+      Tenacious.exec1 (exec_no_cutoff glob lm per sm) >>= fun (res,heart) ->
       don't_wait_for (
         let rec loop heart =
           Heart.when_broken heart >>= fun () ->
-          Tenacious.exec (exec_no_cutoff glob lm per sm) >>= fun (res2,heart) ->
+          Tenacious.exec1 (exec_no_cutoff glob lm per sm) >>= fun (res2,heart) ->
           if (Listing_result.equal res res2)
           then loop heart
           else (
@@ -873,3 +900,9 @@ end
 
 
 include Fs
+
+let ensure_directory (_:t) ~dir = (* why need t ? *)
+  Tenacious.lift1 (fun () ->
+    ensure_directory ~dir >>= fun res ->
+    return (res,Heart.unbreakable) (* ?? *)
+  )

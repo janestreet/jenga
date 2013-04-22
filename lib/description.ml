@@ -94,7 +94,8 @@ module Xaction = struct
   let quote_arg x = if need_quoting x then sprintf "'%s'" x else x
   let concat_args_quoting_spaces xs = String.concat ~sep:" " (List.map xs ~f:quote_arg)
 
-  let to_string t = sprintf "%s %s" t.prog (concat_args_quoting_spaces t.args)
+  let to_string t = sprintf "(in dir: %s) %s %s"
+    (Path.to_rrr_string t.dir) t.prog (concat_args_quoting_spaces t.args)
 
   let run_now t js ~need =
     Effort.track external_action_counter (fun () ->
@@ -153,7 +154,7 @@ module Scanner = struct
   let to_string = function
     | `old_internal id -> Scan_id.to_string id
     | `local_deps (dir,action) ->
-      sprintf "local-deps (%s): %s" (Path.to_rrr_string dir) (Action.to_string action)
+      sprintf "local-deps (deps-wrt: %s): %s" (Path.to_rrr_string dir) (Action.to_string action)
 
 end
 
@@ -187,8 +188,9 @@ module Dep = struct
     match t with
     | `path path -> Path.to_rrr_string path
     | `alias alias -> Alias.to_string alias
-    | `scan (deps,_) ->
-      sprintf "scan: %s" (String.concat ~sep:" " (List.map deps ~f:to_string))
+    | `scan (deps,scanner) ->
+      sprintf "scan(: %s) - %s" (String.concat ~sep:" " (List.map deps ~f:to_string))
+        (Scanner.to_string scanner)
     | `glob glob -> sprintf "glob: %s" (Fs.Glob.to_string glob)
     | `null -> "null"
 
@@ -250,9 +252,6 @@ module Target_rule = struct
     }
 
   let triple t = t.targets, t.deps, t.action
-
-  let to_action_string t =
-    Action.to_string t.action
 
   let to_string t =
     sprintf "%s : %s : %s"

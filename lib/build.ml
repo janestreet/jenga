@@ -30,6 +30,7 @@ let the_effort =
     Fs.lstat_counter;
     Fs.digest_counter;
     Fs.ls_counter;
+    Fs.mkdir_counter;
     generation_calls;
     scanner_calls;
     Description.external_action_counter;
@@ -291,20 +292,17 @@ end
 module Proxy : sig
 
   type t with sexp
-  val is_directory : t
   val of_digest : Digest.t -> t
   val of_listing : Fs.Listing.t -> t
   val equal : t -> t -> bool
 
 end = struct
 
-  type t = Is_directory | Digest of Digest.t | Fs_proxy of Fs.Listing.t with sexp
-  let is_directory = Is_directory
+  type t = Digest of Digest.t | Fs_proxy of Fs.Listing.t with sexp
   let of_digest x = Digest x
   let of_listing x = Fs_proxy x
   let equal t1 t2 =
     match t1,t2 with
-    | Is_directory, Is_directory -> true
     | Digest x1, Digest x2 -> Fs.Digest.equal x1 x2
     | Fs_proxy x1, Fs_proxy x2 -> Fs.Listing.equal x1 x2
     | _,_ -> false
@@ -486,10 +484,15 @@ end
   (error) reason
 ----------------------------------------------------------------------*)
 
+(*let tr_to_string tr = Target_rule.to_string tr*)
+let tr_to_string tr = (* just show targets or else too verbose *)
+  String.concat ~sep:" " (List.map (Target_rule.targets tr) ~f:Path.to_rrr_string)
+
 let item_to_string = function
   | DG.Item.Root -> "ROOT"
+  | DG.Item.Scanner scanner -> sprintf "SCANNER: %s" (Scanner.to_string scanner)
   | DG.Item.Dep dep -> (*sprintf "DEP: %s"*) (Dep.to_string dep)
-  | DG.Item.Target_rule tr -> sprintf "RULE: %s" (Target_rule.to_string tr)
+  | DG.Item.Target_rule tr -> sprintf "RULE: %s"  (tr_to_string tr)
   | DG.Item.Gen_key g -> sprintf "GEN: %s" (Gen_key.to_string g)
 
 module Reason = struct
@@ -497,13 +500,14 @@ module Reason = struct
   type t =
   | Error_in_deps                     of (Dep.t * t) list
   | Digest_error
-  | Undigestable
+  | Undigestable                      of Fs.Kind.t
   | Glob_error                        of string
   | Jenga_root_problem                of string
 
   | No_definition_for_alias
   | No_rule_or_source
   | Non_zero_status
+  | No_directory_for_target           of string
 
   | Inconsistent_proxies              of Proxy_map.inconsistency
   | Duplicate_scheme_ids              of scheme_id list
@@ -530,13 +534,14 @@ module Reason = struct
          )))
 
     | Digest_error -> "unable to digest file"
-    | Undigestable -> "undigestable file kind"
+    | Undigestable k -> sprintf "undigestable file kind: %s" (Fs.Kind.to_string k)
     | Glob_error s -> sprintf "glob error: %s" s
     | Jenga_root_problem s -> sprintf "Problem with JengaRoot.ml: %s" s
 
     | No_definition_for_alias -> "No definition found for alias"
     | No_rule_or_source -> "No rule or source found for target"
     | Non_zero_status -> "External action completed with non-zero exit code"
+    | No_directory_for_target s -> sprintf "No directory for target: %s" s
 
     | Duplicate_scheme_ids xs ->
       sprintf "Duplicate schemes with ids: %s"
@@ -727,7 +732,7 @@ module Builder : sig (* layer error monad within tenacious monad *)
   val desensitize : 'a t -> ('a * Heart.t) t
   val sensitize : Heart.t -> unit t
 
-  val when_do_or_redo : (unit -> 'a t) -> f:(unit -> unit) -> 'a t
+  val when_redo : 'a t -> f:(unit -> unit) -> 'a t
 
 end = struct
 
@@ -766,21 +771,21 @@ end = struct
     )
 
   let deferred def =
-    Tenacious.lift (fun () ->
+    Tenacious.lift1 (fun () ->
       def >>= fun x ->
       Deferred.return (Ok x,Heart.unbreakable)
     )
 
   let try_deferred f ~err =
-    Tenacious.lift (fun () ->
+    Tenacious.lift1 (fun () ->
       Monitor.try_with f >>= function
       | Ok x -> Deferred.return (Ok x,Heart.unbreakable)
       | Error exn -> Deferred.return (Error (err exn), Heart.unbreakable)
     )
 
   let desensitize t = (* if not error *)
-    Tenacious.lift (fun () ->
-      Deferred.bind (Tenacious.exec t) (fun (ore,heart) ->
+    Tenacious.lift1 (fun () ->
+      Deferred.bind (Tenacious.exec1 t) (fun (ore,heart) ->
         match ore with
         | Error e -> Deferred.return (Error e, heart)
         | Ok x -> Deferred.return (Ok (x,heart), Heart.unbreakable)
@@ -788,9 +793,9 @@ end = struct
     )
 
   let sensitize heart =
-    Tenacious.lift (fun () -> Deferred.return (Ok (), heart))
+    Tenacious.lift1 (fun () -> Deferred.return (Ok (), heart))
 
-  let when_do_or_redo = Tenacious.when_do_or_redo
+  let when_redo = Tenacious.when_redo
 
 end
 
@@ -891,12 +896,11 @@ let run_action :
 ----------------------------------------------------------------------*)
 
 let digest_path
-    : (Fs.t -> Path.t -> [ `file of Digest.t | `directory | `missing ] Builder.t) =
+    : (Fs.t -> Path.t -> [ `file of Digest.t | `missing ] Builder.t) =
   fun fs path ->
     Builder.tenacious (Fs.digest_file fs ~file:path) *>>= function
     | `stat_error _   -> return `missing
-    | `directory      -> return `directory
-    | `undigestable   -> error Reason.Undigestable
+    | `undigestable k -> error (Reason.Undigestable k)
     | `digest_error _ -> error Reason.Digest_error
     | `digest digest  -> return (`file digest)
 
@@ -904,7 +908,6 @@ let look_for_source : (Fs.t -> Path.t -> Proxy.t option Builder.t) =
   fun fs path ->
     digest_path fs path *>>= function
     | `file digest    -> return (Some (Proxy.of_digest digest))
-    | `directory      -> return (Some Proxy.is_directory)
     | `missing        -> return None
 
 let need_glob : (Fs.t -> Glob.t -> Proxy_map.t Builder.t) =
@@ -915,6 +918,13 @@ let need_glob : (Fs.t -> Glob.t -> Proxy_map.t Builder.t) =
     | `listing_error _-> error (Reason.Glob_error "unable to list")
     | `listing listing ->
       return (Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing))
+
+let ensure_directory : (Fs.t -> dir:Path.t -> unit Builder.t) =
+  fun fs ~dir ->
+    Builder.tenacious (Fs.ensure_directory fs ~dir) *>>= function
+    | `ok -> return ()
+    | `not_a_dir -> error (Reason.No_directory_for_target "not a directory")
+    | `failed -> error (Reason.No_directory_for_target "failed to create")
 
 (*----------------------------------------------------------------------
   Persist - static cache - saved to file between runs
@@ -953,6 +963,7 @@ module Memo = struct
 
   type t = {
     generating  : (Rule_set.t   Builder.t * DG.Node.t) Gen_key.Table.t;
+    scanning    : (Dep.t list   Builder.t * DG.Node.t) Scanner.Table.t;
     building    : (Proxy_map.t  Builder.t * DG.Node.t) Dep.Table.t;
     ruling      : (PPs.t        Builder.t * DG.Node.t) Target_rule.Table.t;
     root        : (Env1.t * Root_proxy.t) Builder.t option ref;
@@ -960,6 +971,7 @@ module Memo = struct
 
   let create () = {
     generating = Gen_key.Table.create();
+    scanning = Scanner.Table.create();
     building = Dep.Table.create();
     ruling = Target_rule.Table.create();
     root = ref None;
@@ -1005,6 +1017,7 @@ let generated t = t.persist.Persist.generated
 let actioned t = t.persist.Persist.actioned
 
 let memo_generating t = t.memo.Memo.generating
+let memo_scanning t = t.memo.Memo.scanning
 let memo_building t = t.memo.Memo.building
 let memo_ruling t = t.memo.Memo.ruling
 let memo_root t = t.memo.Memo.root
@@ -1036,16 +1049,21 @@ let share_and_check_for_cycles :
     match (Hashtbl.find memo key) with
     | Some (builder,node) ->
       begin
+        Message.trace "link: %s --> %s" (* arrow mean depends-on *)
+          (item_to_string (DG.lookup_item t.discovered_graph t.node))
+          (item_to_string (DG.lookup_item t.discovered_graph node));
         match (DG.link_dependants t.discovered_graph node ~additional:t.node) with
         | `ok -> builder
         | `cycle items -> error (Reason.Cycle_report (t.me, items))
       end
     | None ->
       let t = push_dependency t item in
-      let builder =
-        Builder.when_do_or_redo (fun () ->
-          f t
-        ) ~f:(fun () -> DG.remove_all_dependencies t.node)
+      let builder = f t in (* critical - [f] must be called only once *)
+      let builder = Builder.when_redo builder
+        ~f:(fun () ->
+          Message.trace "remove_all_dependencies: %s" (item_to_string item);
+          DG.remove_all_dependencies t.node;
+        )
       in
       (* we use add_exn, because each key will be memoized exactly once *)
       Hashtbl.add_exn memo ~key ~data:(builder,t.node);
@@ -1076,7 +1094,7 @@ let jenga_root : (t -> (Env1.t * Root_proxy.t) Builder.t) =
       digest_path_lr t.fs t.jenga_root_path *>>= function
       | None -> return None
       | Some res -> match res with
-        | `directory -> error (Reason.Jenga_root_problem "is a directory")
+        (*| `directory -> error (Reason.Jenga_root_problem "is a directory")*)
         | `missing -> error (Reason.Jenga_root_problem "missing")
         | `file digest -> return (Some digest)
     )
@@ -1178,12 +1196,17 @@ let generate_ruleset_if_necessary : (t -> Gen_key.t -> Rule_set.t Builder.t) =
 
 
 let run_scanner_if_necessary : (t -> Dep.t list -> Scanner.t -> Dep.t list Builder.t) =
-  (* Run a scanner iff
+  (*
+    Build the scanner's dependencies
+    Maybe run the scanner;
+
+    Run a scanner iff
      - it has never been run before
      - or the scanner_proxy indicated it is out of date.
      Record a successful run in the persistent state.
+
   *)
-  fun t scanner_deps scanner ->
+  fun t deps scanner ->
     jenga_root t *>>= fun (env1,root_proxy) ->
     let root_proxy =
       match scanner with
@@ -1191,7 +1214,7 @@ let run_scanner_if_necessary : (t -> Dep.t list -> Scanner.t -> Dep.t list Build
       (* external scanners are not dependant on the JengaRoot.ml *)
       | `local_deps _ -> Root_proxy.create None
     in
-    build_deps t scanner_deps *>>= fun proxy_map ->
+    build_deps t deps *>>= fun proxy_map ->
     let rooted_proxy = Rooted_proxy.create root_proxy proxy_map in
     let run_and_cache rr =
       set_status t (Status.Running "scanner");
@@ -1208,6 +1231,42 @@ let run_scanner_if_necessary : (t -> Dep.t list -> Scanner.t -> Dep.t list Build
       | Some (`proxy_map_changed keys) -> run_and_cache (RR.Deps_have_changed keys)
       | None ->
         return scanned_deps (* Up to date; dont run anything *)
+
+
+let run_scanner_if_necessary : (t -> Dep.t list -> Scanner.t -> Dep.t list Builder.t) =
+  (* memo!
+
+     Scanners must have their own node in the build graph, even though this node can have
+     only one dependant.
+
+     This is because when reconsidering the dependant of the scanner, all dependency edges
+     are removed from the discovered_graph, with the expectation that they will be set-up
+     again (maybe differently) when the scanner is reconsidered. But if there is no change
+     in the scanner itself the graph-links for static-dependencies of the scanner wont get
+     reinstated for the dependant.
+
+     By having a separate node for the scanner-dep itself. The scanners single dependant
+     will depend on the scanner-node, and only this link will be removed & reinstated.
+  *)
+  fun t deps scanner ->
+    share_and_check_for_cycles t
+      ~key: scanner
+      ~memo: (memo_scanning t)
+      ~item: (DG.Item.Scanner scanner)
+      ~f: (fun t -> run_scanner_if_necessary t deps scanner)
+
+
+let build_scanner : (t -> Dep.t list -> Scanner.t -> Proxy_map.t Builder.t) =
+  (*
+    Build the scanner's dependencies
+    Maybe run the scanner;
+    Build the scanned dependencies
+  *)
+  fun t deps scanner ->
+    build_deps t deps *>>= fun _proxy_map ->
+    run_scanner_if_necessary t deps scanner *>>= fun scanned_deps ->
+    build_deps t scanned_deps
+
 
 
 let check_targets :
@@ -1231,6 +1290,48 @@ let check_targets :
     | [] -> return (`ok good)
 
 
+let ensure_target_dirs : (t -> Path.t list -> unit Builder.t) =
+  fun t targets ->
+    build_all_in_sequence targets ~f:(fun target ->
+      let dir = Path.dirname target in
+      ensure_directory t.fs ~dir
+    ) *>>= fun (_:unit list) ->
+    return ()
+
+
+let prevent_overlap =
+  (* Prevent running overlapping actions for targets
+  *)
+  let running = Path.Table.create () in
+  fun ~targets f ->
+    let wait =
+      Builder.tenacious (
+        Tenacious.all_unit (
+          List.map targets ~f:(fun target ->
+            match (Hashtbl.find running target) with
+            | None -> Tenacious.return ()
+            | Some builder ->
+              Message.trace "waiting for previous action to complete for: %s"
+                (Path.to_rrr_string target);
+              Tenacious.bind (Builder.expose builder) (function
+              | Error _ -> Tenacious.return ()
+              | Ok () -> Tenacious.return ()
+              )
+          )
+        )
+      )
+    in
+    wait *>>= fun () ->
+    let builder = f () in
+    List.iter targets ~f:(fun target -> Hashtbl.set running ~key:target ~data:builder);
+    Builder.lift (
+      Tenacious.bind (Builder.expose builder) (fun ore ->
+        List.iter targets ~f:(fun target -> Hashtbl.remove running target);
+        Tenacious.return ore
+      )
+    )
+
+
 let run_target_rule_action_if_necessary
     : (t -> Target_rule.t -> need:string -> PPs.t Builder.t) =
   (* run a rule/action, iff:
@@ -1243,6 +1344,7 @@ let run_target_rule_action_if_necessary
   *)
   fun t tr ~need ->
     let (targets,deps,action) = Target_rule.triple tr in
+    ensure_target_dirs t targets *>>= fun () ->
     build_deps t deps *>>= fun deps_proxy_map ->
     jenga_root t *>>= fun (env1,root_proxy) ->
     let action_proxy =
@@ -1254,7 +1356,7 @@ let run_target_rule_action_if_necessary
     let head_target,other_targets = Target_rule.head_and_rest_targets tr in
     let run_and_cache rr =
       set_status t (Status.Running "action");
-      run_action rr env1 t.js action ~need *>>= fun () ->
+      prevent_overlap ~targets (fun () -> run_action rr env1 t.js action ~need) *>>= fun () ->
       check_targets t targets *>>= function
       | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
       | `ok path_tagged_proxys ->
@@ -1364,14 +1466,6 @@ let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
       end
 
 
-let build_scanner : (t -> Dep.t list -> Scanner.t -> Proxy_map.t Builder.t) =
-  (* run the scanner; build the scanned dependencies
-  *)
-  fun t deps scanner ->
-    run_scanner_if_necessary t deps scanner *>>= fun scanned_deps ->
-    build_deps t scanned_deps
-
-
 (* now follows a sequence of functions named [build_dep] which shadow each other &
    extend with different behaviour... *)
 
@@ -1388,15 +1482,31 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
 
 
 let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
+  (* Wrapper to check invariant that we never traverse the same dep more than once
+     i.e. that the dynamic memoization is working!
+  *)
+  let seen = Dep.Hash_set.create () in
+  fun t dep ->
+    let again = Hash_set.mem seen dep in
+    if again then (
+      Message.error "build_dep: unexpected repeated traversal for: %s" (Dep.to_string dep);
+    );
+    Hash_set.add seen dep;
+    build_dep t dep
+
+
+let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
   (* Expose the builder's result/error for reporting *)
   fun t dep ->
+    Message.considering "Considering: %s" (Dep.to_string dep);
+    set_status t Status.Considering;
+    let builder = build_dep t dep in
+    let builder = Builder.when_redo builder
+      ~f:(fun () -> Message.considering "Re-considering: %s" (Dep.to_string dep))
+    in
     Builder.lift (
       Tenacious.bind (
-        Tenacious.when_do_or_redo ~f:(fun () ->
-          Message.considering "Considering: %s" (Dep.to_string dep);
-          set_status t Status.Considering
-        )
-          (fun () -> Builder.expose (build_dep t dep))
+        Builder.expose builder
       ) (fun ore ->
         begin
           match ore with
@@ -1406,6 +1516,7 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
         Tenacious.return ore
       )
     )
+
 
 let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
   fun t dep ->
@@ -1476,7 +1587,7 @@ let show_progress_fraction_reports ~fin progress =
   in
   loop ()
 
-let working_on_report_period = sec 1.0
+let working_on_report_period = sec 0.3
 
 let message_effort_and_progress progress =
   let counts = Progress.snap progress in
@@ -1553,9 +1664,19 @@ let remove_unreachable_targets_from_progress_monitor : (Progress.t -> DG.t -> un
       | _ -> ()
     );
     (* anything now left in removal_candidates is unreachable, and should be removed *)
-    Hash_set.iter removal_candidates ~f:(fun dep ->
-      Hashtbl.remove (Progress.ht progress) dep;
-    )
+    let n = Hash_set.length removal_candidates in
+    let m = Hashtbl.length (Progress.ht progress) in
+    match n with
+    | 0 -> ()
+    | _ ->
+      Message.message
+        "remove unreachable targets from progress monitor: %d of %d, leaving %d"
+        n m (m-n);
+      Hash_set.iter removal_candidates ~f:(fun dep ->
+        Message.message "- %s" (Dep.to_string dep);
+        Hashtbl.remove (Progress.ht progress) dep;
+      )
+
 
 
 (*----------------------------------------------------------------------
@@ -1574,7 +1695,7 @@ let build_once :
   fun config dg progress top_tenacious ->
     let u = genU() in (* count of the times we reach polling *)
     let start_time = Time.now() in
-    Tenacious.exec top_tenacious >>= fun ((),heart) ->
+    Tenacious.exec1 top_tenacious >>= fun ((),heart) ->
 
     (* to avoid reporting of stale errors etc... *)
     remove_unreachable_targets_from_progress_monitor progress dg;

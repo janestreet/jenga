@@ -28,14 +28,29 @@ module T = struct
     mutable state : 'a state
   }
 
+  let string_of_res = function
+    | Res_none -> "N"
+    | Res_some _ -> "S"
+    | Res_return _ -> "R"
+
+  let string_of_state = function
+    | Running _ -> "Running"
+    | Dormant res -> sprintf "Dormant/%s" (string_of_res res)
+
   let set_state runner state =
-    match runner.state, state with
-    | Running _, Running _ ->
-      Message.error "tenacious: invalid transition, Running -> Running"
-    | Dormant _, Dormant _ ->
-      Message.error "tenacious: invalid transition, Dormant -> Dormant"
-    | Dormant _, Running _
-    | Running _, Dormant _ -> runner.state <- state
+    let ok =
+      match runner.state, state with
+      | Dormant _, Running _
+      | Running _, Dormant _
+        -> true
+      | Running _, Running _
+      | Dormant _, Dormant _
+        -> false
+    in
+    if ok then runner.state <- state else
+      (* think this is harmless, dont display it to screen *)
+      Message.trace "tenacious: invalid transition, %s -> %s"
+        (string_of_state runner.state) (string_of_state state)
 
   let start runner : Heart.Glass.t * 'a res Deferred.t =
     let desc = Heart.Desc.create "tenacious/request" in
@@ -92,15 +107,15 @@ module T = struct
 
   type 'a t =
   | Run of 'a runner
-  | Return of 'a
+  (*| Return of 'a*)
 
   let get ~cancel t : 'a res Deferred.t =
     match t with
-    | Return x -> Deferred.return (Res_return x)
+    (*| Return x -> Deferred.return (Res_return x)*)
     | Run runner ->
-      let already_broken = Heart.is_broken cancel in
+      (*let already_broken = Heart.is_broken cancel in
       if already_broken then (
-      );
+      );*)
       choose [
         choice (Heart.when_broken cancel) (fun () ->
           unrequest runner;
@@ -109,11 +124,11 @@ module T = struct
         choice (request runner) (fun x -> x);
       ]
 
-  let exec t : ('a * Heart.t) Deferred.t =
-    get ~cancel:Heart.unbreakable t >>= function
-    | Res_none -> assert false (* impossible! *)
-    | Res_some (x,heart) -> Deferred.return (x,heart)
-    | Res_return x -> Deferred.return (x,Heart.unbreakable)
+  let exec t ~cancel : ('a * Heart.t) option Deferred.t =
+    get ~cancel t >>= function
+    | Res_none -> Deferred.return None
+    | Res_some (x,heart) -> Deferred.return (Some (x,heart))
+    | Res_return x -> Deferred.return (Some (x,Heart.unbreakable))
 
   let create ~run =
     Run {
@@ -121,7 +136,12 @@ module T = struct
       state = Dormant Res_none;
     }
 
-  let return x = Return x
+  (*let return x = Return x*)
+  let return x =
+    let run ~cancel:_ =
+      Deferred.return (Res_return x)
+    in
+    create ~run
 
   let lift f =
     let computed_but_unwanted = ref None in
@@ -132,14 +152,16 @@ module T = struct
         computed_but_unwanted := None;
         Deferred.return (Res_some (x,heart))
       | None ->
-        f() >>= fun res ->
-        if Heart.is_broken cancel then (
-          computed_but_unwanted := Some res;
-          Deferred.return Res_none
-        ) else (
-          let x,heart = res in
-          Deferred.return (Res_some (x,heart))
-        )
+        f ~cancel >>= function
+        | None -> Deferred.return Res_none
+        | Some res ->
+          if Heart.is_broken cancel then (
+            computed_but_unwanted := Some res;
+            Deferred.return Res_none
+          ) else (
+            let x,heart = res in
+            Deferred.return (Res_some (x,heart))
+          )
     in
     create ~run
 
@@ -216,22 +238,36 @@ module T = struct
     in
     create ~run
 
-
-  let all = function
-    | [] -> return []
-    | [x] -> bind x (fun v -> return [v])
-    | xs -> all xs
 end
 
 include T
 
+
 (* non primitive ops... *)
 
-let when_do_or_redo delayed_t ~f =
-  lift (fun () ->
-    f();
-    exec (delayed_t ())
+let when_redo t ~f =
+  let first_time = ref true in
+  lift (fun ~cancel ->
+    (if not !first_time then f() else first_time := false);
+    exec t ~cancel
   )
+
+let all = function
+  | [] -> return []
+  | [x] -> bind x (fun v -> return [v])
+  | xs -> all xs
 
 let all_unit ts =
   bind (all ts) (fun (_:unit list) -> return ())
+
+
+let exec1 t =
+  exec t ~cancel:Heart.unbreakable >>= function
+  | None -> assert false (* impossible! *)
+  | Some x -> Deferred.return x
+
+let lift1 f =
+  lift (fun ~cancel:_ ->
+    f () >>= fun x ->
+    Deferred.return (Some x)
+  )

@@ -39,11 +39,31 @@ open Async.Std
 *)
 
 type 'a t
-val exec : 'a t -> ('a * Heart.t) Deferred.t
-val lift : (unit -> ('a * Heart.t) Deferred.t) -> 'a t
+
+(* The types for exec/lift now pass a [cancel:Heart.t] to allow the following equality:
+
+    t == lift (fun ~cancel -> exec t ~cancel)
+*)
+
+val exec : 'a t -> cancel:Heart.t -> ('a * Heart.t) option Deferred.t
+val lift :        (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> 'a t
+
+
 val return : 'a -> 'a t
 val bind : 'a t -> ('a -> 'b t) -> 'b t
 val all : 'a t list -> 'a list t
 
-val when_do_or_redo : (unit -> 'a t) -> f:(unit -> unit) -> 'a t
+val when_redo : 'a t -> f:(unit -> unit) -> 'a t
 val all_unit : unit t list -> unit t
+
+
+(* Simpler versions of lift/exec; with no requirement to pass the [cancel:Heart.t].
+   Sadly these dont have the nice semantic equality as the unsuffixed versions above.
+
+   t !== lift1 (fun () -> exec1 t)     (* DIS-equality *)
+
+   The RHS versions forms a barrier to cancels.
+*)
+
+val exec1 : 'a t -> ('a * Heart.t) Deferred.t
+val lift1 : (unit -> ('a * Heart.t) Deferred.t) -> 'a t

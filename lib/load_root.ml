@@ -30,7 +30,7 @@ let get_env path_lr =
       return (Error e)
     | Ok plugin ->
       let module M = (val plugin : Jenga_root_interface.S) in
-      let env = M.setup() in
+      M.setup() >>= fun env ->
       let duration = Time.diff (Time.now()) start_time in
       Message.load_jenga_root_done path_lr duration;
       return (Ok env)

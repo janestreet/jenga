@@ -75,6 +75,9 @@ let hello_scheme =
     )
   )
 
-let setup () = Env.create [
+
+let env = Env.create [
   "*", Some hello_scheme
 ]
+
+let setup () = return env
