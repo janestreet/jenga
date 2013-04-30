@@ -591,8 +591,11 @@ end
 (* Make this status be the same type as Dot.Status *)
 module Status = struct
   type t =
-  | Considering | Waiting | Running of string
-  | Built (* or source *) | Error of Reason.t
+  | Checking
+  | Waiting         (* for deps to be checked *)
+  | Running of string
+  | Built (* or source *)
+  | Error of Reason.t
 end
 
 module Progress : sig
@@ -606,7 +609,7 @@ module Progress : sig
   val dg_status : t  -> Dep.t -> Dot.Status.t
 
   module Counts : sig
-    type t
+    type t with bin_io
     val to_string : t -> string
     val fraction : t -> (int*int)
     val completed : t -> bool
@@ -617,18 +620,23 @@ module Progress : sig
 
 end = struct
 
-  type t = Status.t Dep.Table.t
+  type t = {
+    ht : Status.t Dep.Table.t;
+  }
 
-  let create () = Dep.Table.create()
-  let ht t = t
+  let create () = {
+    ht = Dep.Table.create();
+  }
+
+  let ht t = t.ht
 
   let dg_status t dep =
-    match (Hashtbl.find t dep) with
+    match (Hashtbl.find (ht t) dep) with
     | None -> Dot.Status.Unknown
     | Some status ->
       let cat x =  Dot.Status.Cat x in
       match status with
-      | Status.Considering                    -> cat Dot.Catagory.Waiting
+      | Status.Checking                       -> cat Dot.Catagory.Waiting
       | Status.Waiting                        -> cat Dot.Catagory.Waiting
       | Status.Running _                      -> cat Dot.Catagory.Working
       | Status.Built                          -> cat Dot.Catagory.Good
@@ -636,7 +644,7 @@ end = struct
       | Status.Error _                        -> cat Dot.Catagory.Error
 
   let final_status_to_string = function
-    | Status.Considering    -> "unexpectedly Considering"
+    | Status.Checking       -> "unexpectedly Checking"
     | Status.Waiting        -> "unexpectedly Waiting"
     | Status.Running s      -> sprintf "unexpectedly Running: %s" s
     | Status.Built          -> "built"
@@ -654,7 +662,7 @@ end = struct
     | _ -> false
 
   let message_errors t =
-    Hashtbl.iter t ~f:(fun ~key:dep ~data:status ->
+    Hashtbl.iter (ht t) ~f:(fun ~key:dep ~data:status ->
       if suppress_reports_for dep status then () else
         Message.error "%s: %s" (Dep.to_string dep) (final_status_to_string status)
     )
@@ -662,26 +670,29 @@ end = struct
   module Counts = struct
 
     type t = {
-      c : int;
-      w : int;
-      r : int;
-      b : int;
-      e : int;
-    }
+      checking  : int;
+      waiting   : int;
+      running   : int;
+      built     : int;
+      error     : int;
+      failure   : int; (* error in dep *)
+    } with bin_io
 
-    let total {c;w;r;b;e} = c + w + r + b + e
+    let total {checking; waiting; running; built; error; failure} =
+      checking + waiting + running + built + error + failure
 
-    let fraction t = t.b , (total t)
+    let fraction t = t.built , (total t)
 
-    let completed t = Int.equal t.b (total t)
+    let completed t = Int.equal t.built (total t)
 
-    let to_labelled {c;w;r;b;e} =
+    let to_labelled {checking; waiting; running; built; error; failure} =
       [
-        ("considering"  , c);
-        ("waiting"      , w);
-        ("running"      , r);
-        ("built"        , b);
-        ("error"        , e);
+        ("checking"     , checking);
+        ("waiting"      , waiting);
+        ("running"      , running);
+        ("built"        , built);
+        ("error"        , error);
+        ("failure"      , failure);
       ]
 
     let to_string t =
@@ -691,19 +702,32 @@ end = struct
   end
 
   let snap t =
-    let (c,w,r,b,e) =
-      Hashtbl.fold t
-        ~init:(0,0,0,0,0)
-        ~f:(fun ~key:_ ~data:status (c,w,r,b,e) ->
+    let checking = ref 0 in
+    let waiting = ref 0 in
+    let running = ref 0 in
+    let built = ref 0 in
+    let error = ref 0 in
+    let failure = ref 0 in
+    Hashtbl.iter (ht t)
+      ~f:(fun ~key:_ ~data:status ->
+        let x =
           match status with
-          | Status.Considering    -> (c+1,w,r,b,e)
-          | Status.Waiting        -> (c,w+1,r,b,e)
-          | Status.Running _      -> (c,w,r+1,b,e)
-          | Status.Built          -> (c,w,r,b+1,e)
-          | Status.Error _        -> (c,w,r,b,e+1)
-        )
-    in
-    {Counts. c;w;r;b;e}
+          | Status.Checking                         -> checking
+          | Status.Waiting                          -> waiting
+          | Status.Running _                        -> running
+          | Status.Built                            -> built
+          | Status.Error (Reason.Error_in_deps _)   -> failure
+          | Status.Error _                          -> error
+        in incr x
+      );
+    {Counts.
+     checking   = !checking;
+     waiting    = !waiting;
+     running    = !running;
+     built      = !built;
+     error      = !error;
+     failure    = !failure;
+    }
 
 end
 
@@ -824,7 +848,17 @@ module RR = struct
   | Targets_missing                 of Path.t list
   | Targets_not_as_expected         of Path.t list
   with sexp
-  let to_string t = Sexp.to_string (sexp_of_t t)
+
+  (*let to_string t = Sexp.to_string (sexp_of_t t)*)
+
+  let to_string = function
+  | No_record_of_being_run_before   -> "first"
+  | Jenga_root_changed              -> "JengaRoot"
+  | Action_changed_was _            -> "action"
+  | Deps_have_changed _             -> "deps"
+  | Targets_missing _               -> "missing"
+  | Targets_not_as_expected _       -> "unexpected"
+
 end
 
 
@@ -835,8 +869,9 @@ end
 
 let run_generator : (RR.t -> Gen_key.t -> Rule_generator.t -> Rule_set.t Builder.t) =
   fun rr gen_key generator ->
-    Message.reason "Running generator (%s) %s" (RR.to_string rr)
-      (Gen_key.to_string gen_key);
+    Message.reason "Generating rules: %s [%s]"
+      (Gen_key.to_string gen_key)
+      (RR.to_string rr);
     Builder.try_deferred ~err:(fun exn -> Reason.Generator_raised exn) (fun () ->
       Effort.track generation_calls (fun () ->
         Rule_generator.gen generator
@@ -852,7 +887,9 @@ exception Scanning_with_internal_action_not_supported of Action_id.t
 let run_scanner :
     (RR.t -> Env1.t -> Job_scheduler.t -> Scanner.t -> Dep.t list Builder.t) =
   fun rr env1 js scanner ->
-    Message.reason "Running scanner (%s) %s" (RR.to_string rr) (Scanner.to_string scanner);
+    Message.reason "Scanning: %s [%s]"
+      (Scanner.to_string scanner)
+      (RR.to_string rr);
     match scanner with
     | `old_internal scan_id ->
       Builder.try_deferred ~err:(fun exn -> Reason.Scanner_raised exn) (fun () ->
@@ -876,9 +913,13 @@ let run_scanner :
 
 
 let run_action :
-    (RR.t -> Env1.t -> Job_scheduler.t -> Action.t -> need:string -> unit Builder.t)=
-  fun rr env1 js action ~need ->
-    Message.reason "Running action (%s) %s" (RR.to_string rr) (Action.to_string action);
+    (RR.t -> Env1.t -> Job_scheduler.t -> Action.t ->
+     targets:Path.t list -> need:string ->
+     unit Builder.t) =
+  fun rr env1 js action ~targets ~need ->
+    Message.reason "Building: %s [%s]"
+      (String.concat ~sep:" " (List.map targets ~f:Path.to_rrr_string))
+      (RR.to_string rr);
     match Action.case action with
     | `id action_id ->
       Builder.try_deferred ~err:(fun exn -> Reason.Internal_action_raised exn) (fun ()->
@@ -1003,7 +1044,6 @@ type t = {
   node : DG.Node.t;
 
 } with fields
-
 
 let set_status t status =
   Hashtbl.set (Progress.ht t.progress) ~key:(t.me) ~data:status
@@ -1148,6 +1188,7 @@ let build_deps : (t -> Dep.t list -> Proxy_map.t Builder.t) =
   fun t deps ->
     set_status t Status.Waiting;
     Builder.for_all_collect_errors deps ~f:(build_dep t) *>>= fun (pms,errors) ->
+    set_status t Status.Checking;
     match errors with
     | _::_ -> error (collect_child_errors_lift_cycles errors)
     | [] ->
@@ -1171,6 +1212,7 @@ let generate_ruleset_if_necessary : (t -> Gen_key.t -> Rule_set.t Builder.t) =
     let run_and_cache rr =
       set_status t (Status.Running "generator");
       run_generator rr gen_key generator *>>= fun ruleset ->
+      set_status t Status.Checking;
       Hashtbl.set (generated t) ~key:gen_key ~data:(rooted_proxy,ruleset);
       return ruleset
     in
@@ -1219,6 +1261,7 @@ let run_scanner_if_necessary : (t -> Dep.t list -> Scanner.t -> Dep.t list Build
     let run_and_cache rr =
       set_status t (Status.Running "scanner");
       run_scanner rr env1 t.js scanner *>>= fun scanned_deps ->
+      set_status t Status.Checking;
       Hashtbl.set (scanned t) ~key:scanner ~data:(rooted_proxy,scanned_deps);
       return scanned_deps
     in
@@ -1356,7 +1399,9 @@ let run_target_rule_action_if_necessary
     let head_target,other_targets = Target_rule.head_and_rest_targets tr in
     let run_and_cache rr =
       set_status t (Status.Running "action");
-      prevent_overlap ~targets (fun () -> run_action rr env1 t.js action ~need) *>>= fun () ->
+      prevent_overlap ~targets
+        (fun () -> run_action rr env1 t.js action ~targets ~need) *>>= fun () ->
+      set_status t Status.Checking;
       check_targets t targets *>>= function
       | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
       | `ok path_tagged_proxys ->
@@ -1499,10 +1544,13 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
   (* Expose the builder's result/error for reporting *)
   fun t dep ->
     Message.considering "Considering: %s" (Dep.to_string dep);
-    set_status t Status.Considering;
+    set_status t Status.Checking;
     let builder = build_dep t dep in
     let builder = Builder.when_redo builder
-      ~f:(fun () -> Message.considering "Re-considering: %s" (Dep.to_string dep))
+      ~f:(fun () ->
+        Message.considering "Re-considering: %s" (Dep.to_string dep);
+        set_status t Status.Checking;
+      )
     in
     Builder.lift (
       Tenacious.bind (
@@ -1673,7 +1721,7 @@ let remove_unreachable_targets_from_progress_monitor : (Progress.t -> DG.t -> un
         "remove unreachable targets from progress monitor: %d of %d, leaving %d"
         n m (m-n);
       Hash_set.iter removal_candidates ~f:(fun dep ->
-        Message.message "- %s" (Dep.to_string dep);
+        (*Message.message "- %s" (Dep.to_string dep);*)
         Hashtbl.remove (Progress.ht progress) dep;
       )
 

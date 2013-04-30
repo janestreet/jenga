@@ -27,25 +27,20 @@ let make_periodic_pipe_writer span ~aborted ~f =
 
 let go ~root_dir progress =
 
-  let get_progress_fraction () =
-    let counts = Progress.snap progress in
-    let top,bot = Progress.Counts.fraction counts in
-    (top,bot)
-  in
-
   let progress_report_span = sec (0.3) in
 
   let progress_stream =
     Rpc.Pipe_rpc.implement Rpc_intf.progress_stream
       (fun () () ~aborted ->
-        make_periodic_pipe_writer progress_report_span ~aborted
-          ~f:get_progress_fraction
+        make_periodic_pipe_writer progress_report_span ~aborted ~f:(fun () ->
+          Progress.snap progress
+        )
       )
   in
 
   let implementations =
     Rpc.Implementations.create ~on_unknown_rpc:`Ignore ~implementations: [
-      progress_stream
+      progress_stream;
     ]
   in
   match implementations with

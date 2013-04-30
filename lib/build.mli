@@ -11,7 +11,8 @@ module Progress : sig
   type t
   val create : unit -> t
   module Counts : sig
-    type t
+    type t with bin_io
+    val to_string : t -> string
     val fraction : t -> (int*int)
   end
   val snap : t -> Counts.t

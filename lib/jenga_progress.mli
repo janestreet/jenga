@@ -4,4 +4,4 @@ open Async.Std
 
 (* Entry point to run Jenga client *)
 
-val main : unit -> unit
+val command_line : unit -> unit
