@@ -191,7 +191,7 @@ module Dep = struct
     | `scan (deps,scanner) ->
       sprintf "scan(: %s) - %s" (String.concat ~sep:" " (List.map deps ~f:to_string))
         (Scanner.to_string scanner)
-    | `glob glob -> sprintf "glob: %s" (Fs.Glob.to_string glob)
+    | `glob glob -> Fs.Glob.to_string glob
     | `null -> "null"
 
   let default ~dir = alias (Alias.default ~dir)

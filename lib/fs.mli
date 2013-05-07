@@ -16,17 +16,24 @@ module Digest : sig (* proxy for file contents *)
   val equal : t -> t -> bool
 end
 
+module Kind : sig
+  type t = [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
+  with sexp, compare
+  val to_string : t -> string
+end
+
 module Glob : sig (* glob specification *)
   type t with sexp
   val to_string : t -> string
-  val create : dir:Path.t -> glob_string:string -> t
+  val create : dir:Path.t -> kinds:Kind.t list option -> glob_string:string -> t
   val compare : t -> t -> int
 end
 
 module Listing : sig (* result of globbing *)
   type t with sexp
-  val equal : t -> t -> bool
   val paths : t -> Path.t list
+  val paths_and_kinds : t -> (Path.t * Kind.t) list
+  val equal : t -> t -> bool
 end
 
 module Persist : sig
@@ -36,11 +43,6 @@ end
 
 type t (* handle to the file-system *)
 val create : Persist.t -> t Deferred.t
-
-module Kind : sig
-  type t
-  val to_string : t -> string
-end
 
 module Digest_result : sig
   type t = [

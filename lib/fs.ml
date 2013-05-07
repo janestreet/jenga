@@ -46,8 +46,22 @@ module Kind = struct
   let to_string t = Sexp.to_string (sexp_of_t t)
 end
 
+
 (*----------------------------------------------------------------------
-  Reduced Stats (count!)
+ System lstat - counted
+----------------------------------------------------------------------*)
+
+let unix_lstat path =
+  Effort.track lstat_counter (fun () ->
+    Unix.lstat (Path.to_absolute_string path)
+  )
+
+let unix_lstat_kind path =
+  unix_lstat path >>| fun u -> u.Unix.Stats.kind
+
+
+(*----------------------------------------------------------------------
+  Reduced Stat info
 ----------------------------------------------------------------------*)
 
 module Stats : sig
@@ -59,8 +73,8 @@ module Stats : sig
 
 end = struct
 
-  (* should contain enough info from the Unix.Stats.t to relyable indicate that
-     the path must be re-digested becaue it might have changed.
+  (* should contain enough info from the Unix.Stats.t to reliably indicate that
+     the path must be re-digested because it might have changed.
 
      we should like this structure to be small, as we will store lots of them
 
@@ -105,15 +119,12 @@ end = struct
     }
 
   let lstat path =
-    Effort.track lstat_counter (fun () ->
-      try_with (fun () ->
-        Unix.lstat (Path.to_absolute_string path) >>= fun u ->
-        return (of_unix_stats u)
-      ) >>= fun res ->
-      match res with
-      | Ok x -> return (Ok x)
-      | Error exn -> return (Error (Error.of_exn exn))
-    )
+    try_with (fun () ->
+      unix_lstat path >>| fun u -> of_unix_stats u
+    ) >>= fun res ->
+    match res with
+    | Ok x -> return (Ok x)
+    | Error exn -> return (Error (Error.of_exn exn))
 
 end
 
@@ -127,7 +138,6 @@ let is_digestable stats =
   | `File -> true
   | `Link -> true
   | _ -> false
-
 
 
 (*----------------------------------------------------------------------
@@ -207,21 +217,24 @@ module Listing : sig
 
   val run_ls : dir:Path.t -> t Or_error.t Deferred.t
 
+  val paths_and_kinds : t -> (Path.t * Kind.t) list
+  val paths : t -> Path.t list
+
+  val equal : t -> t -> bool
+
   module Restriction : sig
     type t with sexp
-    val create : Pattern.t -> t
+    val create : kinds:Kind.t list option -> glob_string:string -> t
     val to_string : t -> string
     val compare : t -> t -> int
   end
 
   val restrict : t -> Restriction.t -> t
-  val paths : t -> Path.t list
-  val equal : t -> t -> bool
 
 end = struct
 
   type t = {
-    listing : Path.t list
+    listing : (Path.t * Kind.t) list
   } with sexp, compare
 
   let run_ls ~dir =
@@ -243,7 +256,8 @@ end = struct
           | Ok ".." -> loop acc
           | Ok string ->
             let path = Path.relative ~dir string in
-            loop (path :: acc)
+            unix_lstat_kind path >>= fun kind ->
+            loop ((path,kind) :: acc)
           | Error exn ->
             match Monitor.extract_exn exn with
             | End_of_file -> close(); return acc
@@ -253,29 +267,49 @@ end = struct
       )
       >>= function
       | Error exn -> return (Error (Error.of_exn exn))
-      | Ok paths -> return (Ok { listing = paths })
+      | Ok listing -> return (Ok { listing })
     )
 
-  module Restriction = struct
-    type t = {
-      pat : Pattern.t;
-    } with sexp, compare
-
-    let create pat = { pat; }
-
-    let to_string t = sprintf "%s" (Pattern.to_string t.pat)
-
-  end
-
-  let restrict t r = {
-    listing =
-      List.filter t.listing ~f:fun path ->
-        Pattern.matches r.Restriction.pat (Path.basename path)
-  }
+  let paths t = List.map ~f:fst t.listing
+  let paths_and_kinds t = t.listing
 
   let equal t1 t2 = Int.(=) 0 (compare t1 t2)
 
-  let paths t = t.listing
+  module Restriction = struct
+
+    type t = {
+      kinds : Kind.t list option; (* None means any kind *)
+      pat : Pattern.t;
+    } with sexp, compare
+
+    let create ~kinds ~glob_string =
+      let pat = Pattern.create_from_glob_string glob_string in
+      { kinds; pat; }
+
+    let to_string t =
+      sprintf "%s %s"
+        (match t.kinds with
+        | None -> "(any-kind)"
+        | Some kinds ->
+          sprintf "(%s)" (String.concat ~sep:"," (List.map kinds ~f:Kind.to_string)))
+        (Pattern.to_string t.pat)
+
+
+  end
+
+  let restrict t r =
+    let match_kind =
+      match r.Restriction.kinds with
+      | None -> (fun _ -> true)
+      | Some kinds -> List.mem kinds
+    in
+    {
+      listing =
+        List.filter t.listing ~f:(fun (path,kind) ->
+          match_kind kind
+          && Pattern.matches r.Restriction.pat (Path.basename path)
+        )
+    }
 
 end
 
@@ -675,6 +709,7 @@ end = struct
 
 end
 
+
 (*----------------------------------------------------------------------
  Glob
 ----------------------------------------------------------------------*)
@@ -684,7 +719,7 @@ module Glob : sig
   type t with sexp
   include Hashable with type t := t
 
-  val create : dir:Path.t -> glob_string:string -> t
+  val create : dir:Path.t -> kinds: Kind.t list option -> glob_string:string -> t
   val to_string : t -> string
   val compare : t -> t -> int
 
@@ -701,6 +736,7 @@ end = struct
       type t = {
         dir : Path.t;
         glob_string : string;
+        kinds : Kind.t list option;
       } with sexp,compare
       let hash = Hashtbl.hash
     end
@@ -720,13 +756,12 @@ end = struct
   include Hashable.Make(T)
 
   let to_string t =
-    sprintf "%s/%s"
+    sprintf "glob: %s/ %s"
       (Path.to_rrr_string t.dir)
       (Listing.Restriction.to_string t.restriction)
 
-  let raw_create ~dir ~glob_string =
-    let pat = Pattern.create_from_glob_string glob_string in
-    let restriction = Listing.Restriction.create pat in
+  let raw_create ~dir ~kinds ~glob_string =
+    let restriction = Listing.Restriction.create ~kinds ~glob_string in
     let t = { dir ; restriction } in
     (*Message.message "Glob.create: %s" (to_string t);*)
     t
@@ -734,12 +769,12 @@ end = struct
   (* cache glob construction *)
   let the_cache : (Key.t, t) Hashtbl.t = Key.Table.create()
 
-  let create ~dir ~glob_string =
-    let key = {Key. dir; glob_string} in
+  let create ~dir ~kinds ~glob_string =
+    let key = {Key. dir; kinds; glob_string} in
     match (Hashtbl.find the_cache key) with
     | Some glob -> glob
     | None ->
-      let glob = raw_create ~dir ~glob_string in
+      let glob = raw_create ~dir ~kinds ~glob_string in
       Hashtbl.add_exn the_cache ~key ~data:glob;
       glob
 
@@ -747,7 +782,8 @@ end = struct
   let exec_no_cutoff glob lm per sm  =
     Listing_memo.list_dir lm per sm ~dir:glob.dir *>>= function
     | `listing listing ->
-      Tenacious.return (`listing (Listing.restrict listing glob.restriction))
+      let restricted = Listing.restrict listing glob.restriction in
+      Tenacious.return (`listing restricted)
     | x ->
       Tenacious.return x
 

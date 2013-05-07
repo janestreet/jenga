@@ -18,9 +18,13 @@ module Path : sig
   val root_relative : string -> t
 end
 
+module Kind : sig
+  type t = [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
+end
+
 module Glob : sig
   type t with sexp
-  val create : dir:Path.t -> string -> t
+  val create : dir:Path.t -> ?kinds: Kind.t list -> string -> t
   val exec : t -> Path.t list Deferred.t
 end
 

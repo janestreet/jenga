@@ -3,6 +3,9 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
+let message = Message.trace
+let _message = Message.message
+
 module State = struct
 
   type t = {
@@ -18,7 +21,7 @@ module State = struct
   let try_load_dont_convert ~filename =
     Sys.file_exists filename >>= function
     | `No | `Unknown ->
-      Message.trace "Persist: load: %s - failed (does not exist; will create)" filename;
+      message "Persist: load: %s - failed (does not exist; will create)" filename;
       return None
     | `Yes ->
       try_with (fun () ->
@@ -28,6 +31,12 @@ module State = struct
       | Error _ ->
         Message.error "Persist: load: %s - failed (corrupted; ignoring)" filename;
         return None
+
+  let try_load_dont_convert ~filename =
+    message "Persist: loading: %s..." filename;
+    try_load_dont_convert ~filename >>= fun res ->
+    message "Persist: loading: %s... done" filename;
+    return res
 
   let try_load ~filename =
     try_load_dont_convert ~filename >>= function
@@ -55,12 +64,14 @@ module State = struct
     ) >>= fun unchanged ->
     if unchanged
     then (
-      Message.trace "Persist: unchanged so not saving: %s" filename;
+      message "Persist: unchanged so not saving: %s" filename;
       Deferred.unit
     )
     else (
-      Message.trace "Persist: saving: %s" filename;
-      Writer.save_sexp ~fsync:true ~hum:true filename sexp
+      message "Persist: saving: %s..." filename;
+      Writer.save_sexp ~fsync:true ~hum:true filename sexp >>= fun () ->
+      message "Persist: saving: %s... done" filename;
+      return ()
     )
 
 end

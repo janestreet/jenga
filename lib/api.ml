@@ -7,11 +7,13 @@ open Description
 
 module Path = Path
 
+module Kind = Fs.Kind
+
 module Glob = struct
 
   include Fs.Glob
 
-  let create ~dir glob_string = create ~dir ~glob_string
+  let create ~dir ?kinds glob_string = create ~dir ~kinds ~glob_string
 
   let exec glob =
     let fs = For_user.fs() in

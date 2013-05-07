@@ -18,8 +18,15 @@ let insensitive_scanners_and_internal_actions =
   | None -> false
   | Some _ -> true
 
+(*let dont_check_cycles =
+  match Core.Std.Sys.getenv "JENGA_DONT_CHECK_CYCLES" with
+  | None -> false
+  | Some _ -> true*)
+
+let dont_check_cycles = true
+
 (*----------------------------------------------------------------------
-  Effort
+  external effort
 ----------------------------------------------------------------------*)
 
 let generation_calls = Effort.Counter.create "gen"
@@ -35,6 +42,46 @@ let the_effort =
     scanner_calls;
     Description.external_action_counter;
   ]
+
+let external_effort_string() =
+  Effort.Snapped.to_string (Effort.snap the_effort)
+
+let zero_external_effort() =
+  Effort.reset_to_zero the_effort
+
+(*----------------------------------------------------------------------
+ internal effort
+----------------------------------------------------------------------*)
+
+let c_consider = ref 0
+let c_reconsider = ref 0
+let c_share = ref 0
+
+let internal_effort =
+  [
+    "c_consider"    , c_consider;
+    "c_reconsider"  , c_reconsider;
+    "c_share"       , c_share;
+  ]
+
+let internal_effort_string() =
+  String.concat ~sep:", "
+    (List.map internal_effort ~f:(fun (name,r) -> sprintf "%s=%d" name !r))
+
+let zero_internal_effort() =
+  List.iter internal_effort ~f:(fun (_,r) -> r := 0)
+
+
+(*----------------------------------------------------------------------
+ effort
+----------------------------------------------------------------------*)
+
+let effort_string() =
+  external_effort_string() ^ " / " ^ internal_effort_string()
+
+let zero_effort() =
+  zero_external_effort(); zero_internal_effort()
+
 
 (*----------------------------------------------------------------------
  setup_command_lookup_path
@@ -68,7 +115,7 @@ module Env1 : sig
   type t
   val of_env : Env.t ->  [ `ok of t | `dups of scheme_id list ]
   val lookup_gen_key : t -> Goal.t -> Gen_key.t option
-  val lookup_generator : t -> Gen_key.t -> Rule_generator.t
+  val run_generator_scheme : t -> Gen_key.t -> (Rule_generator.t,exn) Result.t
   val run_scanner : t -> Scan_id.t -> Dep.t list Deferred.t
   val run_internal_action : t -> Action_id.t -> unit Deferred.t
 
@@ -76,7 +123,7 @@ end = struct
 
   type t = {
     lookup_gen_key : Goal.t -> Gen_key.t option;
-    lookup_generator : Gen_key.t -> Rule_generator.t;
+    run_generator_scheme : Gen_key.t -> (Rule_generator.t,exn) Result.t;
     run_scanner : Scan_id.t -> Dep.t list Deferred.t;
     run_internal_action : Action_id.t -> unit Deferred.t;
   } with fields
@@ -116,7 +163,6 @@ end = struct
     (* stage 1 *)
     let lookup_gen_key goal =
       let key_string = Goal.to_string goal in
-      (*Message.verbose "lookup_gen_key: %s" key_string;*)
       match
         match (
           List.find schemes ~f:(fun (pat,_opt_scheme) ->
@@ -147,14 +193,16 @@ end = struct
           | None -> Hashtbl.set h_schemes ~key:tag ~data:body
       )
     in
-    let lookup_generator gen_key =
-      (*Message.verbose "lookup_generator: %s" (Gen_key.to_string gen_key);*)
+    let run_generator_scheme gen_key =
       let {Gen_key. tag; dir} = gen_key in
       match (Hashtbl.find h_schemes tag) with
-      | None -> failwith "lookup_generator" (* cant happen? *)
+      | None -> failwith "run_generator_scheme" (* cant happen? *)
       | Some scheme_body ->
-        let generator = (!scheme_body) ~dir in
-        generator
+        try (
+          let generator = (!scheme_body) ~dir in
+          Ok generator
+        )
+        with exn -> Error exn
     in
 
     (* scanner / internal-action wrapping *)
@@ -170,7 +218,7 @@ end = struct
     | [] ->
       `ok {
         lookup_gen_key;
-        lookup_generator;
+        run_generator_scheme;
         run_scanner;
         run_internal_action;
       }
@@ -512,6 +560,7 @@ module Reason = struct
   | Inconsistent_proxies              of Proxy_map.inconsistency
   | Duplicate_scheme_ids              of scheme_id list
 
+  | Scheme_raised                     of exn
   | Generator_raised                  of exn
   | Internal_action_raised            of exn
   | Running_external_action_raised    of exn
@@ -553,6 +602,9 @@ module Reason = struct
           Pm_key.to_string key)))
 
     (* multi line errors *)
+    | Scheme_raised exn ->
+      sprintf "Generator scheme raised exception:\n%s" (Exn.to_string exn)
+
     | Generator_raised exn ->
       sprintf "Generator raised exception:\n%s" (Exn.to_string exn)
 
@@ -566,11 +618,11 @@ module Reason = struct
       sprintf "Scanner raised exception:\n%s" (Exn.to_string exn)
 
     | Duplicate_rules_for_paths paths ->
-      sprintf "Duplicate rules for paths:\n%s"
+      sprintf "Duplicate rules for paths:\n- %s"
         (String.concat ~sep:"\n- " (List.map paths ~f:Path.to_rrr_string))
 
     | Rule_failed_to_generate_targets paths ->
-      sprintf "Rule failed to generate targets:\n%s"
+      sprintf "Rule failed to generate targets:\n- %s"
         (String.concat ~sep:"\n- " (List.map paths ~f:Path.to_rrr_string))
 
     | Cycle_report (_,items) ->
@@ -586,15 +638,19 @@ end
   Progress - progress monitor
 ----------------------------------------------------------------------*)
 
-(* TODO: special case Error for Error_in_dep *)
-(* distinuish Source as special case of Built *)
-(* Make this status be the same type as Dot.Status *)
+(* TODO: Make this status be the same type as Dot.Status *)
+
+module What = struct (* what was build *)
+  type t = Source | Something_else
+end
+
+
 module Status = struct
   type t =
   | Checking
   | Waiting         (* for deps to be checked *)
   | Running of string
-  | Built (* or source *)
+  | Built of What.t
   | Error of Reason.t
 end
 
@@ -639,7 +695,7 @@ end = struct
       | Status.Checking                       -> cat Dot.Catagory.Waiting
       | Status.Waiting                        -> cat Dot.Catagory.Waiting
       | Status.Running _                      -> cat Dot.Catagory.Working
-      | Status.Built                          -> cat Dot.Catagory.Good
+      | Status.Built _                        -> cat Dot.Catagory.Good
       | Status.Error (Reason.Error_in_deps _) -> cat Dot.Catagory.Child_error
       | Status.Error _                        -> cat Dot.Catagory.Error
 
@@ -647,7 +703,7 @@ end = struct
     | Status.Checking       -> "unexpectedly Checking"
     | Status.Waiting        -> "unexpectedly Waiting"
     | Status.Running s      -> sprintf "unexpectedly Running: %s" s
-    | Status.Built          -> "built"
+    | Status.Built _        -> "built"
     | Status.Error reason   -> Reason.to_string reason
 
   let suppress_reports_for dep = function
@@ -656,7 +712,7 @@ end = struct
        - child errors (they'll be reported at the child)
        - cyclic error at all places except the `nub' (to avoid multiple reports)
     *)
-    | Status.Built -> true
+    | Status.Built _ -> true
     | Status.Error (Reason.Error_in_deps _) -> true
     | Status.Error (Reason.Cycle_report (nub,_)) -> not (Int.(=) 0 (Dep.compare dep nub))
     | _ -> false
@@ -673,31 +729,51 @@ end = struct
       checking  : int;
       waiting   : int;
       running   : int;
-      built     : int;
+      source    : int;
+      built     : int; (* non source *)
       error     : int;
       failure   : int; (* error in dep *)
     } with bin_io
 
-    let total {checking; waiting; running; built; error; failure} =
-      checking + waiting + running + built + error + failure
+    let total {checking; waiting; running; source; built; error; failure} =
+      checking + waiting + running + source + built + error + failure
 
-    let fraction t = t.built , (total t)
+    let good t = t.built + t.source
+    let fraction t = (good t) , (total t)
 
-    let completed t = Int.equal t.built (total t)
+    let completed t = Int.equal (good t) (total t)
 
-    let to_labelled {checking; waiting; running; built; error; failure} =
+    let to_labelled {checking; waiting; running; source; built; error; failure} =
       [
         ("checking"     , checking);
         ("waiting"      , waiting);
         ("running"      , running);
+        ("source"       , source);
         ("built"        , built);
         ("error"        , error);
         ("failure"      , failure);
       ]
 
     let to_string t =
+      let justify =
+        let (>) = Int.(>) in
+        let len n =
+          if n>99999 then 6 else
+          if n>9999 then 5 else
+          if n>999 then 4 else
+          if n>99 then 3 else
+          if n>9 then 2 else
+            1
+        in
+        let max = len (total t) in
+        fun n ->
+          let i = max - len n in
+          assert(not (0>i));
+          let spaces = String.make i ' ' in
+          spaces
+      in
       String.concat ~sep:", "
-        (List.map (to_labelled t) ~f:(fun (s,n) -> sprintf "%s=%d" s n))
+        (List.map (to_labelled t) ~f:(fun (s,n) -> sprintf "%s=%s%d" s (justify n) n))
 
   end
 
@@ -705,6 +781,7 @@ end = struct
     let checking = ref 0 in
     let waiting = ref 0 in
     let running = ref 0 in
+    let source = ref 0 in
     let built = ref 0 in
     let error = ref 0 in
     let failure = ref 0 in
@@ -715,7 +792,8 @@ end = struct
           | Status.Checking                         -> checking
           | Status.Waiting                          -> waiting
           | Status.Running _                        -> running
-          | Status.Built                            -> built
+          | Status.Built What.Source               -> source
+          | Status.Built _                          -> built
           | Status.Error (Reason.Error_in_deps _)   -> failure
           | Status.Error _                          -> error
         in incr x
@@ -724,6 +802,7 @@ end = struct
      checking   = !checking;
      waiting    = !waiting;
      running    = !running;
+     source     = !source;
      built      = !built;
      error      = !error;
      failure    = !failure;
@@ -951,14 +1030,15 @@ let look_for_source : (Fs.t -> Path.t -> Proxy.t option Builder.t) =
     | `file digest    -> return (Some (Proxy.of_digest digest))
     | `missing        -> return None
 
-let need_glob : (Fs.t -> Glob.t -> Proxy_map.t Builder.t) =
+let need_glob : (Fs.t -> Glob.t -> (What.t * Proxy_map.t) Builder.t) =
   fun fs glob ->
     Builder.tenacious (Fs.list_glob fs glob) *>>= function
     | `stat_error _   -> error (Reason.Glob_error "no such directory")
     | `not_a_dir      -> error (Reason.Glob_error "not a directory")
     | `listing_error _-> error (Reason.Glob_error "unable to list")
     | `listing listing ->
-      return (Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing))
+      return (What.Something_else,
+              Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing))
 
 let ensure_directory : (Fs.t -> dir:Path.t -> unit Builder.t) =
   fun fs ~dir ->
@@ -1089,21 +1169,26 @@ let share_and_check_for_cycles :
     match (Hashtbl.find memo key) with
     | Some (builder,node) ->
       begin
-        Message.trace "link: %s --> %s" (* arrow mean depends-on *)
-          (item_to_string (DG.lookup_item t.discovered_graph t.node))
-          (item_to_string (DG.lookup_item t.discovered_graph node));
-        match (DG.link_dependants t.discovered_graph node ~additional:t.node) with
-        | `ok -> builder
-        | `cycle items -> error (Reason.Cycle_report (t.me, items))
+        incr c_share;
+        if dont_check_cycles then builder else (
+          (*Message.trace "link: %s --> %s" (* arrow mean depends-on *)
+            (item_to_string (DG.lookup_item t.discovered_graph t.node))
+            (item_to_string (DG.lookup_item t.discovered_graph node));*)
+          match (DG.link_dependants t.discovered_graph node ~additional:t.node) with
+          | `cycle items -> error (Reason.Cycle_report (t.me, items))
+          | `ok -> builder
+        )
       end
     | None ->
       let t = push_dependency t item in
       let builder = f t in (* critical - [f] must be called only once *)
-      let builder = Builder.when_redo builder
-        ~f:(fun () ->
-          Message.trace "remove_all_dependencies: %s" (item_to_string item);
-          DG.remove_all_dependencies t.node;
-        )
+      let builder =
+        if dont_check_cycles then builder else
+          Builder.when_redo builder
+            ~f:(fun () ->
+              (*Message.message "remove_all_dependencies: %s" (item_to_string item);*)
+              DG.remove_all_dependencies t.node;
+            )
       in
       (* we use add_exn, because each key will be memoized exactly once *)
       Hashtbl.add_exn memo ~key ~data:(builder,t.node);
@@ -1205,26 +1290,28 @@ let generate_ruleset_if_necessary : (t -> Gen_key.t -> Rule_set.t Builder.t) =
   *)
   fun t gen_key ->
     jenga_root t *>>= fun (env1,root_proxy) ->
-    let generator = Env1.lookup_generator env1 gen_key in
-    let generator_deps = Rule_generator.deps generator in
-    build_deps t generator_deps *>>= fun proxy_map ->
-    let rooted_proxy = Rooted_proxy.create root_proxy proxy_map in
-    let run_and_cache rr =
-      set_status t (Status.Running "generator");
-      run_generator rr gen_key generator *>>= fun ruleset ->
-      set_status t Status.Checking;
-      Hashtbl.set (generated t) ~key:gen_key ~data:(rooted_proxy,ruleset);
-      return ruleset
-    in
-    match (Hashtbl.find (generated t) gen_key) with
-    | None -> run_and_cache RR.No_record_of_being_run_before
-    | Some (prev,ruleset) ->
-      let insensitive = false in (* always be correct/conservative for generators *)
-      match Rooted_proxy.diff ~insensitive prev rooted_proxy with
-      | Some `root_changed -> run_and_cache RR.Jenga_root_changed
-      | Some (`proxy_map_changed keys) -> run_and_cache (RR.Deps_have_changed keys)
-      | None ->
-        return ruleset (* Up to date; dont run anything *)
+    match (Env1.run_generator_scheme env1 gen_key) with
+    | Error exn -> error (Reason.Scheme_raised exn)
+    | Ok generator ->
+      let generator_deps = Rule_generator.deps generator in
+      build_deps t generator_deps *>>= fun proxy_map ->
+      let rooted_proxy = Rooted_proxy.create root_proxy proxy_map in
+      let run_and_cache rr =
+        set_status t (Status.Running "generator");
+        run_generator rr gen_key generator *>>= fun ruleset ->
+        set_status t Status.Checking;
+        Hashtbl.set (generated t) ~key:gen_key ~data:(rooted_proxy,ruleset);
+        return ruleset
+      in
+      match (Hashtbl.find (generated t) gen_key) with
+      | None -> run_and_cache RR.No_record_of_being_run_before
+      | Some (prev,ruleset) ->
+        let insensitive = false in (* always be correct/conservative for generators *)
+        match Rooted_proxy.diff ~insensitive prev rooted_proxy with
+        | Some `root_changed -> run_and_cache RR.Jenga_root_changed
+        | Some (`proxy_map_changed keys) -> run_and_cache (RR.Deps_have_changed keys)
+        | None ->
+          return ruleset (* Up to date; dont run anything *)
 
 
 let generate_ruleset_if_necessary : (t -> Gen_key.t -> Rule_set.t Builder.t) =
@@ -1299,7 +1386,7 @@ let run_scanner_if_necessary : (t -> Dep.t list -> Scanner.t -> Dep.t list Build
       ~f: (fun t -> run_scanner_if_necessary t deps scanner)
 
 
-let build_scanner : (t -> Dep.t list -> Scanner.t -> Proxy_map.t Builder.t) =
+let build_scanner : (t -> Dep.t list -> Scanner.t -> (What.t * Proxy_map.t) Builder.t) =
   (*
     Build the scanner's dependencies
     Maybe run the scanner;
@@ -1308,7 +1395,9 @@ let build_scanner : (t -> Dep.t list -> Scanner.t -> Proxy_map.t Builder.t) =
   fun t deps scanner ->
     build_deps t deps *>>= fun _proxy_map ->
     run_scanner_if_necessary t deps scanner *>>= fun scanned_deps ->
-    build_deps t scanned_deps
+    build_deps t scanned_deps *>>= fun pm ->
+    return (What.Something_else,
+            pm)
 
 
 
@@ -1448,7 +1537,7 @@ let run_target_rule_action_if_necessary
                 run_and_cache (RR.Targets_not_as_expected paths)
               | None ->
                 (* Everything is as it should be! re-sensitize to the targets. *)
-                Message.checked "NOT RUNNING: %s" (Action.to_string action);
+                (*Message.checked "NOT RUNNING: %s" (Action.to_string action);*)
                 Builder.sensitize heart *>>= fun () ->
                 return path_tagged_proxys
 
@@ -1478,7 +1567,7 @@ let build_using_target_rule :
     return (Proxy_map.single (Pm_key.of_path path) proxy)
 
 
-let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
+let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
   (* build a goal -- alias or path
      In either case, first get the ruleset applicable to the goal.
      For an alias - there must be a rule in this ruleset.
@@ -1497,17 +1586,23 @@ let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
       begin
         match (Rule_set.lookup_alias ruleset alias_id) with
         | None -> error Reason.No_definition_for_alias
-        | Some deps -> build_deps t deps
+        | Some deps ->
+          build_deps t deps *>>= fun pm ->
+          return (What.Something_else, pm)
       end
     | `path demanded ->
       begin
         match (Rule_set.lookup_target ruleset demanded) with
-        | Some tr -> build_using_target_rule t tr ~demanded
+        | Some tr ->
+          build_using_target_rule t tr ~demanded *>>= fun pm ->
+          return (What.Something_else, pm)
         | None ->
           look_for_source t.fs demanded *>>= function
           | None -> error Reason.No_rule_or_source
           | Some proxy ->
-            return (Proxy_map.single (Pm_key.of_path demanded) proxy)
+            let pm = Proxy_map.single (Pm_key.of_path demanded) proxy in
+            return (What.Source, pm)
+
       end
 
 
@@ -1515,7 +1610,7 @@ let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
    extend with different behaviour... *)
 
 
-let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
+let build_dep : (t -> Dep.t -> (What.t * Proxy_map.t) Builder.t) =
   (* Build a dependency by considering cases *)
   fun t dep ->
     match (Dep.case dep) with
@@ -1523,10 +1618,10 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
     | `path path                -> build_goal t (Goal.path path)
     | `alias alias              -> build_goal t (Goal.alias alias)
     | `glob glob                -> need_glob t.fs glob
-    | `null                     -> return Proxy_map.empty
+    | `null                     -> return (What.Something_else, Proxy_map.empty)
 
 
-let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
+let build_dep : (t -> Dep.t -> (What.t * Proxy_map.t) Builder.t) =
   (* Wrapper to check invariant that we never traverse the same dep more than once
      i.e. that the dynamic memoization is working!
   *)
@@ -1543,25 +1638,29 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
 let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
   (* Expose the builder's result/error for reporting *)
   fun t dep ->
-    Message.considering "Considering: %s" (Dep.to_string dep);
+    incr c_consider;
+    (*Message.considering "Considering: %s" (Dep.to_string dep);*)
     set_status t Status.Checking;
     let builder = build_dep t dep in
     let builder = Builder.when_redo builder
       ~f:(fun () ->
-        Message.considering "Re-considering: %s" (Dep.to_string dep);
+        incr c_reconsider;
+        (*Message.considering "Re-considering: %s" (Dep.to_string dep);*)
         set_status t Status.Checking;
+        incr c_reconsider;
       )
     in
     Builder.lift (
       Tenacious.bind (
         Builder.expose builder
       ) (fun ore ->
-        begin
-          match ore with
-          | Ok _ -> set_status t Status.Built
-          | Error reason -> set_status t (Status.Error reason)
-        end;
-        Tenacious.return ore
+        match ore with
+        | Ok (what, pm) ->
+          set_status t (Status.Built what);
+          Tenacious.return (Ok pm)
+        | Error reason ->
+          set_status t (Status.Error reason);
+          Tenacious.return (Error reason)
       )
     )
 
@@ -1642,7 +1741,7 @@ let message_effort_and_progress progress =
   (* more detailed message than just progress-fraction *)
   let num,den = Progress.Counts.fraction counts in
   Message.message "[ %s ] { %s } -- %d / %d"
-    (Effort.Snapped.to_string (Effort.snap the_effort))
+    (effort_string())
     (Progress.Counts.to_string counts)
     num den
 
@@ -1751,8 +1850,8 @@ let build_once :
     let counts = Progress.snap progress in
     let duration = Time.diff (Time.now()) start_time in
 
-    let effort_string = Effort.Snapped.to_string (Effort.snap the_effort) in
-    Effort.reset_to_zero the_effort;
+    let effort_string = effort_string() in
+    zero_effort();
 
     if Progress.Counts.completed counts then (
       let total = Progress.Counts.total counts in

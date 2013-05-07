@@ -16,7 +16,7 @@ let discover_root() =
       jenga_root_basename ()
   | `ok root -> root
 
-let retry_span = sec 1.0
+let retry_span = sec 0.5
 
 type config  = {
   full : bool;
@@ -38,24 +38,42 @@ let run config =
     else fraction_string
   in
 
+  let string_of_last_progress () =
+    match !last_progress with
+    | None -> "no progress seen!"
+    | Some progress -> string_of_progress progress
+  in
+
   let suck_progress_pipe conn =
+    let stop = ref false in
+    let fresh = ref false in
+    don't_wait_for (
+      let rec loop q =
+        Clock.after (sec 0.5) >>= fun () ->
+        if !stop then return ()
+        else
+          if !fresh then (fresh := false; loop 1)
+          else (
+            let qmes = String.concat (List.init q ~f:(fun _ -> "?")) in
+            message "%s %s" (string_of_last_progress ()) qmes;
+            loop (q+1);
+          )
+      in loop 1
+    );
     Rpc.Pipe_rpc.dispatch_exn Rpc_intf.progress_stream conn () >>= fun (reader,_id) ->
     Pipe.iter_without_pushback reader ~f:(fun progress ->
       last_progress := Some progress;
-      message "progress: %s" (string_of_progress progress)
-    )
+      fresh := true;
+      message "%s" (string_of_progress progress);
+    ) >>= fun () ->
+    stop := true;
+    return ()
   in
 
   let poll_for_connection ~retry =
     Server_lock.server_location ~root_dir >>= function
     | `server_not_running ->
-      message "%s : not running%s"
-        root_dir
-        (match !last_progress with
-        | None -> ""
-        | Some progress ->
-          sprintf " (last: %s)" (string_of_progress progress)
-        );
+      message "%s (not running)" (string_of_last_progress ()); (*root_dir*)
       retry()
     | `hostname_and_port (hostname,port) ->
       let server_name = sprintf "%s:%d" hostname port in
