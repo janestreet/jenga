@@ -94,6 +94,7 @@ let log_basename = special ".debug"
 let db_basename = special ".db"
 let dot_basename = special ".dot"
 let lock_basename = special ".lock"
+let server_basename = special ".server"
 
 
 type path = t with sexp

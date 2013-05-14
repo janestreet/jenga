@@ -22,7 +22,7 @@ let discover_root() =
       jenga_root_basename ()
   | `ok root -> root
 
-let db_save_span = sec 5.0
+let db_save_span = sec 15.0
 
 let run config =
 
@@ -58,7 +58,9 @@ let run config =
      This is necessary for internal actions, which assume this! *)
   Sys.chdir root_dir >>= fun () ->
 
-  Persist.create_saving_periodically ~filename:db_filename db_save_span >>= fun persist ->
+  Persist.create_saving_periodically ~filename:db_filename db_save_span
+  >>= fun persist ->
+
   let fs_persist = Persist.fs_persist persist in
   Fs.create fs_persist >>= fun fs ->
 
@@ -71,19 +73,21 @@ let run config =
   in
 
   let when_polling () =
-    Persist.save_now persist
+    Persist.disable_periodic_saving_and_save_now persist
+  in
+
+  let when_rebuilding () =
+    return (Persist.re_enable_periodic_saving persist)
   in
 
   let bs = Persist.build_persist persist in
 
   Build.build_forever config progress
-    ~jenga_root_path ~top_level_demands fs bs ~when_polling
-
+    ~jenga_root_path ~top_level_demands fs bs ~when_polling ~when_rebuilding
   >>= fun () ->
 
-  Persist.save_now persist >>= fun () ->
   Message.flushed () >>= fun () ->
-  return 0 (* for non-polling, should return non-zero if have any errors *)
+  return 0
 
 
 let install_signal_handlers () =

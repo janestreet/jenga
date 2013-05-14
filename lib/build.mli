@@ -26,4 +26,5 @@ val build_forever :
   Fs.t ->
   Persist.t ->
   when_polling:(unit -> unit Deferred.t) ->
+  when_rebuilding:(unit -> unit Deferred.t) ->
   unit Deferred.t

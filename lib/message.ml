@@ -38,8 +38,8 @@ module Job_output = struct
 end
 
 module Tag = struct
-  (* Error, Message(info), Verbose, Reason, Checked, A(Considering Advice), Trace, Dev *)
-  type t = E | M | V | R | C | A | T | D with sexp_of
+  (* Error, Message(info), Verbose, Reason, Trace, Unlogged *)
+  type t = E | M | V | R | T | U with sexp_of
   let to_string t = Sexp.to_string (sexp_of_t t)
 end
 
@@ -100,10 +100,8 @@ let error fmt   = tagged_message Tag.E fmt
 let message fmt = tagged_message Tag.M fmt
 let verbose fmt = tagged_message Tag.V fmt
 let reason fmt  = tagged_message Tag.R fmt
-let checked fmt = tagged_message Tag.C fmt
-let considering fmt = tagged_message Tag.A fmt
 let trace fmt   = tagged_message Tag.T fmt
-let dev fmt     = tagged_message Tag.D fmt
+let unlogged fmt= tagged_message Tag.U fmt
 
 let load_jenga_root path =
   T.dispatch the_log (Event.Load_jenga_root path)
@@ -173,11 +171,9 @@ let omake_style_logger config event =
   | Event.Tagged_message (Tag.M,s) -> jput "%s" s
   | Event.Tagged_message (Tag.V,s) -> if verbose then jput "%s" s
   | Event.Tagged_message (Tag.R,s) -> if Config.show_run_reason config then jput "%s" s
-  | Event.Tagged_message (Tag.C,s) -> if Config.show_checked config then jput "%s" s
-  | Event.Tagged_message (Tag.A,s) -> if Config.show_considering config then jput "%s" s
   (*put*)
   | Event.Tagged_message (Tag.T,s) -> if Config.debug config then put "TRACE: %s" s
-  | Event.Tagged_message (Tag.D,s) -> put "%s" s
+  | Event.Tagged_message (Tag.U,s) -> put "%s" s
 
   | Event.Load_jenga_root path ->
     if not quiet then (
@@ -277,7 +273,10 @@ let string_of_event event =
   | _  -> Sexp.to_string (Event.sexp_of_t event)
 
 let to_log_full_logger log event =
-  Log.raw log "%s" (string_of_event event)
+  match event with
+  | Event.Tagged_message (Tag.U,_) -> ()
+  | _ ->
+    Log.raw log "%s" (string_of_event event)
 
 let make_log ~log_filename =
   let output = [Log.Output.file `Text ~filename:log_filename] in

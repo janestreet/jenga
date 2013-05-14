@@ -18,13 +18,6 @@ let insensitive_scanners_and_internal_actions =
   | None -> false
   | Some _ -> true
 
-(*let dont_check_cycles =
-  match Core.Std.Sys.getenv "JENGA_DONT_CHECK_CYCLES" with
-  | None -> false
-  | Some _ -> true*)
-
-let dont_check_cycles = true
-
 (*----------------------------------------------------------------------
   external effort
 ----------------------------------------------------------------------*)
@@ -568,20 +561,12 @@ module Reason = struct
 
   | Duplicate_rules_for_paths         of Path.t list
   | Rule_failed_to_generate_targets   of Path.t list
+  (* | Cycle... *)
 
-  | Cycle_report                      of Dep.t * DG.Item.t list
 
+  let to_string = function
 
-  let rec to_string = function
-
-    | Error_in_deps xs ->
-      sprintf "Unable to build dependencies: [ %s ]"
-        (String.concat ~sep:" " (List.map xs ~f:(fun (dep,t) ->
-          sprintf "%s: %s"
-            (Dep.to_string dep)
-            (to_string t)
-         )))
-
+    | Error_in_deps _ -> "Unable to build dependencies"
     | Digest_error -> "unable to digest file"
     | Undigestable k -> sprintf "undigestable file kind: %s" (Fs.Kind.to_string k)
     | Glob_error s -> sprintf "glob error: %s" s
@@ -624,13 +609,6 @@ module Reason = struct
     | Rule_failed_to_generate_targets paths ->
       sprintf "Rule failed to generate targets:\n- %s"
         (String.concat ~sep:"\n- " (List.map paths ~f:Path.to_rrr_string))
-
-    | Cycle_report (_,items) ->
-      sprintf "Cyclic dependencies: %s"
-        (String.concat (
-          List.map items ~f:(fun item ->
-            sprintf "\n- %s" (item_to_string item))))
-
 
 end
 
@@ -706,20 +684,18 @@ end = struct
     | Status.Built _        -> "built"
     | Status.Error reason   -> Reason.to_string reason
 
-  let suppress_reports_for dep = function
+  let suppress_reports_for = function
     (* suppress reporting errors for
        - stuff which was built ok
-       - child errors (they'll be reported at the child)
-       - cyclic error at all places except the `nub' (to avoid multiple reports)
+       - error_in_deps errors (they'll be reported at the child)
     *)
     | Status.Built _ -> true
     | Status.Error (Reason.Error_in_deps _) -> true
-    | Status.Error (Reason.Cycle_report (nub,_)) -> not (Int.(=) 0 (Dep.compare dep nub))
     | _ -> false
 
   let message_errors t =
     Hashtbl.iter (ht t) ~f:(fun ~key:dep ~data:status ->
-      if suppress_reports_for dep status then () else
+      if suppress_reports_for status then () else
         Message.error "%s: %s" (Dep.to_string dep) (final_status_to_string status)
     )
 
@@ -817,8 +793,11 @@ end
 module Builder : sig (* layer error monad within tenacious monad *)
 
   type 'a t
+  val wrap : ('a, Reason.t) Result.t Tenacious.t -> 'a t
   val expose : 'a t -> ('a, Reason.t) Result.t Tenacious.t
-  val lift : ('a, Reason.t) Result.t Tenacious.t -> 'a t
+
+  val of_tenacious : 'a Tenacious.t -> 'a t
+  val expose_unit : 'a t -> unit Tenacious.t
 
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
@@ -828,8 +807,7 @@ module Builder : sig (* layer error monad within tenacious monad *)
   val for_all_collect_errors :
     'a list -> f:('a -> 'b t) -> ('b list * ('a * Reason.t) list) t
 
-  val tenacious : 'a Tenacious.t -> 'a t
-  val deferred : 'a Deferred.t -> 'a t
+  val of_deferred : (unit -> 'a Deferred.t) -> 'a t
   val try_deferred : (unit -> 'a Deferred.t) -> err:(exn -> Reason.t) -> 'a t
 
   val desensitize : 'a t -> ('a * Heart.t) t
@@ -840,8 +818,17 @@ module Builder : sig (* layer error monad within tenacious monad *)
 end = struct
 
   type 'a t = ('a, Reason.t) Result.t Tenacious.t
+
+  let wrap t = t
   let expose t = t
-  let lift t = t
+
+  let of_tenacious tenacious =
+    Tenacious.bind tenacious (fun x ->
+      Tenacious.return (Ok x)
+    )
+
+  let expose_unit t =
+    Tenacious.bind t (fun _ -> Tenacious.return ())
 
   let return x = Tenacious.return (Ok x)
 
@@ -868,35 +855,32 @@ end = struct
         return (good,bad)
       )
 
-  let tenacious ten =
-    Tenacious.bind ten (fun x ->
-      Tenacious.return (Ok x)
-    )
-
-  let deferred def =
-    Tenacious.lift1 (fun () ->
-      def >>= fun x ->
+  let of_deferred f =
+    Tenacious.lift (fun () ->
+      f () >>= fun x ->
       Deferred.return (Ok x,Heart.unbreakable)
     )
 
   let try_deferred f ~err =
-    Tenacious.lift1 (fun () ->
+    Tenacious.lift (fun () ->
       Monitor.try_with f >>= function
       | Ok x -> Deferred.return (Ok x,Heart.unbreakable)
       | Error exn -> Deferred.return (Error (err exn), Heart.unbreakable)
     )
 
   let desensitize t = (* if not error *)
-    Tenacious.lift1 (fun () ->
-      Deferred.bind (Tenacious.exec1 t) (fun (ore,heart) ->
+    Tenacious.lift_cancelable (fun ~cancel ->
+      Deferred.bind (Tenacious.exec_cancelable ~cancel t) (function
+      | None -> Deferred.return None
+      | Some (ore,heart) ->
         match ore with
-        | Error e -> Deferred.return (Error e, heart)
-        | Ok x -> Deferred.return (Ok (x,heart), Heart.unbreakable)
+        | Error e -> Deferred.return (Some (Error e, heart))
+        | Ok x -> Deferred.return (Some (Ok (x,heart), Heart.unbreakable))
       )
     )
 
   let sensitize heart =
-    Tenacious.lift1 (fun () -> Deferred.return (Ok (), heart))
+    Tenacious.lift (fun () -> Deferred.return (Ok (), heart))
 
   let when_redo = Tenacious.when_redo
 
@@ -984,7 +968,7 @@ let run_scanner :
                  (Scanning_with_internal_action_not_supported action_id))
       | `xaction x ->
         let need = "scanner" in
-        Builder.deferred (Description.Xaction.run_now_stdout x js ~need)
+        Builder.of_deferred (fun () -> Description.Xaction.run_now_stdout x js ~need)
         *>>= function
         | Ok stdout                  -> return (Dep.parse_string_as_deps ~dir:dir1 stdout)
         | Error `non_zero_status     -> error Reason.Non_zero_status
@@ -1005,7 +989,7 @@ let run_action :
         Env1.run_internal_action env1 action_id
       )
     | `xaction x ->
-      Builder.deferred (Description.Xaction.run_now x js ~need)
+      Builder.of_deferred (fun () -> Description.Xaction.run_now x js ~need)
       *>>= function
       | Ok ()                      -> return ()
       | Error `non_zero_status     -> error Reason.Non_zero_status
@@ -1018,7 +1002,7 @@ let run_action :
 let digest_path
     : (Fs.t -> Path.t -> [ `file of Digest.t | `missing ] Builder.t) =
   fun fs path ->
-    Builder.tenacious (Fs.digest_file fs ~file:path) *>>= function
+    Builder.of_tenacious (Fs.digest_file fs ~file:path) *>>= function
     | `stat_error _   -> return `missing
     | `undigestable k -> error (Reason.Undigestable k)
     | `digest_error _ -> error Reason.Digest_error
@@ -1032,7 +1016,7 @@ let look_for_source : (Fs.t -> Path.t -> Proxy.t option Builder.t) =
 
 let need_glob : (Fs.t -> Glob.t -> (What.t * Proxy_map.t) Builder.t) =
   fun fs glob ->
-    Builder.tenacious (Fs.list_glob fs glob) *>>= function
+    Builder.of_tenacious (Fs.list_glob fs glob) *>>= function
     | `stat_error _   -> error (Reason.Glob_error "no such directory")
     | `not_a_dir      -> error (Reason.Glob_error "not a directory")
     | `listing_error _-> error (Reason.Glob_error "unable to list")
@@ -1042,7 +1026,7 @@ let need_glob : (Fs.t -> Glob.t -> (What.t * Proxy_map.t) Builder.t) =
 
 let ensure_directory : (Fs.t -> dir:Path.t -> unit Builder.t) =
   fun fs ~dir ->
-    Builder.tenacious (Fs.ensure_directory fs ~dir) *>>= function
+    Builder.of_tenacious (Fs.ensure_directory fs ~dir) *>>= function
     | `ok -> return ()
     | `not_a_dir -> error (Reason.No_directory_for_target "not a directory")
     | `failed -> error (Reason.No_directory_for_target "failed to create")
@@ -1106,6 +1090,7 @@ end
 
 type t = {
 
+  config : Config.t; (* messaging choices *)
   fs : Fs.t; (* file system *)
   js : Job_scheduler.t; (* run external jobs through throttle *)
   persist : Persist.t; (* persisant cache *)
@@ -1170,25 +1155,18 @@ let share_and_check_for_cycles :
     | Some (builder,node) ->
       begin
         incr c_share;
-        if dont_check_cycles then builder else (
-          (*Message.trace "link: %s --> %s" (* arrow mean depends-on *)
-            (item_to_string (DG.lookup_item t.discovered_graph t.node))
-            (item_to_string (DG.lookup_item t.discovered_graph node));*)
-          match (DG.link_dependants t.discovered_graph node ~additional:t.node) with
-          | `cycle items -> error (Reason.Cycle_report (t.me, items))
-          | `ok -> builder
-        )
+        DG.link_dependants_no_cycle_check node ~additional:t.node;
+        builder;
       end
     | None ->
       let t = push_dependency t item in
       let builder = f t in (* critical - [f] must be called only once *)
       let builder =
-        if dont_check_cycles then builder else
-          Builder.when_redo builder
-            ~f:(fun () ->
-              (*Message.message "remove_all_dependencies: %s" (item_to_string item);*)
-              DG.remove_all_dependencies t.node;
-            )
+        Builder.when_redo builder
+          ~f:(fun () ->
+            (*Message.message "remove_all_dependencies: %s" (item_to_string item);*)
+            DG.remove_all_dependencies t.node;
+          )
       in
       (* we use add_exn, because each key will be memoized exactly once *)
       Hashtbl.add_exn memo ~key ~data:(builder,t.node);
@@ -1224,7 +1202,7 @@ let jenga_root : (t -> (Env1.t * Root_proxy.t) Builder.t) =
         | `file digest -> return (Some digest)
     )
     *>>= fun digest_opt ->
-    Builder.deferred (Load_root.get_env t.jenga_root_path) *>>= function
+    Builder.of_deferred (fun () -> Load_root.get_env t.jenga_root_path) *>>= function
     | Error _ -> error (Reason.Jenga_root_problem "failed to load")
     | Ok env ->
       match (Env1.of_env env) with
@@ -1249,22 +1227,6 @@ let jenga_root : (t -> (Env1.t * Root_proxy.t) Builder.t) =
   build
 ----------------------------------------------------------------------*)
 
-let collect_child_errors_lift_cycles errors =
-  (* Treat cycle errors specially.
-     a cycle error in an error for every point in the cycle, but we would like to report
-     it just once - at the point in the loop the cycle was detected.
-  *)
-  let cycles =
-    List.filter errors ~f:(function
-    | (_,Reason.Cycle_report _) -> true
-    | _ -> false
-    )
-  in
-  match cycles with
-  | (_,cycle1)::_ -> cycle1
-  | _ -> Reason.Error_in_deps errors
-
-
 let build_deps : (t -> Dep.t list -> Proxy_map.t Builder.t) =
   (* Build a collection of [deps] in parallel.
      Error if any of [deps] errors
@@ -1275,7 +1237,7 @@ let build_deps : (t -> Dep.t list -> Proxy_map.t Builder.t) =
     Builder.for_all_collect_errors deps ~f:(build_dep t) *>>= fun (pms,errors) ->
     set_status t Status.Checking;
     match errors with
-    | _::_ -> error (collect_child_errors_lift_cycles errors)
+    | _::_ -> error (Reason.Error_in_deps errors)
     | [] ->
       match (Proxy_map.merge pms) with
       | `err inconsistency -> error (Reason.Inconsistent_proxies inconsistency)
@@ -1431,37 +1393,27 @@ let ensure_target_dirs : (t -> Path.t list -> unit Builder.t) =
     return ()
 
 
-let prevent_overlap =
-  (* Prevent running overlapping actions for targets
-  *)
-  let running = Path.Table.create () in
-  fun ~targets f ->
-    let wait =
-      Builder.tenacious (
-        Tenacious.all_unit (
-          List.map targets ~f:(fun target ->
-            match (Hashtbl.find running target) with
-            | None -> Tenacious.return ()
-            | Some builder ->
-              Message.trace "waiting for previous action to complete for: %s"
-                (Path.to_rrr_string target);
-              Tenacious.bind (Builder.expose builder) (function
-              | Error _ -> Tenacious.return ()
-              | Ok () -> Tenacious.return ()
-              )
-          )
+let prevent_action_overlap
+    : (Fs.t -> targets:Path.t list -> unit Builder.t -> unit Builder.t) =
+  (* Prevent running overlapping actions for the same targets *)
+  fun fs ~targets builder ->
+    Builder.of_tenacious (
+      Tenacious.prevent_overlap
+        ~table:(Fs.active_targets fs)
+        ~keys:targets
+        ~notify_wait:(fun key ->
+          Message.message "waiting for action to complete for: %s"
+            (Path.to_rrr_string key);
         )
-      )
-    in
-    wait *>>= fun () ->
-    let builder = f () in
-    List.iter targets ~f:(fun target -> Hashtbl.set running ~key:target ~data:builder);
-    Builder.lift (
-      Tenacious.bind (Builder.expose builder) (fun ore ->
-        List.iter targets ~f:(fun target -> Hashtbl.remove running target);
-        Tenacious.return ore
-      )
-    )
+        (*~notify_add:(fun target ->
+          Message.message "target: %s, SET active" (Path.to_rrr_string target);
+        )
+        ~notify_rem:(fun target ->
+          Message.message "target: %s, RM active" (Path.to_rrr_string target);
+        )*)
+        (Builder.expose_unit builder)
+    ) *>>= fun () ->
+    builder
 
 
 let run_target_rule_action_if_necessary
@@ -1488,8 +1440,9 @@ let run_target_rule_action_if_necessary
     let head_target,other_targets = Target_rule.head_and_rest_targets tr in
     let run_and_cache rr =
       set_status t (Status.Running "action");
-      prevent_overlap ~targets
-        (fun () -> run_action rr env1 t.js action ~targets ~need) *>>= fun () ->
+      prevent_action_overlap t.fs ~targets (
+        run_action rr env1 t.js action ~targets ~need
+      ) *>>= fun () ->
       set_status t Status.Checking;
       check_targets t targets *>>= function
       | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
@@ -1537,7 +1490,9 @@ let run_target_rule_action_if_necessary
                 run_and_cache (RR.Targets_not_as_expected paths)
               | None ->
                 (* Everything is as it should be! re-sensitize to the targets. *)
-                (*Message.checked "NOT RUNNING: %s" (Action.to_string action);*)
+                if Config.show_checked t.config then  (
+                  Message.message "NOT RUNNING: %s" (Action.to_string action);
+                );
                 Builder.sensitize heart *>>= fun () ->
                 return path_tagged_proxys
 
@@ -1639,18 +1594,22 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
   (* Expose the builder's result/error for reporting *)
   fun t dep ->
     incr c_consider;
-    (*Message.considering "Considering: %s" (Dep.to_string dep);*)
+    if Config.show_considering t.config then  (
+      Message.message "Considering: %s" (Dep.to_string dep);
+    );
     set_status t Status.Checking;
     let builder = build_dep t dep in
     let builder = Builder.when_redo builder
       ~f:(fun () ->
         incr c_reconsider;
-        (*Message.considering "Re-considering: %s" (Dep.to_string dep);*)
+        if Config.show_considering t.config then  (
+          Message.message "Re-considering: %s" (Dep.to_string dep)
+        );
         set_status t Status.Checking;
         incr c_reconsider;
       )
     in
-    Builder.lift (
+    Builder.wrap (
       Tenacious.bind (
         Builder.expose builder
       ) (fun ore ->
@@ -1683,6 +1642,7 @@ let build_one_root_dep :
       Persist.t ->
       Memo.t ->
       DG.t ->
+      Config.t ->
       Progress.t ->
       demanded:Dep.t ->
       unit Tenacious.t
@@ -1692,9 +1652,11 @@ let build_one_root_dep :
      And here we break out of the Builder monad, and revert to the plain
      tenacious monad - ignoring the proxy map or any errors.
   *)
-  fun ~jenga_root_path js fs persist memo discovered_graph progress ~demanded ->
+  fun ~jenga_root_path js fs persist memo discovered_graph
+    config progress ~demanded ->
     let node = DG.create_root discovered_graph in
     let t = {
+      config;
       fs;
       js;
       persist;
@@ -1827,6 +1789,114 @@ let remove_unreachable_targets_from_progress_monitor : (Progress.t -> DG.t -> un
 
 
 (*----------------------------------------------------------------------
+ cycle detection
+----------------------------------------------------------------------*)
+
+let look_for_a_cycle : (DG.t -> (DG.Node.t * DG.Node.t list) option) =
+  (* walk the graph in CPS style to avoid blowing the stack on pathological
+     deep examples *)
+  fun dg ->
+
+    (* start/finish visiting a node... *)
+    let module Visit : sig
+
+      val start : DG.Node.t -> [
+      | `seen_already
+      | `cycle of DG.Node.t list
+      | `started of [ `finish of (unit -> unit) ]
+      ]
+
+    end  = struct
+
+      let visiting = DG.Node.Hash_set.create ()
+      let path = ref []
+      let seen = DG.Node.Hash_set.create ()
+
+      let start node =
+        if Hash_set.mem seen node
+        then `seen_already
+        else
+          if Hash_set.mem visiting node
+          then `cycle !path
+          else (
+            Hash_set.add visiting node;
+            path := node :: !path;
+            `started (
+              `finish (fun () ->
+                path := (
+                  match !path with
+                  | [] -> assert false
+                  | node'::path ->
+                    assert (Int.equal 0 (DG.Node.compare node node'));
+                    path
+                );
+                Hash_set.remove visiting node;
+                Hash_set.add seen node
+              )
+            )
+          )
+    end
+    in
+    let rec walk_list nodes ~k =
+      match nodes with
+      | [] -> k ()
+      | node::other_nodes ->
+        match Visit.start node with
+        | `seen_already -> walk_list other_nodes ~k
+        | `cycle path -> Some (node, path)
+        | `started (`finish finish) ->
+          (* Mark that we are visting this node while walking its dependencies;
+             setting up a new continuation for the other_nodes at this level. *)
+          walk_list (DG.dependencies node) ~k:(fun () ->
+            finish();
+            walk_list other_nodes ~k
+          )
+    in
+    walk_list (DG.roots dg) ~k:(fun () ->
+      None (* no cycles found *)
+    )
+
+
+let break_a_cycle_if_found dg =
+  match (look_for_a_cycle dg) with
+  | None -> ()
+  | Some (the_nub,full_path) ->
+    let cycle_path =
+      let rec loop acc = function
+        | [] -> assert false
+        | node::nodes ->
+          if Int.(=) 0 (DG.Node.compare node the_nub) then List.rev (node::acc) else
+            loop (node::acc) nodes
+      in
+      loop [] full_path
+    in
+    let () =
+      let cycle_path_with_repeated_nub = the_nub :: cycle_path in
+      Message.message "CYCLIC DEPENDENCIES: %s"
+        (String.concat (
+          List.map cycle_path_with_repeated_nub ~f:(fun node ->
+            let item = DG.lookup_item dg node in
+            sprintf "\n- [%s] %s"
+              (DG.id_string node)
+              (item_to_string item))))
+    in
+    ()
+
+
+let cycle_watch_period = sec 10.0
+
+let watch_for_cycles ~fin dg =
+  let rec loop () =
+    Clock.after cycle_watch_period >>= fun () ->
+    if (!fin) then Deferred.return () else (
+      break_a_cycle_if_found dg;
+      loop ()
+    )
+  in
+  loop ()
+
+
+(*----------------------------------------------------------------------
   build_once
 ----------------------------------------------------------------------*)
 
@@ -1842,7 +1912,7 @@ let build_once :
   fun config dg progress top_tenacious ->
     let u = genU() in (* count of the times we reach polling *)
     let start_time = Time.now() in
-    Tenacious.exec1 top_tenacious >>= fun ((),heart) ->
+    Tenacious.exec top_tenacious >>= fun ((),heart) ->
 
     (* to avoid reporting of stale errors etc... *)
     remove_unreachable_targets_from_progress_monitor progress dg;
@@ -1873,7 +1943,8 @@ let build_once :
 let build_forever =
   (* co-ordinate the build-forever process *)
 
-  fun config progress ~jenga_root_path ~top_level_demands fs persist ~when_polling ->
+  fun config progress ~jenga_root_path ~top_level_demands fs persist
+    ~when_polling ~when_rebuilding ->
 
     let memo = Memo.create () in
     let discovered_graph = DG.create () in
@@ -1889,8 +1960,8 @@ let build_forever =
       Tenacious.all_unit (
         List.map top_level_demands ~f:(fun demanded ->
           build_one_root_dep
-            ~jenga_root_path js fs persist memo discovered_graph progress
-            ~demanded
+            ~jenga_root_path js fs persist memo discovered_graph
+            config progress ~demanded
         )
       )
     in
@@ -1901,6 +1972,12 @@ let build_forever =
 
       (* start up various asyncronous writers/dumpers *)
       let fin = ref false in
+
+      (* async cycle detection; but NO deadlock breaking *)
+      don't_wait_for (
+        watch_for_cycles ~fin discovered_graph
+      );
+
       if Config.progress config then (
         don't_wait_for (
           show_progress_fraction_reports ~fin progress
@@ -1942,10 +2019,8 @@ let build_forever =
         (* wait here until something changes on the file-system *)
         let wait = Heart.when_broken heart in
         wait >>= fun () ->
-        List.iter (Heart.to_broken_list heart) ~f:(fun desc ->
-          Message.file_changed desc
-        );
         Message.rebuilding ();
+        when_rebuilding() >>= fun () ->
         build_and_poll ()
 
     in

@@ -81,27 +81,3 @@ let remove_all_incoming_edges_from_node dest =
     Bag.remove src.outgoing h;
   );
   dest.incoming <- []
-
-  (* Can find a path from one node to another.  Do this to detect cycles.
-  *)
-
-let try_find_path_to_reach_node_from ~start ~goal =
-  let visiting_or_visited = Node.Hash_set.create () in
-  let rec search path node =
-    if equal_node node goal
-    then Some (goal::path)
-    else
-      if Hash_set.mem visiting_or_visited node
-      then None
-      else (
-        Hash_set.add visiting_or_visited node;
-        let path = node :: path in
-        let rec loop = function
-          | [] -> None
-          | node::nodes ->
-            match (search path node) with
-            | None -> loop nodes
-            | Some result -> Some result
-        in loop (step node)
-      )
-  in search [] start

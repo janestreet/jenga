@@ -17,4 +17,3 @@ val add_edge : src:Node.t -> dest:Node.t -> unit
 val step : Node.t -> Node.t list
 val inverse_step : Node.t -> Node.t list
 val remove_all_incoming_edges_from_node : Node.t -> unit
-val try_find_path_to_reach_node_from : start:Node.t -> goal:Node.t -> Node.t list option

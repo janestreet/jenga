@@ -23,11 +23,11 @@ let do_trace =
   | None -> false
   | Some _ -> true
 
-let trace =
+let unlogged =
   if do_trace then
     fun fmt ->
       ksprintf (fun string ->
-        Message.trace "Fs: %s" string
+        Message.unlogged "Fs: %s" string
       ) fmt
   else
     fun fmt ->
@@ -184,7 +184,7 @@ end = struct
 
   let of_file path =
     Effort.track digest_counter (fun () ->
-      trace "DIGEST: %s..." (Path.to_absolute_string path);
+      unlogged "DIGEST: %s..." (Path.to_absolute_string path);
       In_thread.run (fun () ->
         try (
           let ic = Caml.open_in_bin (Path.to_absolute_string path) in
@@ -192,7 +192,7 @@ end = struct
             try (
               let d = External_digest.channel ic (-1) in
               let res = External_digest.to_hex d in
-              trace "DIGEST: %s... %s" (Path.to_absolute_string path) res;
+              unlogged "DIGEST: %s... %s" (Path.to_absolute_string path) res;
               Ok (Digest.of_string res)
             )
             with exn -> Error (Error.of_exn exn)
@@ -320,7 +320,7 @@ end
 module Watcher : sig
 
   type t
-  val create : unit -> t Deferred.t
+  val create : is_active_target:(Path.t -> bool) -> t Deferred.t
   val watch : t -> what:[`file|`dir] -> Path.t -> Heart.t
 
 end = struct
@@ -330,6 +330,7 @@ end = struct
   type what = [`file|`dir]
 
   type t = {
+    is_active_target : (Path.t -> bool);
     notifier : Inotify.t ;
     glass_hearts : (what * Heart.Glass.t) Path.Table.t;
   }
@@ -355,52 +356,63 @@ end = struct
   let suck_notifier_pipe t piper =
     don't_wait_for (
       Pipe.iter piper ~f:(fun event ->
-        (* mustn't trace the watcher event, because writing to the log
+        (* mustn't log the watcher event, because writing to the log
            file will cause a new event !! *)
-        (*trace "Watcher, event: %s" (Inotify.Event.to_string event);*)
+        unlogged "Watcher, event: %s" (Inotify.Event.to_string event);
         List.iter (paths_of_event event) ~f:(fun path ->
+          unlogged "Watcher, event/path: %s" (Path.to_rrr_string path);
           match (Hashtbl.find t.glass_hearts path) with
-          | None -> () (*trace "Watcher, %s -- IGNORED" (Path.to_absolute_string path)*)
-          | Some (_what,glass) ->
-            if not (Heart.Glass.is_broken glass) then (
-              (*(match what with
+          | None -> ()
+          | Some (what,glass) ->
+            assert (not (Heart.Glass.is_broken glass));
+            begin
+              match what with
               | `dir -> ()
-              | `file -> Message.file_changed (Heart.Glass.desc glass)
-              );*)
-              Heart.Glass.break glass
-            )
+              | `file ->
+                (*
+                  Show path events to which we are sensitized...
+
+                  Don't show events for targets of currently running actions.
+
+                  Will see events for externally changed files (i.e. edited source files
+                  or removed generated files), but also for paths affected by a running
+                  jenga action which are not declared as targets of that action.
+
+                *)
+                if not (t.is_active_target path) then (
+                  Message.file_changed (Heart.Glass.desc glass)
+                )
+            end;
+            Heart.Glass.break glass;
+            Hashtbl.remove t.glass_hearts path
         );
         return ()
       )
     )
 
-  let create () =
+  let create ~is_active_target =
     (* Have to pass a path at creation - what a pain, dont have one yet! *)
     Inotify.create ~recursive:false ~watch_new_dirs:false "/" >>= fun (notifier,_) ->
     let glass_hearts = Path.Table.create () in
-    let t = {notifier; glass_hearts} in
+    let t = {is_active_target; notifier; glass_hearts} in
     suck_notifier_pipe t (Inotify.pipe notifier);
     return t
 
   (*let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u)*)
 
   let watch1 t ~what path ~dir =
-    trace "watch: %s (dir: %s)" (Path.to_rrr_string path) (Path.to_rrr_string dir);
-    match (
-      match (Hashtbl.find t.glass_hearts path) with
-      | None -> None
-      | Some (_what,glass) ->
-        let heart = Heart.of_glass glass in
-        if Heart.is_broken heart then None else Some heart
-    ) with
-    | Some old_unbroken_heart -> old_unbroken_heart
+    unlogged "watch: %s (dir: %s)" (Path.to_rrr_string path) (Path.to_rrr_string dir);
+    match (Hashtbl.find t.glass_hearts path) with
+    | Some (_what,glass) ->
+      assert (not (Heart.Glass.is_broken glass));
+      Heart.of_glass glass
     | None ->
       (*let u = genU() in*)
       let desc_string = (*sprintf "%d/" u ^ *)Path.to_rrr_string path in
-      (*Message.message "setup new watcher: %s" desc_string;*)
+      unlogged "setup new watcher: %s" desc_string;
       let desc = Heart.Desc.create desc_string in
       let glass = Heart.Glass.create desc in
-      Hashtbl.set t.glass_hearts ~key:path ~data:(what,glass); (* always replacing *)
+      Hashtbl.add_exn t.glass_hearts ~key:path ~data:(what,glass);
       let path_string = Path.to_absolute_string dir in
       don't_wait_for (
         Monitor.try_with (fun () ->
@@ -449,7 +461,7 @@ end = struct
     | Some tenacious -> tenacious
     | None ->
       let tenacious =
-        Tenacious.lift1 (fun () ->
+        Tenacious.lift (fun () ->
           let heart = Watcher.watch t.watcher ~what path in
           Stats.lstat path >>= fun res ->
           return (res,heart)
@@ -533,7 +545,7 @@ end = struct
         ) with
         | Some old_good_digest -> Tenacious.return (`digest old_good_digest)
         | None ->
-          Tenacious.lift1 (fun () ->
+          Tenacious.lift (fun () ->
             Compute_digest.of_file file >>| fun digest -> (digest,Heart.unbreakable)
           ) *>>= function
           | Error e -> (remove(); Tenacious.return (`digest_error e))
@@ -585,7 +597,7 @@ end = struct
         ) with
         | Some old_good_listing -> Tenacious.return (`listing old_good_listing)
         | None ->
-          Tenacious.lift1 (fun () ->
+          Tenacious.lift (fun () ->
             Listing.run_ls ~dir >>| fun listing -> (listing,Heart.unbreakable)
           ) *>>= function
           | Error e -> (remove(); Tenacious.return (`listing_error e))
@@ -789,16 +801,16 @@ end = struct
 
   let exec glob lm per sm =
     (*Message.message "Glob.exec: %s" (to_string glob);*)
-    Tenacious.lift1 (fun () ->
+    Tenacious.lift (fun () ->
       let my_glass =
         let desc = Heart.Desc.create (to_string glob) in
         Heart.Glass.create desc
       in
-      Tenacious.exec1 (exec_no_cutoff glob lm per sm) >>= fun (res,heart) ->
+      Tenacious.exec (exec_no_cutoff glob lm per sm) >>= fun (res,heart) ->
       don't_wait_for (
         let rec loop heart =
           Heart.when_broken heart >>= fun () ->
-          Tenacious.exec1 (exec_no_cutoff glob lm per sm) >>= fun (res2,heart) ->
+          Tenacious.exec (exec_no_cutoff glob lm per sm) >>= fun (res2,heart) ->
           if (Listing_result.equal res res2)
           then loop heart
           else (
@@ -915,22 +927,29 @@ module Fs : sig
     Glob.t ->
     Listing_result.t Tenacious.t
 
+  val active_targets : t -> unit Tenacious.t Path.Table.t
+
 end = struct
 
   type t = {
+    active_targets : unit Tenacious.t Path.Table.t;
     memo : Memo.t;
     persist : Persist.t;
   }
 
   let create persist =
-    Watcher.create () >>= fun watcher ->
+    let active_targets = Path.Table.create () in
+    let is_active_target target = Hashtbl.mem active_targets target in
+    Watcher.create ~is_active_target >>= fun watcher ->
     let memo = Memo.create watcher in
-    let t = { memo; persist; } in
+    let t = { active_targets; memo; persist; } in
     return t
 
   let digest_file t ~file = Memo.digest_file t.memo t.persist ~file
 
   let list_glob t glob = Memo.list_glob t.memo t.persist glob
+
+  let active_targets t = t.active_targets
 
 end
 
@@ -938,7 +957,7 @@ end
 include Fs
 
 let ensure_directory (_:t) ~dir = (* why need t ? *)
-  Tenacious.lift1 (fun () ->
+  Tenacious.lift (fun () ->
     ensure_directory ~dir >>= fun res ->
     return (res,Heart.unbreakable) (* ?? *)
   )

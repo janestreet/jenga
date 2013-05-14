@@ -60,12 +60,8 @@ module T = struct
     MG.add_edge ~src:new_node ~dest:old_node;
     new_node
 
-  let link_dependants graph n1 ~additional:n2 =
-    match (MG.try_find_path_to_reach_node_from ~start:n2 ~goal:n1) with
-    | None -> MG.add_edge ~src:n1 ~dest:n2; `ok
-    | Some path ->
-      let items = List.map (path@[n1]) ~f:(lookup_item graph) in
-      `cycle items
+  let link_dependants_no_cycle_check n1 ~additional:n2 =
+    MG.add_edge ~src:n1 ~dest:n2
 
   let remove_all_dependencies n =
     MG.remove_all_incoming_edges_from_node n

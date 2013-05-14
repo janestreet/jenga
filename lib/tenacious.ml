@@ -124,7 +124,7 @@ module T = struct
         choice (request runner) (fun x -> x);
       ]
 
-  let exec t ~cancel : ('a * Heart.t) option Deferred.t =
+  let exec_cancelable t ~cancel : ('a * Heart.t) option Deferred.t =
     get ~cancel t >>= function
     | Res_none -> Deferred.return None
     | Res_some (x,heart) -> Deferred.return (Some (x,heart))
@@ -143,11 +143,11 @@ module T = struct
     in
     create ~run
 
-  let lift f =
+  let lift_cancelable f =
     let computed_but_unwanted = ref None in
     let run ~cancel =
       let res = !computed_but_unwanted in
-      match res  with
+      match res with
       | Some (x,heart) ->
         computed_but_unwanted := None;
         Deferred.return (Res_some (x,heart))
@@ -247,27 +247,81 @@ include T
 
 let when_redo t ~f =
   let first_time = ref true in
-  lift (fun ~cancel ->
+  lift_cancelable (fun ~cancel ->
     (if not !first_time then f() else first_time := false);
-    exec t ~cancel
+    exec_cancelable t ~cancel
   )
+
+let ( *>>= ) = bind
 
 let all = function
   | [] -> return []
-  | [x] -> bind x (fun v -> return [v])
+  | [x] -> x *>>= fun v -> return [v]
   | xs -> all xs
 
 let all_unit ts =
-  bind (all ts) (fun (_:unit list) -> return ())
+  all ts *>>= fun (_:unit list) ->
+  return ()
 
 
-let exec1 t =
-  exec t ~cancel:Heart.unbreakable >>= function
+let exec t =
+  exec_cancelable t ~cancel:Heart.unbreakable >>= function
   | None -> assert false (* impossible! *)
   | Some x -> Deferred.return x
 
-let lift1 f =
-  lift (fun ~cancel:_ ->
+let lift f =
+  lift_cancelable (fun ~cancel:_ ->
     f () >>= fun x ->
     Deferred.return (Some x)
   )
+
+
+let prevent_overlap
+    : (
+      table : ('key, 'a t) Hashtbl.t ->
+      keys: 'key list ->
+      ?notify_wait: ('key -> unit) ->
+      ?notify_add: ('key -> unit) ->
+      ?notify_rem: ('key -> unit) ->
+      'a t ->
+      'a t
+    ) =
+  (* Prevent overlapping tenacious execution *)
+  fun ~table ~keys
+    ?(notify_wait = fun _ -> ())
+    ?(notify_add = fun _ -> ())
+    ?(notify_rem = fun _ -> ())
+    tenacious ->
+      lift (fun () ->
+        let run() =
+          List.iter keys ~f:(fun key ->
+            notify_add key;
+            Hashtbl.add_exn table ~key ~data:tenacious
+          );
+          exec tenacious >>= fun res ->
+          List.iter keys ~f:(fun key ->
+            notify_rem key;
+            Hashtbl.remove table key
+          );
+          Deferred.return res
+        in
+        let rec maybe_wait_then_run () =
+          match
+            List.filter_map keys ~f:(fun key ->
+              match (Hashtbl.find table key) with
+              | None -> None
+              | Some t_running ->
+                Some (
+                  notify_wait key;
+                  exec t_running >>= fun _ ->
+                  Deferred.return ()
+                )
+            )
+          with
+          | [] -> run ()
+          | xs ->
+            let wait = Deferred.all_unit xs in
+            wait >>= maybe_wait_then_run
+        in
+        maybe_wait_then_run()
+      )

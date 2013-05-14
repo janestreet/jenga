@@ -17,7 +17,7 @@ module Glob = struct
 
   let exec glob =
     let fs = For_user.fs() in
-    Tenacious.exec1 (Fs.list_glob fs glob) >>| fun (res,_heart) ->
+    Tenacious.exec (Fs.list_glob fs glob) >>| fun (res,_heart) ->
     match res with
     | `listing listing -> Fs.Listing.paths listing
     | _ -> failwith "Glob.exec"
@@ -37,6 +37,7 @@ module Env = Env
 let verbose() = Config.verbose (For_user.config ())
 
 let load_sexp_for_jenga = For_user.load_sexp_for_jenga
+let load_sexps_for_jenga = For_user.load_sexps_for_jenga
 
 module Raw_sexp_makefile_rule = struct
 

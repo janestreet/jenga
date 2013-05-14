@@ -33,5 +33,5 @@ val create : unit -> t
 val create_root : t -> Node.t
 val disregard_roots : t -> unit
 val create_dependency : t -> Node.t -> Item.t -> Node.t
-val link_dependants : t -> Node.t -> additional:Node.t -> [ `ok | `cycle of Item.t list ]
+val link_dependants_no_cycle_check : Node.t -> additional:Node.t -> unit
 val remove_all_dependencies : Node.t -> unit

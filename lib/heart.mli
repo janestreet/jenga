@@ -32,4 +32,4 @@ val is_broken : t -> bool
 val when_broken : t -> unit Deferred.t
 
 val to_sensitivity_list : t -> Desc.t list
-val to_broken_list : t -> Desc.t list
+(*val to_broken_list : t -> Desc.t list*)

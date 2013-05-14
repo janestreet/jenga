@@ -34,36 +34,63 @@ open Async.Std
    Lifted leaf computations are not stopped once started. But no further leaf computations
    will be started if they are only referenced from a tenacious computation which is no
    longer required.
-
-
 *)
 
 type 'a t
 
-(* The types for exec/lift now pass a [cancel:Heart.t] to allow the following equality:
+(* lift/exec
+   Unlike the cancelable versions below, these DON'T have the nice semantic equality:
 
-    t == lift (fun ~cancel -> exec t ~cancel)
+        t == lift_uncancelable (fun () -> exec t)     (* NOT TRUE *)
+
+   because the RHS forms a barrier to cancels.
+   However, these version are more useful, and the more commonly used.
 *)
 
-val exec : 'a t -> cancel:Heart.t -> ('a * Heart.t) option Deferred.t
-val lift :        (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> 'a t
+val exec : 'a t -> ('a * Heart.t) Deferred.t
+val lift : (unit -> ('a * Heart.t) Deferred.t) -> 'a t
 
+
+(* standard combinators *)
 
 val return : 'a -> 'a t
 val bind : 'a t -> ('a -> 'b t) -> 'b t
 val all : 'a t list -> 'a list t
 
+
+(*
+  lift_cancelable / exec_cancelable
+
+  The following semantic equality should hold...
+    t == lift_cancelable (fun ~cancel -> exec_cancelable t ~cancel)
+
+  [lift_cancelable] allows lifted computation to know they are cancelled.
+
+  [exec_cancelable t ~cancel >>= fun res -> ... ] allows the caller to notify his
+  disinterest in the exec'ed tenacious by means of the [cancel] heart being broken,
+  in which case [res] may be [None].
+
+  If the caller cancels, he has no way of knowing when computations run as part of the
+  tenacious finish - they may not even be cancelled if there are other uses.
+
+  The caller MAY assume the result will only be [None] if he cancels.
+*)
+
+val exec_cancelable : 'a t -> cancel:Heart.t -> ('a * Heart.t) option Deferred.t
+val lift_cancelable :        (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> 'a t
+
+
+(* non primitive ops... *)
+
 val when_redo : 'a t -> f:(unit -> unit) -> 'a t
 val all_unit : unit t list -> unit t
 
-
-(* Simpler versions of lift/exec; with no requirement to pass the [cancel:Heart.t].
-   Sadly these dont have the nice semantic equality as the unsuffixed versions above.
-
-   t !== lift1 (fun () -> exec1 t)     (* DIS-equality *)
-
-   The RHS versions forms a barrier to cancels.
-*)
-
-val exec1 : 'a t -> ('a * Heart.t) Deferred.t
-val lift1 : (unit -> ('a * Heart.t) Deferred.t) -> 'a t
+(* Prevent overlapping tenacious execution *)
+val prevent_overlap :
+  table : ('key, 'a t) Hashtbl.t ->
+  keys: 'key list ->
+  ?notify_wait: ('key -> unit) ->
+  ?notify_add: ('key -> unit) ->
+  ?notify_rem: ('key -> unit) ->
+  'a t ->
+  'a t

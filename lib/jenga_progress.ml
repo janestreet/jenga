@@ -75,9 +75,11 @@ let run config =
     | `server_not_running ->
       message "%s (not running)" (string_of_last_progress ()); (*root_dir*)
       retry()
-    | `hostname_and_port (hostname,port) ->
-      let server_name = sprintf "%s:%d" hostname port in
-      let where_to_connect = Tcp.to_host_and_port hostname port in
+    | `info info ->
+      let host = Server_lock.Info.host info in
+      let port = Server_lock.Info.port info in
+      let server_name = sprintf "%s:%d" host port in
+      let where_to_connect = Tcp.to_host_and_port host port in
       try_with (fun () ->
         Tcp.with_connection where_to_connect (fun _ reader writer ->
           Rpc.Connection.create reader writer ~connection_state:() >>= function

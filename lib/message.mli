@@ -10,11 +10,8 @@ val error : ('a, unit, string, unit) format4 -> 'a
 val message : ('a, unit, string, unit) format4 -> 'a
 val verbose : ('a, unit, string, unit) format4 -> 'a
 val reason : ('a, unit, string, unit) format4 -> 'a
-val checked : ('a, unit, string, unit) format4 -> 'a
-val considering : ('a, unit, string, unit) format4 -> 'a
-
 val trace : ('a, unit, string, unit) format4 -> 'a
-val dev : ('a, unit, string, unit) format4 -> 'a
+val unlogged : ('a, unit, string, unit) format4 -> 'a
 
 val job_started :
   need:string ->

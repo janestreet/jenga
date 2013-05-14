@@ -103,4 +103,4 @@ let collect pred t =
     walk [] h
 
 let to_sensitivity_list = collect (fun _ -> true)
-let to_broken_list = collect node_is_broken
+(*let to_broken_list = collect node_is_broken*)

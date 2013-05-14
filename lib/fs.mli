@@ -69,3 +69,5 @@ end
 val digest_file : t -> file:Path.t -> Digest_result.t Tenacious.t
 val list_glob : t -> Glob.t -> Listing_result.t Tenacious.t
 val ensure_directory : t -> dir:Path.t -> Ensure_directory_result.t Tenacious.t
+
+val active_targets : t -> unit Tenacious.t Path.Table.t
