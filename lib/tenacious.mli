@@ -82,7 +82,7 @@ val lift_cancelable :        (cancel:Heart.t -> ('a * Heart.t) option Deferred.t
 
 (* non primitive ops... *)
 
-val when_redo : 'a t -> f:(unit -> unit) -> 'a t
+val before_redo : 'a t -> f:(unit -> unit) -> 'a t
 val all_unit : unit t list -> unit t
 
 (* Prevent overlapping tenacious execution *)

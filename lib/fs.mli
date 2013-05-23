@@ -12,33 +12,33 @@ val ls_counter : Effort.Counter.t
 val mkdir_counter : Effort.Counter.t
 
 module Digest : sig (* proxy for file contents *)
-  type t with sexp
+  type t with sexp, bin_io, compare
   val equal : t -> t -> bool
 end
 
 module Kind : sig
   type t = [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
-  with sexp, compare
+  with sexp, bin_io, compare
   val to_string : t -> string
 end
 
 module Glob : sig (* glob specification *)
-  type t with sexp
+  type t with sexp, bin_io, compare
   val to_string : t -> string
   val create : dir:Path.t -> kinds:Kind.t list option -> glob_string:string -> t
-  val compare : t -> t -> int
 end
 
 module Listing : sig (* result of globbing *)
-  type t with sexp
+  type t with sexp, bin_io, compare
   val paths : t -> Path.t list
   val paths_and_kinds : t -> (Path.t * Kind.t) list
-  val equal : t -> t -> bool
 end
 
 module Persist : sig
-  type t with sexp
+  type t with sexp, bin_io
   val create : unit -> t
+  val equal : t -> t -> bool
+  val copy : t -> t
 end
 
 type t (* handle to the file-system *)
@@ -71,3 +71,4 @@ val list_glob : t -> Glob.t -> Listing_result.t Tenacious.t
 val ensure_directory : t -> dir:Path.t -> Ensure_directory_result.t Tenacious.t
 
 val active_targets : t -> unit Tenacious.t Path.Table.t
+val sync_inotify_delivery : t -> sync_contents:string -> 'a Tenacious.t -> 'a Tenacious.t

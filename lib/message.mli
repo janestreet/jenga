@@ -38,8 +38,8 @@ val build_failed : duration:Time.Span.t -> u:int -> fraction:(int*int) -> string
 val progress : fraction:(int * int) -> unit
 
 val polling : unit -> unit
-val sensitized_on : Heart.Desc.t -> unit
-val file_changed : Heart.Desc.t -> unit
+val sensitized_on : desc:string -> unit
+val file_changed : desc:string -> unit
 val rebuilding : unit -> unit
 
 val flushed : unit -> unit Deferred.t

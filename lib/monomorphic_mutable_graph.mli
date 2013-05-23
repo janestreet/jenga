@@ -6,6 +6,7 @@ type t
 module Node : sig
   type t
   include Hashable with type t := t
+  val equal : t -> t -> bool
 end
 
 val create : unit -> t

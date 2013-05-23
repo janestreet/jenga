@@ -9,6 +9,7 @@ type t = {
   show_run_reason : bool;
   show_checked : bool;
   show_considering : bool;
+  show_reconsidering : bool;
   quiet : bool;
   debug : bool;
   sequential_deps : bool;

@@ -42,7 +42,6 @@ let run config =
   let start_dir = Path.cwd() in
 
   let log_filename = root_dir ^/ Path.log_basename in
-  let db_filename = root_dir ^/ Path.db_basename in
 
   Message.init_logging config ~log_filename;
 
@@ -58,7 +57,7 @@ let run config =
      This is necessary for internal actions, which assume this! *)
   Sys.chdir root_dir >>= fun () ->
 
-  Persist.create_saving_periodically ~filename:db_filename db_save_span
+  Persist.create_saving_periodically ~root_dir db_save_span
   >>= fun persist ->
 
   let fs_persist = Persist.fs_persist persist in
@@ -93,7 +92,8 @@ let run config =
 let install_signal_handlers () =
   trace "install_signal_handlers..";
   Signal.handle Signal.terminating ~f:(fun s ->
-    trace "handling signal: %s, calling shutdown" (Signal.to_string s);
+    Message.message "handling signal: %s, calling shutdown" (Signal.to_string s);
+    Heart.shutdown();
     Shutdown.shutdown 1;
   )
 

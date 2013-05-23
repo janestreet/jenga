@@ -1,4 +1,6 @@
 
+(* jem - jenga monitor *)
+
 open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
@@ -19,7 +21,7 @@ let discover_root() =
 let retry_span = sec 0.5
 
 type config  = {
-  full : bool;
+  brief : bool;
 }
 
 let message fmt = ksprintf (fun s -> Printf.printf "%s\r%!" s) fmt
@@ -33,9 +35,9 @@ let run config =
   let string_of_progress progress =
     let (top,bot) = Build.Progress.Counts.fraction progress in
     let fraction_string = sprintf "%d / %d" top bot in
-    if config.full
-    then sprintf "%s (%s)" (Build.Progress.Counts.to_string progress) fraction_string
-    else fraction_string
+    if config.brief
+    then fraction_string
+    else sprintf "%s (%s)" (Build.Progress.Counts.to_string progress) fraction_string
   in
 
   let string_of_last_progress () =
@@ -118,14 +120,29 @@ let main config =
 module Spec = Command.Spec
 let (+>) = Spec.(+>)
 
-let full =
-  Spec.step (fun m x -> m ~full:x)
-  +> Spec.flag "full" Spec.no_arg
-    ~doc:" Full progress breakdown"
+let brief =
+  Spec.step (fun m x -> m ~brief:x)
+  +> Spec.flag "brief" Spec.no_arg
+    ~doc:" only display the omake-style progress fraction (done / total)"
 
 let command_line () =
   Command.run (
-    Command.basic (full)
-      ~summary:"See progress of jenga running in the current repo."
-      (fun ~full () -> main {full})
+    Command.basic (brief)
+      ~summary:
+"Jenga monitor - monitor jenga running in the current repo."
+      ~readme:(fun () -> String.concat ~sep:"\n" (
+        List.concat [
+["Jem connects to a jenga instance running in the current repo,
+(or waits until one is started), and displays a stream of progress
+reports indicating the status of each target being considered.
+
+The number of targets in each of the following categorys is shown:
+"];
+           Build.Progress.readme;
+
+["
+Additionally, an omake-style progress fraction (done / total),
+where (done = built + source), is displayed."];
+          ]))
+      (fun ~brief () -> main {brief})
   )

@@ -3,8 +3,6 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
-let external_action_counter = Effort.Counter.create "act"
-
 let (=) = Int.(=)
 
 module Digest = Fs.Digest
@@ -20,7 +18,7 @@ module Alias  = struct
     type t = {
       dir : Path.t;
       name : string;
-    } with sexp, compare
+    } with sexp, bin_io, compare
     let hash = Hashtbl.hash
   end
   include T
@@ -42,7 +40,7 @@ end
 module Scan_id = struct
 
   module T = struct
-    type t = Sexp.t with sexp, compare
+    type t = Sexp.t with sexp, bin_io, compare
     let hash = Hashtbl.hash
   end
   include T
@@ -56,7 +54,7 @@ end
 
 module Action_id = struct
 
-  type t = Sexp.t with sexp, compare
+  type t = Sexp.t with sexp, bin_io, compare
   let of_sexp x = x
   let to_sexp x = x
   let to_string t = Sexp.to_string t
@@ -65,7 +63,7 @@ end
 
 module Goal = struct
 
-  type t = [ `path of Path.t | `alias of Alias.t ] with sexp, compare
+  type t = [ `path of Path.t | `alias of Alias.t ] with sexp, bin_io, compare
   let path x = `path x
   let alias x = `alias x
   let case t = t
@@ -86,7 +84,7 @@ module Xaction = struct
     dir : Path.t;
     prog : string;
     args : string list;
-  } with sexp, compare
+  } with sexp, bin_io, compare
 
   let shell ~dir ~prog ~args = { dir ; prog; args; }
 
@@ -97,24 +95,13 @@ module Xaction = struct
   let to_string t = sprintf "(in dir: %s) %s %s"
     (Path.to_rrr_string t.dir) t.prog (concat_args_quoting_spaces t.args)
 
-  let run_now t js ~need =
-    Effort.track external_action_counter (fun () ->
-      let {dir;prog;args} = t in
-      Job_scheduler.shell js ~need ~dir ~prog ~args
-    )
-
-  let run_now_stdout t js ~need =
-    Effort.track external_action_counter (fun () ->
-      let {dir;prog;args} = t in
-      Job_scheduler.shell_stdout js ~need ~dir ~prog ~args
-    )
-
 end
+
 
 module Action = struct
 
   type t = X of Xaction.t | I of Action_id.t
-  with sexp, compare
+  with sexp, bin_io, compare
 
   let case = function
     | X x -> `xaction x
@@ -140,13 +127,13 @@ module Scanner = struct
     type t = [
     | `old_internal of Scan_id.t
     | `local_deps of Path.t * Action.t
-    ] with sexp,compare
+    ] with sexp, bin_io, compare
 
     let hash = Hashtbl.hash
 
   end
   include T
-  include Hashable.Make(T)
+  include Hashable.Make_binable(T)
 
   let old_internal sexp = `old_internal (Scan_id.of_sexp sexp)
   let local_deps ~dir action = `local_deps (dir,action)
@@ -169,7 +156,7 @@ module Dep = struct
     | `glob of Glob.t
     | `null
     ]
-    with sexp, compare
+    with sexp, bin_io, compare
     let hash = Hashtbl.hash
   end
   include T
@@ -219,7 +206,7 @@ module Dep = struct
     let deps = List.map words ~f:(parse_string ~dir) in
     deps
 
-  let compare = compare (* polymorphic compare ok *)
+  let equal t1 t2 = compare t1 t2 = 0
 
 end
 
@@ -232,7 +219,7 @@ module Target_rule = struct
       deps : Dep.t list;
       action : Action.t;
     }
-    with sexp, compare, fields
+    with sexp, bin_io, compare, fields
 
     let hash = Hashtbl.hash
   end
@@ -275,7 +262,7 @@ module Rule  = struct
   | `target of Target_rule.t
   | `alias of Alias.t * Dep.t list
   ]
-  with sexp
+  with sexp, bin_io, compare
 
   let create ~targets ~deps ~action = `target (Target_rule.create ~targets ~deps ~action)
   let alias alias deps = `alias (alias, deps)
@@ -298,6 +285,8 @@ module Rule  = struct
         (Alias.to_string a)
         (String.concat ~sep:" " (List.map deps ~f:Dep.to_string))
 
+  let equal t1 t2 = compare t1 t2 = 0
+
 end
 
 module Gen_key = struct
@@ -306,11 +295,11 @@ module Gen_key = struct
     type t = {
       tag : string;
       dir : Path.t;
-    } with sexp, compare
+    } with sexp, bin_io, compare
     let hash = Hashtbl.hash
   end
   include T
-  include Hashable.Make(T)
+  include Hashable.Make_binable(T)
 
   let create ~tag ~dir = { tag; dir; }
   let to_string t = sprintf "%s:%s" t.tag (Path.to_rrr_string t.dir)

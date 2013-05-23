@@ -3,6 +3,9 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
+let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
+let equal_pair f g = fun (a1,b1) (a2,b2) -> f a1 a2 && g b1 b2
+
 let lstat_counter = Effort.Counter.create "stat"
 let digest_counter = Effort.Counter.create "digest"
 let ls_counter = Effort.Counter.create "ls"
@@ -42,7 +45,7 @@ let unlogged =
 module Kind = struct
   type t =
     [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
-  with sexp, compare
+  with sexp, bin_io, compare
   let to_string t = Sexp.to_string (sexp_of_t t)
 end
 
@@ -66,7 +69,7 @@ let unix_lstat_kind path =
 
 module Stats : sig
 
-  type t with sexp
+  type t with sexp, bin_io
   val lstat : Path.t -> t Or_error.t Deferred.t
   val equal : t -> t -> bool
   val kind : t -> Kind.t
@@ -102,9 +105,9 @@ end = struct
     kind : Kind.t;
     size : int64;
     mtime : float;
-  } with sexp, compare
+  } with sexp, bin_io, compare
 
-  let equal t1 t2 = Int.(=) 0 (compare t1 t2)
+  let equal = equal_using_compare compare
 
   let kind t = t.kind
 
@@ -166,14 +169,19 @@ let ensure_directory ~dir =
  Compute_digest (count!)
 ----------------------------------------------------------------------*)
 
-module Digest : sig
-  type t with sexp (* proxy for the contents of a file in the file-system *)
+module Digest : sig  (* proxy for the contents of a file in the file-system *)
+
+  type t with sexp, bin_io, compare
   val of_string : string -> t
   val equal : t -> t -> bool
+
 end = struct
-  type t = string with sexp
+
+  type t = string with sexp, bin_io
   let of_string x = x
+  let compare = String.compare
   let equal = String.equal
+
 end
 
 module Compute_digest : sig
@@ -213,7 +221,7 @@ end
 
 module Listing : sig
 
-  type t with sexp
+  type t with sexp, bin_io, compare
 
   val run_ls : dir:Path.t -> t Or_error.t Deferred.t
 
@@ -223,7 +231,7 @@ module Listing : sig
   val equal : t -> t -> bool
 
   module Restriction : sig
-    type t with sexp
+    type t with sexp, bin_io
     val create : kinds:Kind.t list option -> glob_string:string -> t
     val to_string : t -> string
     val compare : t -> t -> int
@@ -235,7 +243,7 @@ end = struct
 
   type t = {
     listing : (Path.t * Kind.t) list
-  } with sexp, compare
+  } with sexp, bin_io, compare
 
   let run_ls ~dir =
     Effort.track ls_counter (fun () ->
@@ -273,14 +281,14 @@ end = struct
   let paths t = List.map ~f:fst t.listing
   let paths_and_kinds t = t.listing
 
-  let equal t1 t2 = Int.(=) 0 (compare t1 t2)
+  let equal = equal_using_compare compare
 
   module Restriction = struct
 
     type t = {
       kinds : Kind.t list option; (* None means any kind *)
       pat : Pattern.t;
-    } with sexp, compare
+    } with sexp, bin_io, compare
 
     let create ~kinds ~glob_string =
       let pat = Pattern.create_from_glob_string glob_string in
@@ -314,14 +322,24 @@ end = struct
 end
 
 (*----------------------------------------------------------------------
- Watcher (inotify wrapper)
+ Watcher (inotify wrapper) - works on absolute path strings
 ----------------------------------------------------------------------*)
 
 module Watcher : sig
 
   type t
-  val create : is_active_target:(Path.t -> bool) -> t Deferred.t
-  val watch : t -> what:[`file|`dir] -> Path.t -> Heart.t
+  val create :
+    (* ignore events completely for these paths *)
+    ignore:(path:string -> bool) ->
+    (* pay attention to, but dont report file_changes for these events *)
+    expect:(path:string -> bool) ->
+    t Deferred.t
+
+  val watch_file_or_dir : t ->
+    what:[`file|`dir] ->
+    path:string ->
+    desc:string ->
+    Heart.t Or_error.t Deferred.t
 
 end = struct
 
@@ -330,21 +348,20 @@ end = struct
   type what = [`file|`dir]
 
   type t = {
-    is_active_target : (Path.t -> bool);
+    ignore : (path:string -> bool);
+    expect : (path:string -> bool);
     notifier : Inotify.t ;
-    glass_hearts : (what * Heart.Glass.t) Path.Table.t;
+    glass_hearts : (what * Heart.Glass.t) String.Table.t;
   }
 
-  let paths_of_event =
-    let paths s = (* for the filename & the dir in which it resides *)
-      let path = Path.create_from_absolute s in
-      (* special case to avoid writing db/log from waking up top level globs *)
-      if (Path.is_special_jenga_path path) then [] else
-        let dir = Path.dirname path in
+  let paths_of_event t =
+    let paths path = (* for the filename & the dir in which it resides *)
+      if (t.ignore ~path) then [] else
+        let dir = Filename.dirname path in
         [path; dir]
     in
     function
-    | Inotify.Event.Modified s -> [Path.create_from_absolute s] (* just the filename *)
+    | Inotify.Event.Modified s -> [s] (* just the filename *)
     | Inotify.Event.Unlinked s -> paths s
     | Inotify.Event.Created s -> paths s
     | Inotify.Event.Moved m ->
@@ -359,8 +376,8 @@ end = struct
         (* mustn't log the watcher event, because writing to the log
            file will cause a new event !! *)
         unlogged "Watcher, event: %s" (Inotify.Event.to_string event);
-        List.iter (paths_of_event event) ~f:(fun path ->
-          unlogged "Watcher, event/path: %s" (Path.to_rrr_string path);
+        List.iter (paths_of_event t event) ~f:(fun path ->
+          unlogged "Watcher, event/path: %s" path;
           match (Hashtbl.find t.glass_hearts path) with
           | None -> ()
           | Some (what,glass) ->
@@ -379,55 +396,54 @@ end = struct
                   jenga action which are not declared as targets of that action.
 
                 *)
-                if not (t.is_active_target path) then (
-                  Message.file_changed (Heart.Glass.desc glass)
+                if not (t.expect ~path) then (
+                  Message.file_changed ~desc:(Heart.Glass.desc glass)
                 )
             end;
             Heart.Glass.break glass;
-            Hashtbl.remove t.glass_hearts path
+            Hashtbl.remove t.glass_hearts path;
         );
         return ()
       )
     )
 
-  let create ~is_active_target =
+  let create ~ignore ~expect =
     (* Have to pass a path at creation - what a pain, dont have one yet! *)
     Inotify.create ~recursive:false ~watch_new_dirs:false "/" >>= fun (notifier,_) ->
-    let glass_hearts = Path.Table.create () in
-    let t = {is_active_target; notifier; glass_hearts} in
+    let glass_hearts = String.Table.create () in
+    let t = {ignore; expect; notifier; glass_hearts} in
     suck_notifier_pipe t (Inotify.pipe notifier);
     return t
 
-  (*let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u)*)
-
-  let watch1 t ~what path ~dir =
-    unlogged "watch: %s (dir: %s)" (Path.to_rrr_string path) (Path.to_rrr_string dir);
+  let watch_file_or_dir t ~what ~path ~desc =
+    let dir =
+      (* A notifier is setup to watch [dir], computed from [path] & [what]
+         The underlying Inotify module handles repeated setup for same path.
+         So we make no attempt to avoid the repeats.
+      *)
+      match what with
+      | `file -> Filename.dirname path
+      | `dir -> path
+    in
+    unlogged "watch: %s (dir: %s)" path dir;
     match (Hashtbl.find t.glass_hearts path) with
     | Some (_what,glass) ->
       assert (not (Heart.Glass.is_broken glass));
-      Heart.of_glass glass
+      return (Ok (Heart.of_glass glass))
     | None ->
-      (*let u = genU() in*)
-      let desc_string = (*sprintf "%d/" u ^ *)Path.to_rrr_string path in
-      unlogged "setup new watcher: %s" desc_string;
-      let desc = Heart.Desc.create desc_string in
-      let glass = Heart.Glass.create desc in
-      Hashtbl.add_exn t.glass_hearts ~key:path ~data:(what,glass);
-      let path_string = Path.to_absolute_string dir in
-      don't_wait_for (
-        Monitor.try_with (fun () ->
-          Inotify.add t.notifier path_string
-        ) >>| function
-        | Ok () -> ()
-        | Error _exn ->
-          Message.error "Unable to watch path: %s" path_string (*(Exn.to_string exn)*)
-      );
-      Heart.of_glass glass
+      let absolute_dir = dir in (* do we need absolute dir ??? *)
+      unlogged "setup watcher: %s" absolute_dir;
+      Monitor.try_with (fun () ->
+        Inotify.add t.notifier absolute_dir
+      ) >>= function
+      | Error exn ->
+        Message.error "Unable to watch path: %s" absolute_dir;
+        return (Error (Error.of_exn exn))
+      | Ok () ->
+        let glass = Heart.Glass.create ~desc in
+        Hashtbl.add_exn t.glass_hearts ~key:path ~data:(what,glass);
+        return (Ok (Heart.of_glass glass))
 
-  let watch t ~what path =
-    match what with
-    | `file -> watch1 t ~what path ~dir:(Path.dirname path)
-    | `dir -> watch1 t ~what path ~dir:path
 
 end
 
@@ -439,7 +455,7 @@ module Stat_memo : sig
 
   type t
   val create : Watcher.t -> t
-  (* Caller mist declare what the lstat is expected to be for,
+  (* Caller must declare what the lstat is expected to be for,
      so that the correct kind of watcher can be set up *)
   val lstat : t -> what:[`file|`dir] -> Path.t -> Stats.t Or_error.t Tenacious.t
 
@@ -448,26 +464,39 @@ end = struct
   type computation = Stats.t Or_error.t Tenacious.t
   type t = {
     watcher : Watcher.t;
-    cache : computation Path.Table.t;
+    file_watch_cache : computation Path.Table.t;
+    dir_watch_cache : computation Path.Table.t;
   }
 
   let create watcher = {
     watcher;
-    cache = Path.Table.create ();
+    file_watch_cache = Path.Table.create ();
+    dir_watch_cache = Path.Table.create ();
   }
 
   let lstat t ~what path =
-    match (Hashtbl.find t.cache path) with
+    let cache =
+      match what with
+      | `file -> t.file_watch_cache
+      | `dir -> t.dir_watch_cache
+    in
+    match (Hashtbl.find cache path) with
     | Some tenacious -> tenacious
     | None ->
       let tenacious =
         Tenacious.lift (fun () ->
-          let heart = Watcher.watch t.watcher ~what path in
-          Stats.lstat path >>= fun res ->
-          return (res,heart)
+          Watcher.watch_file_or_dir t.watcher ~what
+            ~path:(Path.to_absolute_string path)
+            ~desc:(Path.to_rrr_string path)
+          >>= function
+          | Error exn ->
+            return (Error exn, Heart.unbreakable)
+          | Ok heart ->
+            Stats.lstat path >>= fun res ->
+            return (res,heart)
         )
       in
-      Hashtbl.add_exn t.cache ~key:path ~data:tenacious;
+      Hashtbl.add_exn cache ~key:path ~data:tenacious;
       tenacious
 
 end
@@ -509,8 +538,11 @@ end
 
 module Digest_persist : sig
 
-  type t with sexp
+  type t with sexp, bin_io
+
   val create : unit -> t
+  val equal : t -> t -> bool
+  val copy : t -> t
 
   val digest_file :
     t ->
@@ -522,10 +554,18 @@ end = struct
 
   type t = {
     cache : (Stats.t * Digest.t) Path.Table.t;
-  } with sexp
+  } with sexp, bin_io
 
   let create () = {
     cache = Path.Table.create ();
+  }
+
+  let equal t1 t2 =
+    Hashtbl.equal t1.cache t2.cache
+      (equal_pair Stats.equal Digest.equal)
+
+  let copy t = {
+    cache = Path.Table.copy t.cache;
   }
 
   let digest_file t sm ~file =
@@ -562,8 +602,11 @@ end
 
 module Listing_persist : sig
 
-  type t with sexp
+  type t with sexp, bin_io
+
   val create : unit -> t
+  val equal : t -> t -> bool
+  val copy : t -> t
 
   val list_dir :
     t ->
@@ -571,14 +614,23 @@ module Listing_persist : sig
     dir:Path.t ->
     Listing_result.t Tenacious.t
 
+
 end = struct
 
   type t = {
     cache : (Stats.t * Listing.t) Path.Table.t;
-  } with sexp
+  } with sexp, bin_io
 
   let create () = {
     cache = Path.Table.create ();
+  }
+
+  let equal t1 t2 =
+    Hashtbl.equal t1.cache t2.cache
+      (equal_pair Stats.equal Listing.equal)
+
+  let copy t = {
+    cache = Path.Table.copy t.cache;
   }
 
   let list_dir t sm ~dir =
@@ -614,8 +666,10 @@ Persist - combination of Digest & Listing persists
 
 module Persist : sig
 
-  type t with sexp
+  type t with sexp, bin_io
   val create : unit -> t
+  val equal : t -> t -> bool
+  val copy : t -> t
 
   val digest_file :
     t ->
@@ -634,11 +688,20 @@ end = struct
   type t = {
     digests : Digest_persist.t;
     listings : Listing_persist.t;
-  } with sexp
+  } with sexp, bin_io
 
   let create () = {
     digests = Digest_persist.create();
     listings = Listing_persist.create();
+  }
+
+  let equal t1 t2 =
+    Digest_persist.equal t1.digests t2.digests
+    && Listing_persist.equal t1.listings t2.listings
+
+  let copy t = {
+    digests = Digest_persist.copy t.digests;
+    listings = Listing_persist.copy t.listings;
   }
 
   let digest_file t sm ~file = Digest_persist.digest_file t.digests sm ~file
@@ -728,7 +791,7 @@ end
 
 module Glob : sig
 
-  type t with sexp
+  type t with sexp, bin_io
   include Hashable with type t := t
 
   val create : dir:Path.t -> kinds: Kind.t list option -> glob_string:string -> t
@@ -749,7 +812,7 @@ end = struct
         dir : Path.t;
         glob_string : string;
         kinds : Kind.t list option;
-      } with sexp,compare
+      } with sexp, bin_io, compare
       let hash = Hashtbl.hash
     end
     include T
@@ -760,7 +823,7 @@ end = struct
     type t = {
       dir : Path.t;
       restriction : Listing.Restriction.t;
-    } with sexp, compare
+    } with sexp, bin_io, compare
     let hash = Hashtbl.hash
   end
 
@@ -800,11 +863,9 @@ end = struct
       Tenacious.return x
 
   let exec glob lm per sm =
-    (*Message.message "Glob.exec: %s" (to_string glob);*)
     Tenacious.lift (fun () ->
       let my_glass =
-        let desc = Heart.Desc.create (to_string glob) in
-        Heart.Glass.create desc
+        Heart.Glass.create ~desc:(to_string glob)
       in
       Tenacious.exec (exec_no_cutoff glob lm per sm) >>= fun (res,heart) ->
       don't_wait_for (
@@ -814,7 +875,7 @@ end = struct
           if (Listing_result.equal res res2)
           then loop heart
           else (
-              (*Message.file_changed (Heart.Glass.desc my_glass);*)
+            Message.file_changed ~desc:(to_string glob);
             Heart.Glass.break my_glass;
             Deferred.return ()
           )
@@ -929,9 +990,12 @@ module Fs : sig
 
   val active_targets : t -> unit Tenacious.t Path.Table.t
 
+  val watch_sync_file : t -> path:string -> Heart.t Deferred.t
+
 end = struct
 
   type t = {
+    watcher : Watcher.t;
     active_targets : unit Tenacious.t Path.Table.t;
     memo : Memo.t;
     persist : Persist.t;
@@ -939,10 +1003,27 @@ end = struct
 
   let create persist =
     let active_targets = Path.Table.create () in
-    let is_active_target target = Hashtbl.mem active_targets target in
-    Watcher.create ~is_active_target >>= fun watcher ->
+
+    let ignore ~path =
+      match (Path.create_from_absolute path) with
+      | None -> false
+      | Some path -> Path.is_special_jenga_path path
+    in
+    let expect ~path =
+      String.is_prefix ~prefix:"/tmp" path
+      (* to avoid reporting as changed jenga-sync files
+         Does it matter that we ignore everything in /tmp? - Dont think so.
+         At the moment, the only places we watch apart from /tmp are repo paths.
+      *)
+      ||
+      match (Path.create_from_absolute path) with
+      | None -> false
+      | Some path -> Hashtbl.mem active_targets path
+    in
+
+    Watcher.create ~ignore ~expect >>= fun watcher ->
     let memo = Memo.create watcher in
-    let t = { active_targets; memo; persist; } in
+    let t = { watcher; active_targets; memo; persist; } in
     return t
 
   let digest_file t ~file = Memo.digest_file t.memo t.persist ~file
@@ -950,6 +1031,12 @@ end = struct
   let list_glob t glob = Memo.list_glob t.memo t.persist glob
 
   let active_targets t = t.active_targets
+
+  let watch_sync_file t ~path =
+    Watcher.watch_file_or_dir t.watcher ~what:`file ~path ~desc:path
+    >>= function
+    | Ok heart -> return heart
+    | Error e -> raise (Error.to_exn e)
 
 end
 
@@ -961,3 +1048,83 @@ let ensure_directory (_:t) ~dir = (* why need t ? *)
     ensure_directory ~dir >>= fun res ->
     return (res,Heart.unbreakable) (* ?? *)
   )
+
+(*----------------------------------------------------------------------
+ syncronize for delivery of inotify events when finish running an action
+----------------------------------------------------------------------*)
+
+let pid_string = Pid.to_string (Unix.getpid ())
+let genU1 = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u)
+
+let created_but_not_deleted = Bag.create ()
+let () =
+  Shutdown.at_shutdown (fun () ->
+    Deferred.List.iter (Bag.to_list created_but_not_deleted) ~f:(fun (_path,f) ->
+      try_with (fun () ->
+        f()) >>| fun _ -> ()
+    ) >>= fun () ->
+    return ()
+  )
+
+let unless_shutting_down ~f =
+  match Shutdown.shutting_down() with
+  | `Yes _ -> return ()
+  | `No -> f ()
+
+let sync_inotify_delivery
+    : (t -> sync_contents:string -> 'a Tenacious.t -> 'a Tenacious.t) =
+
+  (* After a tenacious is run, synchronise until all inotify events triggered while
+     running have been delivered (and acted upon) by this process
+
+     Do this by causing and waiting for a specific file-events:
+     - the creation & removal of a temp file especially created for the purpose.
+
+     As a side benefit, the contents of the temp file will indicate to the external world
+     exactly which of those tenacious values synchronised sync are running at any moment.
+
+     The temp path chosen has 3 parameters:
+     - the pid of the jenga instance
+     - a counter (unique to the pid), incremented for each synced tenacious
+     - a counter (unique to a synced tenacious), incremented for each rerun.
+  *)
+  fun t ~sync_contents tenacious ->
+    let u1 = genU1 () in
+    let genU2 = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
+    Tenacious.lift (fun () ->
+      let u2 = genU2 () in
+      let path = sprintf "/tmp/jenga-%s-%d-%d.sync" pid_string u1 u2 in
+
+      (* Setup watcher for sync-file *)
+      watch_sync_file t ~path >>= fun created_heart ->
+
+      (* setup remove()... *)
+      let remove () =
+        (* esnure creation event has happenned.. *)
+        Heart.when_broken created_heart >>= fun () ->
+        (* Setup new watcher; unlink the file; wait for the event *)
+        watch_sync_file t ~path >>= fun deleted_heart ->
+        Sys.remove path >>= fun () ->
+        Heart.when_broken deleted_heart >>= fun () ->
+        return ()
+      in
+
+      (* create the sync-file *)
+      let bag_elem = Bag.add created_but_not_deleted (path,remove) in
+
+      unless_shutting_down ~f:(fun () ->
+        Writer.save path ~contents:sync_contents
+      ) >>= fun () ->
+
+      (* run the tenacious *)
+      Tenacious.exec tenacious >>= fun res ->
+
+      (* remove the sync-file.. *)
+      unless_shutting_down ~f:(fun () ->
+        Bag.remove created_but_not_deleted bag_elem;
+        remove ()
+      ) >>= fun () ->
+
+      (* Now we are synchronised! *)
+      return res
+    )

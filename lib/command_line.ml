@@ -37,7 +37,12 @@ let show_checked =
 let show_considering =
   Spec.step (fun m x -> m ~show_considering:x)
   +> Spec.flag "show-considering" ~aliases:["con"] Spec.no_arg
-    ~doc:" Mainly for debug. Shows every dep as it is being considered"
+    ~doc:" Mainly for debug. Shows when deps are considered/re-considered (rather verbose)"
+
+let show_reconsidering =
+  Spec.step (fun m x -> m ~show_reconsidering:x)
+  +> Spec.flag "show-reconsidering" ~aliases:["recon"] Spec.no_arg
+    ~doc:" Mainly for debug. Show when deps are re-considered"
 
 let quiet =
   Spec.step (fun m x -> m ~quiet:x)
@@ -114,6 +119,7 @@ let go_command =
     ++ show_run_reason
     ++ show_checked
     ++ show_considering
+    ++ show_reconsidering
     ++ quiet
     ++ debug
     ++ sequential_deps
@@ -133,7 +139,7 @@ let go_command =
       "By default building the .DEFAULT target.";
     ])
     (fun ~j_number ~poll_forever
-      ~verbose ~show_run_reason ~show_checked ~show_considering
+      ~verbose ~show_run_reason ~show_checked ~show_considering ~show_reconsidering
       ~quiet ~debug ~sequential_deps ~show_sensitized
       ~delay_for_dev ~report_long_cycle_times
       ~wflag:_ ~output_postpone:_
@@ -149,6 +155,7 @@ let go_command =
           show_run_reason;
           show_checked;
           show_considering;
+          show_reconsidering;
           quiet;
           debug;
           sequential_deps;

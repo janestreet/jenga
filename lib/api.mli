@@ -12,6 +12,7 @@ module Path : sig
   val relative : dir:t -> string -> t
   val suffix : t -> string -> t
   val to_rrr_string : t -> string
+  val to_absolute_string : t -> string (* AVOID USING THIS *)
   val dirname : t -> t
   val basename : t -> string
   val the_root : t

@@ -55,8 +55,8 @@ module Event = struct
   | Build_failed of Time.Span.t * [`u of int] * (int*int) * string
   | Progress of (int*int)
   | Polling
-  | Sensitized_on of Heart.Desc.t
-  | File_changed of Heart.Desc.t
+  | Sensitized_on of string
+  | File_changed of string
   | Rebuilding
 
   with sexp_of
@@ -139,10 +139,10 @@ let progress ~fraction =
 let polling () =
   T.dispatch the_log (Event.Polling)
 
-let sensitized_on desc =
+let sensitized_on ~desc =
   T.dispatch the_log (Event.Sensitized_on desc)
 
-let file_changed desc =
+let file_changed ~desc =
   T.dispatch the_log (Event.File_changed desc)
 
 let rebuilding () =
@@ -256,10 +256,10 @@ let omake_style_logger config event =
     jput "polling for filesystem changes"
 
   | Event.File_changed desc ->
-    jput "%s changed" (Heart.Desc.to_string desc)
+    jput "%s changed" desc
 
   | Event.Sensitized_on desc ->
-    jput "- sensitized to: %s" (Heart.Desc.to_string desc)
+    jput "- sensitized to: %s" desc
 
   | Event.Rebuilding ->
     jput "rebuilding--------------------------------------------------"

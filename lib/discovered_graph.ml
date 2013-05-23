@@ -69,3 +69,16 @@ module T = struct
 end
 
 include T
+
+
+let iter_reachable t ~f =
+  let visiting_or_visited = Node.Hash_set.create () in
+  let rec walk node =
+    let stop = Hash_set.mem visiting_or_visited node in
+    if stop then () else (
+      Hash_set.add visiting_or_visited node;
+      f node;
+      List.iter (dependencies node) ~f:walk
+    )
+  in
+  List.iter (roots t) ~f:walk

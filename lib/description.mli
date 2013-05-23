@@ -2,10 +2,8 @@
 open Core.Std
 open Async.Std
 
-val external_action_counter : Effort.Counter.t
-
 module Alias : sig
-  type t with sexp
+  type t with sexp, bin_io
   include Hashable with type t := t
   val create : dir: Path.t -> string -> t (* aliases are directory relative *)
   val split : t -> Path.t * string
@@ -14,7 +12,7 @@ module Alias : sig
 end
 
 module Scan_id : sig
-  type t with sexp
+  type t with sexp, bin_io
   include Hashable with type t := t
   val of_sexp : Sexp.t -> t
   val to_sexp : t -> Sexp.t
@@ -22,14 +20,14 @@ module Scan_id : sig
 end
 
 module Action_id : sig
-  type t with sexp,compare
+  type t with sexp, bin_io, compare
   val of_sexp : Sexp.t -> t
   val to_sexp : t -> Sexp.t
   val to_string : t -> string
 end
 
 module Goal : sig
-  type t with sexp
+  type t with sexp, bin_io
   val case : t -> [ `path of Path.t | `alias of Alias.t ]
   val path : Path.t -> t
   val alias : Alias.t -> t
@@ -38,17 +36,13 @@ module Goal : sig
 end
 
 module Xaction : sig
-  type t = {dir : Path.t; prog : string; args : string list;} with sexp,compare
+  type t = {dir : Path.t; prog : string; args : string list;} with sexp, bin_io, compare
   val shell : dir:Path.t -> prog:string -> args:string list -> t
   val to_string : t -> string
-  val run_now : t -> Job_scheduler.t -> need:string ->
-    (unit, [ `non_zero_status | `other_error of exn]) Result.t Deferred.t
-  val run_now_stdout : t -> Job_scheduler.t -> need:string ->
-    (string, [ `non_zero_status | `other_error of exn]) Result.t Deferred.t
 end
 
 module Action : sig
-  type t with sexp,compare
+  type t with sexp, bin_io, compare
   val case : t -> [ `xaction of Xaction.t | `id of Action_id.t ]
   val xaction : Xaction.t -> t
   val internal1 : Action_id.t -> t
@@ -62,14 +56,14 @@ module Scanner : sig
   | `old_internal of Scan_id.t
   | `local_deps of Path.t * Action.t
   ]
-  include Hashable with type t := t
+  include Hashable_binable with type t := t
   val to_string : t -> string
   val old_internal : Sexp.t -> t
   val local_deps : dir:Path.t -> Action.t -> t
 end
 
 module Dep : sig
-  type t with sexp
+  type t with sexp, bin_io
   include Hashable with type t := t
 
   val case : t -> [
@@ -92,10 +86,11 @@ module Dep : sig
   val parse_string : dir:Path.t -> string -> t
   val parse_string_as_deps : dir:Path.t -> string -> t list
   val compare : t -> t -> int
+  val equal : t -> t ->  bool
 end
 
 module Target_rule : sig
-  type t with sexp
+  type t with sexp, bin_io
   include Hashable with type t := t
   val create : targets:Path.t list -> deps:Dep.t list -> action:Action.t -> t
   val triple : t -> Path.t list * Dep.t list * Action.t
@@ -105,7 +100,7 @@ module Target_rule : sig
 end
 
 module Rule : sig
-  type t with sexp
+  type t with sexp, bin_io
   val create : targets:Path.t list -> deps:Dep.t list -> action:Action.t -> t
   val alias : Alias.t -> Dep.t list -> t
   val default : dir:Path.t -> Dep.t list -> t
@@ -116,11 +111,12 @@ module Rule : sig
   | `alias of Alias.t * Dep.t list
   ]
   val to_string : t -> string
+  val equal : t -> t ->  bool
 end
 
 module Gen_key : sig
-  type t = {tag : string; dir : Path.t;} with sexp
-  include Hashable with type t := t
+  type t = {tag : string; dir : Path.t;} with sexp, bin_io
+  include Hashable_binable with type t := t
   val create : tag:string -> dir:Path.t -> t
   val to_string : t -> string
 end

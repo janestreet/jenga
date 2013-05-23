@@ -3,8 +3,10 @@ open Core.Std
 open Async.Std
 
 module Persist : sig
-  type t with sexp
+  type t with sexp, bin_io
   val create : unit -> t
+  val equal : t -> t -> bool
+  val copy : t -> t
 end
 
 module Progress : sig
@@ -16,6 +18,7 @@ module Progress : sig
     val fraction : t -> (int*int)
   end
   val snap : t -> Counts.t
+  val readme : string list
 end
 
 val build_forever :
@@ -28,3 +31,8 @@ val build_forever :
   when_polling:(unit -> unit Deferred.t) ->
   when_rebuilding:(unit -> unit Deferred.t) ->
   unit Deferred.t
+
+module Run_now : sig
+  val run_action_now : Description.Action.t -> unit Deferred.t
+  val run_action_now_stdout : Description.Action.t -> string Deferred.t
+end

@@ -11,100 +11,130 @@ let jenga_show_persist =
 let message = Message.(if jenga_show_persist then message else trace)
 let message fmt = ksprintf (fun s -> message "Persist: %s" s) fmt
 
-module State = struct
+let time_async f =
+  let start_time = Time.now() in
+  f () >>= fun res ->
+  let duration = Time.diff (Time.now()) start_time in
+  return (res,duration)
+
+module State : sig
+
+  type t
+
+  val fs_persist : t -> Fs.Persist.t
+  val build_persist : t -> Build.Persist.t
+
+  val equal : t -> t -> bool
+  val copy : t -> t
+
+  val load_db : db_filename:string -> t Deferred.t
+  val save_db : t -> db_filename:string -> unit Deferred.t
+
+end = struct
 
   type t = {
     fs_persist : Fs.Persist.t;
     build_persist : Build.Persist.t
-  } with sexp,fields
+  } with sexp, bin_io, fields
 
   let empty () = {
     fs_persist = Fs.Persist.create ();
     build_persist = Build.Persist.create ();
   }
 
-  let try_load_dont_convert ~filename =
-    Sys.file_exists filename >>= function
+  let equal t1 t2 =
+    Fs.Persist.equal t1.fs_persist t2.fs_persist
+    && Build.Persist.equal t1.build_persist t2.build_persist
+
+  let copy t = {
+    fs_persist = Fs.Persist.copy t.fs_persist;
+    build_persist = Build.Persist.copy t.build_persist;
+  }
+
+(* load/save bin_prot.. *)
+
+  let try_load_db ~db_filename =
+    Sys.file_exists db_filename >>= function
     | `No | `Unknown ->
-      message "load: %s - failed (does not exist; will create)" filename;
+      message "load: %s - failed (does not exist; will create)" db_filename;
       return None
     | `Yes ->
-      try_with (fun () ->
-        Reader.load_sexp_exn filename Fn.id
-      ) >>= function
-      | Ok sexp -> return (Some sexp)
+    try_with (fun () ->
+      Reader.with_file db_filename ~f:(fun r ->
+        Reader.read_bin_prot r bin_reader_t
+      )
+    ) >>= function
+      | Ok (`Ok t) -> return (Some t)
+      | Ok `Eof
       | Error _ ->
-        message "load: %s - failed (corrupted; ignoring)" filename;
+        message "load: %s - failed (format changed or file corrupted; ignoring)"
+          db_filename;
         return None
 
-  let try_load_dont_convert ~filename =
-    message "loading: %s..." filename;
-    let start_time = Time.now() in
-    try_load_dont_convert ~filename >>= fun res ->
-    let duration = Time.diff (Time.now()) start_time in
-    message "loading: %s... done (%s)" filename (Time.Span.to_string duration);
-    return res
-
-  let try_load ~filename =
-    try_load_dont_convert ~filename >>= function
-    | None -> return None
-    | Some sexp ->
-      return (
-        try Some (t_of_sexp sexp)
-        with _ ->
-          message "load: %s - failed (format changed; ignoring)" filename;
-          None
-      )
-
-  let load ~filename =
-    try_load ~filename >>= function
+  let load_db ~db_filename =
+    try_load_db ~db_filename >>= function
     | None -> return (empty())
     | Some t -> return t
 
-  let save_if_changed t ~filename =
-    let sexp = sexp_of_t t in
-    (
-      try_load_dont_convert ~filename >>= function
-      | None -> return false
-      | Some sexp_old ->
-        return (Sexp.equal sexp sexp_old)
-    ) >>= fun unchanged ->
-    if unchanged
-    then (
-      message "unchanged so not saving: %s" filename;
-      Deferred.unit
-    )
-    else (
-      message "saving: %s..." filename;
-      let start_time = Time.now() in
-      Writer.save_sexp ~fsync:true ~hum:true filename sexp >>= fun () ->
-      let duration = Time.diff (Time.now()) start_time in
-      message "saving: %s... done (%s)" filename (Time.Span.to_string duration);
+  let save_db t ~db_filename =
+    Writer.with_file_atomic db_filename ~f:(fun w ->
+      Writer.write_bin_prot w bin_writer_t t;
       return ()
     )
 
 end
 
-
 type t = {
-  state : State.t;
-  filename : string;
+  (* [state_mem] is the state read & modified by the build process. *)
+  state_mem : State.t;
+
+  (* [state_disk] is a copy of the state, which tracks its value when last synced to disk.
+     To perform a save, [state_mem] is copied (in one async-atomic operation) to
+     [state_disk], which can then be written to disk asyncronously over multiple
+     async-cycles without blocking updates to [state_mem]. *)
+  mutable state_disk : State.t;
+
+  db_filename : string;
   mutable save_status : [ `saving of unit Deferred.t | `not_saving ];
   mutable periodic_saving_enabled : bool;
 }
 
-let create ~filename =
-  State.load ~filename >>= fun state ->
+let fs_persist t = State.fs_persist t.state_mem
+let build_persist t = State.build_persist t.state_mem
+
+let db_filename t = t.db_filename
+
+let create ~root_dir =
+  let db_filename = root_dir ^/ Path.db_basename in
+
+  message "LOAD_DB: %s..." db_filename;
+  time_async (fun () -> State.load_db ~db_filename) >>= fun (state,duration) ->
+  message "LOAD_DB: %s... done (%s)" db_filename (Time.Span.to_string duration);
+
   let t = {
-    state;
-    filename;
+    state_mem = state;
+    state_disk = State.copy state;
+    db_filename;
     save_status = `not_saving;
     periodic_saving_enabled = true;
   } in
+
   return t
 
-let fs_persist t = State.fs_persist t.state
-let build_persist t = State.build_persist t.state
+let save_if_changed t =
+  match (State.equal t.state_disk t.state_mem) with
+  | true ->
+    message "SAVE_DB: unchanged so not saving";
+    Deferred.unit
+  | false ->
+    message "SAVE_DB: %s..." (db_filename t);
+    time_async (fun () ->
+      (* copy the in-mem state & save.. *)
+      t.state_disk <- State.copy t.state_mem;
+      State.save_db t.state_disk ~db_filename:(db_filename t)
+    ) >>= fun ((),duration) ->
+    message "SAVE_DB: %s... done (%s)" (db_filename t) (Time.Span.to_string duration);
+    return ()
 
 let save_now t =
   (* ensuring that subsequent saves wait until any in-flight save is done *)
@@ -119,7 +149,7 @@ let save_now t =
   | `not_saving ->
     let ivar = Ivar.create () in
     t.save_status <- `saving (Ivar.read ivar);
-    State.save_if_changed t.state ~filename:t.filename >>= fun () ->
+    save_if_changed t >>= fun () ->
     Ivar.fill ivar ();
     t.save_status <- `not_saving;
     return ()
@@ -132,7 +162,6 @@ let save_periodically ~save_span t =
       then (
         message "save_periodically, calling Persist.save_now...";
         save_now t >>= fun () ->
-        message "save_periodically, calling Persist.save_now...done";
         loop ()
       )
       else loop ()
@@ -140,19 +169,14 @@ let save_periodically ~save_span t =
     loop ()
   )
 
-let create_saving_periodically ~filename save_span =
-  create ~filename >>= fun t ->
+let create_saving_periodically ~root_dir save_span =
+  create ~root_dir >>= fun t ->
   save_periodically ~save_span t;
   return t
 
 let disable_periodic_saving_and_save_now t =
   t.periodic_saving_enabled <- false;
   message "disable_periodic_saving_and_save_now, calling Persist.save_now...";
-  save_now t >>= fun () ->
-  message "disable_periodic_saving_and_save_now, calling Persist.save_now...done";
-  return ()
+  save_now t
 
-let re_enable_periodic_saving t =
-  message "when_rebuilding, calling: re_enable_periodic_saving";
-
-  t.periodic_saving_enabled <- true
+let re_enable_periodic_saving t = t.periodic_saving_enabled <- true

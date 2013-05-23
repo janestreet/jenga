@@ -8,7 +8,7 @@ module T = struct
 
   type t = {
     rrr : string (* "rrr" = repo-root-relative *)
-  }
+  } with bin_io
 
   let hash t = String.hash t.rrr
   let equal t1 t2 = String.equal t1.rrr t2.rrr
@@ -21,7 +21,7 @@ module T = struct
 end
 
 include T
-include Hashable.Make(T)
+include Hashable.Make_binable(T)
 
 let starts_with_slash s =
   (match s with "" -> false | _ -> true)
@@ -33,7 +33,7 @@ let create ~rrr =
 
 let the_root = create ~rrr:""
 
-let create_from_absolute =
+let create_from_absolute_exn =
   fun s ->
   let repo_root = Repo_root.get() in
     let repo_root_slash = repo_root ^ "/" in
@@ -43,9 +43,13 @@ let create_from_absolute =
         create ~rrr
       | None ->
         failwith (
-          sprintf "Path.create_from_absolute: '%s' does not start with repo_root prefix: %s"
+          sprintf "Path.create_from_absolute_exn: '%s' does not start with repo_root prefix: %s"
             s repo_root_slash
         )
+
+let create_from_absolute s =
+  try (Some (create_from_absolute_exn s)) with _ -> None
+
 
 let relative =
   let check_not_special s =
@@ -79,7 +83,7 @@ let dirname t = fst (split t)
 let basename t = snd (split t)
 
 let cwd () =
-  create_from_absolute (Core.Std.Sys.getcwd ())
+  create_from_absolute_exn (Core.Std.Sys.getcwd ())
 
 let root_relative s =
   relative ~dir:the_root s
@@ -91,6 +95,7 @@ let is_special_jenga_path t = String.is_prefix ~prefix:special_prefix t.rrr
 let special suf = special_prefix ^ suf
 
 let log_basename = special ".debug"
+let sexp_db_basename = special ".sexp-db"
 let db_basename = special ".db"
 let dot_basename = special ".dot"
 let lock_basename = special ".lock"

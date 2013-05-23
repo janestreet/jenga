@@ -53,8 +53,7 @@ module T = struct
         (string_of_state runner.state) (string_of_state state)
 
   let start runner : Heart.Glass.t * 'a res Deferred.t =
-    let desc = Heart.Desc.create "tenacious/request" in
-    let glass = Heart.Glass.create desc in
+    let glass = Heart.Glass.create ~desc:"tenacious/request" in
     let heart = Heart.of_glass glass in
     let rec again() =
       runner.run ~cancel:heart >>= fun res ->
@@ -245,7 +244,7 @@ include T
 
 (* non primitive ops... *)
 
-let when_redo t ~f =
+let before_redo t ~f =
   let first_time = ref true in
   lift_cancelable (fun ~cancel ->
     (if not !first_time then f() else first_time := false);

@@ -1,11 +1,11 @@
 
 open Core.Std
 
-type t with sexp
-include Hashable with type t := t
+type t with sexp, bin_io
+include Hashable_binable with type t := t
 
-val create_from_absolute : string -> t (* check starts with a / - wont be exposed to user*)
-(* todo: make it return an option - which caller can check and error on if desired *)
+(* check starts with a / - wont be exposed to user*)
+val create_from_absolute : string -> t option
 
 val relative : dir:t -> string -> t
 val suffix : t -> string -> t
@@ -23,6 +23,7 @@ val the_root : t
 val root_relative : string -> t
 
 val db_basename : string
+val sexp_db_basename : string
 val log_basename : string
 val dot_basename : string
 val lock_basename : string

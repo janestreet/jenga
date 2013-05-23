@@ -4,7 +4,7 @@ open Async.Std
 
 type t
 
-val create_saving_periodically : filename:string -> Time.Span.t -> t Deferred.t
+val create_saving_periodically : root_dir:string -> Time.Span.t -> t Deferred.t
 
 val disable_periodic_saving_and_save_now : t -> unit Deferred.t
 val re_enable_periodic_saving : t -> unit

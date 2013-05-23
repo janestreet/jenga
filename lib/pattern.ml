@@ -5,7 +5,7 @@ open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 module T = struct
 
   type t = Glob of string | Regexp of string
-  with sexp, compare
+  with sexp, bin_io, compare
 
   let hash = function
     | Glob s -> String.hash s

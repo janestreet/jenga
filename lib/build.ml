@@ -3,6 +3,10 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
+let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
+let equal_pair f g = fun (a1,b1) (a2,b2) -> f a1 a2 && g b1 b2
+let equal_list f = fun xs ys -> List.equal xs ys ~equal:f
+
 let (<>) = Int.(<>)
 
 open Description
@@ -19,11 +23,12 @@ let insensitive_scanners_and_internal_actions =
   | Some _ -> true
 
 (*----------------------------------------------------------------------
-  external effort
+  effort
 ----------------------------------------------------------------------*)
 
 let generation_calls = Effort.Counter.create "gen"
 let scanner_calls = Effort.Counter.create "scan"
+let external_action_counter = Effort.Counter.create "act"
 
 let the_effort =
   Effort.create [
@@ -33,48 +38,14 @@ let the_effort =
     Fs.mkdir_counter;
     generation_calls;
     scanner_calls;
-    Description.external_action_counter;
+    external_action_counter;
   ]
-
-let external_effort_string() =
-  Effort.Snapped.to_string (Effort.snap the_effort)
-
-let zero_external_effort() =
-  Effort.reset_to_zero the_effort
-
-(*----------------------------------------------------------------------
- internal effort
-----------------------------------------------------------------------*)
-
-let c_consider = ref 0
-let c_reconsider = ref 0
-let c_share = ref 0
-
-let internal_effort =
-  [
-    "c_consider"    , c_consider;
-    "c_reconsider"  , c_reconsider;
-    "c_share"       , c_share;
-  ]
-
-let internal_effort_string() =
-  String.concat ~sep:", "
-    (List.map internal_effort ~f:(fun (name,r) -> sprintf "%s=%d" name !r))
-
-let zero_internal_effort() =
-  List.iter internal_effort ~f:(fun (_,r) -> r := 0)
-
-
-(*----------------------------------------------------------------------
- effort
-----------------------------------------------------------------------*)
 
 let effort_string() =
-  external_effort_string() ^ " / " ^ internal_effort_string()
+  Effort.Snapped.to_string (Effort.snap the_effort)
 
 let zero_effort() =
-  zero_external_effort(); zero_internal_effort()
-
+  Effort.reset_to_zero the_effort
 
 (*----------------------------------------------------------------------
  setup_command_lookup_path
@@ -101,7 +72,7 @@ let setup_command_lookup_path =
  new - Env1
 ----------------------------------------------------------------------*)
 
-type scheme_id = string with sexp
+type scheme_id = string with sexp, bin_io
 
 module Env1 : sig
 
@@ -220,16 +191,20 @@ end
 
 
 (*----------------------------------------------------------------------
-  Rule_set
+  Ruleset
 ----------------------------------------------------------------------*)
 
-module Rule_set : sig
+module Ruleset : sig
 
-  type t with sexp
+  type t
   val empty : t
   val create : Rule.t list -> [ `ok of t | `dups of Path.t list ]
+  val create_exn : Rule.t list -> t
+
   val lookup_target : t -> Path.t -> Target_rule.t option
   val lookup_alias : t -> Alias.t -> Dep.t list option
+
+  val rules : t -> Rule.t list
 
 end = struct
 
@@ -279,13 +254,9 @@ end = struct
         lookup_alias;
       }
 
-  type x = Rule.t list with sexp
-
-  let sexp_of_t t = sexp_of_x t.rules
-
-  let t_of_sexp sexp =
-    match create (x_of_sexp sexp) with
-    | `dups _ -> failwith "Rule_set.create reports dups" (* cant happen! *)
+  let create_exn xs =
+    match create xs with
+    | `dups _ -> failwith "Ruleset.create_exn reports dups"
     | `ok x -> x
 
 end
@@ -296,23 +267,26 @@ end
 
 module Pm_key : sig
 
-  type t with sexp
-  include Comparable with type t := t
+  type t with sexp, bin_io, compare
+  include Comparable_binable with type t := t
 
   val of_path : Path.t -> t
   val of_glob : Glob.t -> t
   val to_path_exn : t -> Path.t (* for targets_proxy_map *)
-  val compare : t -> t -> int
+  val equal : t -> t -> bool
 
   val to_string : t -> string
 
 end = struct
 
   module T = struct
-    type t = Path of Path.t | Glob of Glob.t with sexp, compare
+    type t = Path of Path.t | Glob of Glob.t
+    with sexp, bin_io, compare
   end
   include T
-  include Comparable.Make(T)
+  include Comparable.Make_binable(T)
+
+  let equal = equal_using_compare compare
 
   let of_path t = Path t
   let of_glob t = Glob t
@@ -332,21 +306,18 @@ end
 
 module Proxy : sig
 
-  type t with sexp
+  type t with sexp, bin_io, compare
   val of_digest : Digest.t -> t
   val of_listing : Fs.Listing.t -> t
   val equal : t -> t -> bool
 
 end = struct
 
-  type t = Digest of Digest.t | Fs_proxy of Fs.Listing.t with sexp
+  type t = Digest of Digest.t | Fs_proxy of Fs.Listing.t with sexp, bin_io, compare
   let of_digest x = Digest x
   let of_listing x = Fs_proxy x
-  let equal t1 t2 =
-    match t1,t2 with
-    | Digest x1, Digest x2 -> Fs.Digest.equal x1 x2
-    | Fs_proxy x1, Fs_proxy x2 -> Fs.Listing.equal x1 x2
-    | _,_ -> false
+
+  let equal = equal_using_compare compare
 
 end
 
@@ -358,7 +329,7 @@ end
 
 module Proxy_map : sig (* need to be keyed on Path/Glob *)
 
-  type t with sexp
+  type t with sexp, bin_io, compare
   val single : Pm_key.t -> Proxy.t -> t
   val empty : t
 
@@ -372,7 +343,7 @@ module Proxy_map : sig (* need to be keyed on Path/Glob *)
 
 end = struct
 
-  type t = Proxy.t Pm_key.Map.t with sexp
+  type t = Proxy.t Pm_key.Map.t with sexp, bin_io, compare
 
   type inconsistency = (Pm_key.t * Proxy.t list) list with sexp_of
 
@@ -383,7 +354,7 @@ end = struct
     match (Pm_key.Map.of_alist xs) with
     | `Duplicate_key key ->
       let proxys = List.filter_map xs ~f:(fun (key',proxy) ->
-        if Int.(=) 0 (Pm_key.compare key key') then Some proxy else None
+        if (Pm_key.equal key key') then Some proxy else None
       )
       in
       (* just find/report one inconsistency *)
@@ -413,7 +384,7 @@ end = struct
       let xs = List.concat_map ts ~f:(fun t -> Map.to_alist t) in
       loop empty xs
 
-  let equal t1 t2 = Map.equal Proxy.equal t1 t2
+  let equal = equal_using_compare compare
 
   let diff t1 t2 =
     if equal t1 t2 then None
@@ -433,26 +404,27 @@ end
 
 module Root_proxy : sig
 
-  type t with sexp
+  type t with sexp, bin_io, compare
   val create : Digest.t option -> t
-  val equal : insensitive:bool -> t -> t -> bool
+  val equal : t -> t -> bool
 
 end = struct
 
   type t = {
     root : Digest.t option;
-  } with sexp
+  } with sexp, bin_io, compare
 
   let create root = { root }
-  let equal ~insensitive t1 t2 =
-    insensitive || Option.equal Fs.Digest.equal t1.root t2.root
+
+  let equal = equal_using_compare compare
 
 end
 
 module Rooted_proxy : sig
 
-  type t with sexp
+  type t with sexp, bin_io, compare
   val create : Root_proxy.t -> Proxy_map.t -> t
+  val equal : t -> t -> bool
   val diff : insensitive:bool ->
     t -> t -> [`root_changed | `proxy_map_changed of Pm_key.t list] option
 
@@ -461,12 +433,14 @@ end = struct
   type t = {
     rp : Root_proxy.t;
     pm : Proxy_map.t;
-  } with sexp
+  } with sexp, bin_io, compare
 
   let create rp pm = { rp; pm; }
 
+  let equal = equal_using_compare compare
+
   let diff ~insensitive t1 t2 =
-    if not (Root_proxy.equal ~insensitive t1.rp t2.rp) then Some `root_changed
+    if not (insensitive || Root_proxy.equal t1.rp t2.rp) then Some `root_changed
     else
       match (Proxy_map.diff t1.pm t2.pm) with
       | None -> None
@@ -476,7 +450,7 @@ end
 
 module Action_proxy : sig
 
-  type t with sexp
+  type t with sexp, bin_io, compare
   val extern : Xaction.t -> t
   val intern : Action_id.t -> Root_proxy.t -> t
   val to_action : t -> Action.t
@@ -484,7 +458,8 @@ module Action_proxy : sig
 
 end = struct
 
-  type t = X of Xaction.t | I of Action_id.t * Root_proxy.t with sexp
+  type t = X of Xaction.t | I of Action_id.t * Root_proxy.t with sexp, bin_io, compare
+
   let extern x = X x
   let intern a rp = I (a,rp)
 
@@ -492,7 +467,7 @@ end = struct
     match t1,t2 with
     | I (i1,rp1), I (i2,rp2) ->
       let insensitive = insensitive_scanners_and_internal_actions in
-      if not (Root_proxy.equal ~insensitive rp1 rp2) then
+      if not (insensitive || Root_proxy.equal rp1 rp2) then
         Some `root_changed
       else if Action_id.compare i1 i2 <> 0 then
         Some `action_changed
@@ -514,11 +489,15 @@ end = struct
 end
 
 module Rule_proxy = struct
+
   type t = {
     targets : Proxy_map.t;
     deps : Proxy_map.t;
     action : Action_proxy.t
-  } with sexp
+  } with sexp, bin_io, compare
+
+  let equal = equal_using_compare compare
+
 end
 
 (*----------------------------------------------------------------------
@@ -622,12 +601,19 @@ module What = struct (* what was build *)
   type t = Source | Something_else
 end
 
+module Run_kind = struct
+  type t = Generator | Scanner | Action
+  with sexp_of
+  let to_string t = Sexp.to_string (sexp_of_t t)
+end
 
 module Status = struct
   type t =
   | Checking
-  | Waiting         (* for deps to be checked *)
-  | Running of string
+  | Blocked         (* for deps to be checked *)
+  | Throttled of Run_kind.t
+  | Running of Run_kind.t
+  | Internal of Run_kind.t
   | Built of What.t
   | Error of Reason.t
 end
@@ -636,7 +622,9 @@ module Progress : sig
 
   type t
   val create : unit -> t
-  val ht : t -> Status.t Dep.Table.t
+
+  val set_status : t -> key:Dep.t -> data:Status.t -> unit
+  val mask_unreachable : t -> DG.t -> unit
 
   val message_errors : t -> unit
 
@@ -651,36 +639,67 @@ module Progress : sig
   end
 
   val snap : t -> Counts.t
+  val readme : string list
 
 end = struct
 
   type t = {
-    ht : Status.t Dep.Table.t;
+    status : Status.t Dep.Table.t;
+    mutable mask : Dep.Hash_set.t;
   }
 
   let create () = {
-    ht = Dep.Table.create();
+    status = Dep.Table.create();
+    mask = Dep.Hash_set.create () ;
   }
 
-  let ht t = t.ht
+  let set_status t = Hashtbl.set t.status
+
+  let mask_unreachable t dg =
+    let mask_candidates = Dep.Hash_set.create () in
+    Hashtbl.iter t.status ~f:(fun ~key:dep ~data:_ ->
+      Hash_set.add mask_candidates dep; (* add dep as candiate for mask *)
+    );
+    DG.iter_reachable dg ~f:(fun node ->
+      match (DG.lookup_item dg node) with
+      | DG.Item.Dep dep ->
+        Hash_set.remove mask_candidates dep (* dep is reachable; dont remove *)
+      | _ -> ()
+    );
+    t.mask <- mask_candidates
+
+  let find_unmasked t dep =
+    if not (Hash_set.mem t.mask dep)
+    then Hashtbl.find t.status dep
+    else None
+
+  let iter_unmasked t ~f =
+    Hashtbl.iter (t.status) ~f:(fun ~key ~data ->
+      if not (Hash_set.mem t.mask key) then
+        f ~key ~data
+    )
 
   let dg_status t dep =
-    match (Hashtbl.find (ht t) dep) with
+    match (find_unmasked t dep) with
     | None -> Dot.Status.Unknown
     | Some status ->
       let cat x =  Dot.Status.Cat x in
       match status with
       | Status.Checking                       -> cat Dot.Catagory.Waiting
-      | Status.Waiting                        -> cat Dot.Catagory.Waiting
+      | Status.Blocked                        -> cat Dot.Catagory.Waiting
+      | Status.Throttled _                    -> cat Dot.Catagory.Waiting
       | Status.Running _                      -> cat Dot.Catagory.Working
+      | Status.Internal _                     -> cat Dot.Catagory.Working
       | Status.Built _                        -> cat Dot.Catagory.Good
       | Status.Error (Reason.Error_in_deps _) -> cat Dot.Catagory.Child_error
       | Status.Error _                        -> cat Dot.Catagory.Error
 
   let final_status_to_string = function
     | Status.Checking       -> "unexpectedly Checking"
-    | Status.Waiting        -> "unexpectedly Waiting"
-    | Status.Running s      -> sprintf "unexpectedly Running: %s" s
+    | Status.Blocked        -> "unexpectedly Blocked"
+    | Status.Throttled k    -> sprintf "unexpectedly Throttled: %s" (Run_kind.to_string k)
+    | Status.Running k      -> sprintf "unexpectedly Running: %s" (Run_kind.to_string k)
+    | Status.Internal k     -> sprintf "unexpectedly Internal: %s" (Run_kind.to_string k)
     | Status.Built _        -> "built"
     | Status.Error reason   -> Reason.to_string reason
 
@@ -694,7 +713,7 @@ end = struct
     | _ -> false
 
   let message_errors t =
-    Hashtbl.iter (ht t) ~f:(fun ~key:dep ~data:status ->
+    iter_unmasked t ~f:(fun ~key:dep ~data:status ->
       if suppress_reports_for status then () else
         Message.error "%s: %s" (Dep.to_string dep) (final_status_to_string status)
     )
@@ -702,33 +721,78 @@ end = struct
   module Counts = struct
 
     type t = {
+      (* still working... *)
       checking  : int;
-      waiting   : int;
-      running   : int;
+      blocked   : int;
+      throttled : int;
+      running   : int; (* external scanner/action *)
+      internal  : int; (* internal generator/scanner/action *)
+      (* done... *)
       source    : int;
       built     : int; (* non source *)
       error     : int;
       failure   : int; (* error in dep *)
     } with bin_io
 
-    let total {checking; waiting; running; source; built; error; failure} =
-      checking + waiting + running + source + built + error + failure
+    let total {
+      checking;
+      blocked;
+      throttled;
+      running;
+      internal;
+      source;
+      built;
+      error;
+      failure
+    } =
+      source + built + error + failure +
+      checking + blocked + throttled + running + internal
 
     let good t = t.built + t.source
     let fraction t = (good t) , (total t)
 
     let completed t = Int.equal (good t) (total t)
 
-    let to_labelled {checking; waiting; running; source; built; error; failure} =
-      [
-        ("checking"     , checking);
-        ("waiting"      , waiting);
-        ("running"      , running);
-        ("source"       , source);
-        ("built"        , built);
-        ("error"        , error);
-        ("failure"      , failure);
-      ]
+    let to_labelled {
+      checking;
+      blocked;
+      throttled;
+      running;
+      internal;
+      source;
+      built;
+      error;
+      failure
+    } = [
+
+      ("built", built,
+       "target is built and up-to-date");
+
+      ("source", source,
+       "target is a source file");
+
+      ("error", error,
+       "leaf build error; i.e. non-zero exit or target not created");
+
+      ("fail", failure,
+       "unable to build because one or more (transitive) dependencies has an error");
+
+      ("check", checking,
+       "target and its dependencies are being checked to ensure they are up-to-date");
+
+      ("block", blocked,
+       "the build of this target is blocked on one or more dependencies");
+
+      ("wait", throttled,
+       "target is ready to run an external command, but is limited by the -j threshold");
+
+      ("run", running,
+       "target is running an external build command (action or scanner)");
+
+      ("user", internal,
+       "target is running user ML code in the JengaRoot.ml");
+
+    ]
 
     let to_string t =
       let justify =
@@ -749,26 +813,30 @@ end = struct
           spaces
       in
       String.concat ~sep:", "
-        (List.map (to_labelled t) ~f:(fun (s,n) -> sprintf "%s=%s%d" s (justify n) n))
+        (List.map (to_labelled t) ~f:(fun (s,n,_) -> sprintf "%s=%s%d" s (justify n) n))
 
   end
 
   let snap t =
     let checking = ref 0 in
-    let waiting = ref 0 in
+    let blocked = ref 0 in
+    let throttled = ref 0 in
     let running = ref 0 in
+    let internal = ref 0 in
     let source = ref 0 in
     let built = ref 0 in
     let error = ref 0 in
     let failure = ref 0 in
-    Hashtbl.iter (ht t)
+    iter_unmasked t
       ~f:(fun ~key:_ ~data:status ->
         let x =
           match status with
           | Status.Checking                         -> checking
-          | Status.Waiting                          -> waiting
+          | Status.Blocked                          -> blocked
+          | Status.Throttled _                      -> throttled
           | Status.Running _                        -> running
-          | Status.Built What.Source               -> source
+          | Status.Internal _                       -> internal
+          | Status.Built What.Source                -> source
           | Status.Built _                          -> built
           | Status.Error (Reason.Error_in_deps _)   -> failure
           | Status.Error _                          -> error
@@ -776,13 +844,145 @@ end = struct
       );
     {Counts.
      checking   = !checking;
-     waiting    = !waiting;
+     blocked    = !blocked;
+     throttled  = !throttled;
      running    = !running;
+     internal   = !internal;
      source     = !source;
      built      = !built;
      error      = !error;
      failure    = !failure;
     }
+
+  let readme =
+    let progress = create() in (* dummy needed to get the count labels & descriptions *)
+    let counts = snap progress in
+    let labelled = Counts.to_labelled counts in
+    let justify =
+      let max =
+        List.fold ~init:0 ~f:(fun x y -> if Int.(x > y) then x else y)
+          (List.map labelled ~f:(fun (lab,_,_) -> String.length lab))
+      in
+      fun s ->
+        let i = max - String.length s in
+        assert(Int.(i >= 0));
+        let spaces = String.make i ' ' in
+        spaces
+    in
+    List.map labelled ~f:(fun (lab,_,desc) ->
+      sprintf "- %s %s: %s" lab (justify lab) desc
+    )
+
+end
+
+(*----------------------------------------------------------------------
+ Run_external_job
+----------------------------------------------------------------------*)
+
+exception Shutdown
+
+module Run_external_job : sig
+
+  val shell :
+    delay_for_dev:Time.Span.t option ->
+    need:string ->
+    dir:Path.t ->
+    prog:string ->
+    args:string list ->
+    (unit, [ `non_zero_status | `other_error of exn ]) Result.t Deferred.t
+
+  val shell_stdout :
+    delay_for_dev:Time.Span.t option ->
+    need:string ->
+    dir:Path.t ->
+    prog:string ->
+    args:string list ->
+    (string, [ `non_zero_status | `other_error of exn ]) Result.t Deferred.t
+
+end = struct
+
+  let lines s =
+    match s with
+    | "" -> []
+    | "\n" -> [""]
+    | _ ->
+      let s =
+        match String.chop_suffix s ~suffix:"\n" with
+        | None -> s
+        | Some s -> s
+      in
+      String.split s ~on:'\n'
+
+  let run =
+    fun ~stdout_expected ~get_result ~delay_for_dev ~need ~dir ~prog ~args ->
+
+      let where = Path.to_rrr_string dir in
+
+      let job_start =
+        Message.job_started ~need ~stdout_expected ~where ~prog ~args
+      in
+      let start_time = Time.now() in
+
+      Effort.track external_action_counter (fun () ->
+        try_with (fun () ->
+          (match delay_for_dev with
+          | None -> return ()
+          | Some seconds -> Clock.after seconds
+          ) >>= fun () ->
+          Async_shell.run_full_and_error
+            ~working_dir:(Path.to_absolute_string dir) prog args
+        )
+      ) >>= fun result ->
+
+      match Heart.is_broken Heart.is_shutdown with
+      | true  ->
+        return (Error (`other_error Shutdown))
+
+      | false ->
+
+        let duration = Time.diff (Time.now()) start_time in
+
+        match result with
+        | Ok (stdout,stderr) ->
+          let result = get_result ~stdout in
+          let stdout = lines stdout in
+          let stderr = lines stderr in
+          let outcome = `success in
+          Message.job_finished job_start ~outcome ~duration ~stdout ~stderr;
+          return (Ok result)
+
+        | Error exn ->
+          let exn = Monitor.extract_exn exn in
+          let module SP = Async_shell.Process in
+
+          match exn with
+          | Async_shell.Process.Failed res ->
+            let outcome = `error (SP.status_to_string res.SP.status) in
+            let stdout = lines res.SP.stdout in
+            let stderr = lines res.SP.stderr in
+            Message.job_finished job_start ~outcome ~duration ~stdout ~stderr;
+            return (Error `non_zero_status)
+
+          | _ -> (* what? *)
+            let outcome = `error (Exn.to_string exn) in
+            let stdout = [] in
+            let stderr = [] in
+            Message.job_finished job_start ~outcome ~duration ~stdout ~stderr;
+            return (Error (`other_error exn))
+
+
+
+  let shell =
+    (* ignore stdout for commands run for effect *)
+    run
+      ~stdout_expected:false
+      ~get_result:(fun ~stdout:_ -> ())
+
+  let shell_stdout =
+    (* grab stdout for commands run as scanner *)
+    run
+      ~stdout_expected:true
+      ~get_result:(fun ~stdout -> stdout)
 
 end
 
@@ -813,7 +1013,7 @@ module Builder : sig (* layer error monad within tenacious monad *)
   val desensitize : 'a t -> ('a * Heart.t) t
   val sensitize : Heart.t -> unit t
 
-  val when_redo : 'a t -> f:(unit -> unit) -> 'a t
+  val before_redo : 'a t -> f:(unit -> unit) -> 'a t
 
 end = struct
 
@@ -882,7 +1082,7 @@ end = struct
   let sensitize heart =
     Tenacious.lift (fun () -> Deferred.return (Ok (), heart))
 
-  let when_redo = Tenacious.when_redo
+  let before_redo = Tenacious.before_redo
 
 end
 
@@ -923,77 +1123,6 @@ module RR = struct
   | Targets_not_as_expected _       -> "unexpected"
 
 end
-
-
-(*----------------------------------------------------------------------
-  running things - generator, scanners, actions
-----------------------------------------------------------------------*)
-
-
-let run_generator : (RR.t -> Gen_key.t -> Rule_generator.t -> Rule_set.t Builder.t) =
-  fun rr gen_key generator ->
-    Message.reason "Generating rules: %s [%s]"
-      (Gen_key.to_string gen_key)
-      (RR.to_string rr);
-    Builder.try_deferred ~err:(fun exn -> Reason.Generator_raised exn) (fun () ->
-      Effort.track generation_calls (fun () ->
-        Rule_generator.gen generator
-      )
-    ) *>>= fun rules ->
-    match (Rule_set.create rules) with
-    | `ok ruleset -> return ruleset
-    | `dups paths -> error (Reason.Duplicate_rules_for_paths paths)
-
-
-exception Scanning_with_internal_action_not_supported of Action_id.t
-
-let run_scanner :
-    (RR.t -> Env1.t -> Job_scheduler.t -> Scanner.t -> Dep.t list Builder.t) =
-  fun rr env1 js scanner ->
-    Message.reason "Scanning: %s [%s]"
-      (Scanner.to_string scanner)
-      (RR.to_string rr);
-    match scanner with
-    | `old_internal scan_id ->
-      Builder.try_deferred ~err:(fun exn -> Reason.Scanner_raised exn) (fun () ->
-        Effort.track scanner_calls (fun () ->
-          Env1.run_scanner env1 scan_id
-        )
-      )
-    | `local_deps (dir1,action) ->
-      match Action.case action with
-      (* todo - think about combining (internal) scanner-actions with internal action *)
-      | `id action_id ->
-        error (Reason.Scanner_raised
-                 (Scanning_with_internal_action_not_supported action_id))
-      | `xaction x ->
-        let need = "scanner" in
-        Builder.of_deferred (fun () -> Description.Xaction.run_now_stdout x js ~need)
-        *>>= function
-        | Ok stdout                  -> return (Dep.parse_string_as_deps ~dir:dir1 stdout)
-        | Error `non_zero_status     -> error Reason.Non_zero_status
-        | Error (`other_error exn)   -> error (Reason.Running_external_action_raised exn)
-
-
-let run_action :
-    (RR.t -> Env1.t -> Job_scheduler.t -> Action.t ->
-     targets:Path.t list -> need:string ->
-     unit Builder.t) =
-  fun rr env1 js action ~targets ~need ->
-    Message.reason "Building: %s [%s]"
-      (String.concat ~sep:" " (List.map targets ~f:Path.to_rrr_string))
-      (RR.to_string rr);
-    match Action.case action with
-    | `id action_id ->
-      Builder.try_deferred ~err:(fun exn -> Reason.Internal_action_raised exn) (fun ()->
-        Env1.run_internal_action env1 action_id
-      )
-    | `xaction x ->
-      Builder.of_deferred (fun () -> Description.Xaction.run_now x js ~need)
-      *>>= function
-      | Ok ()                      -> return ()
-      | Error `non_zero_status     -> error Reason.Non_zero_status
-      | Error (`other_error exn)   -> error (Reason.Running_external_action_raised exn)
 
 (*----------------------------------------------------------------------
   File system interface
@@ -1042,15 +1171,32 @@ module Persist = struct
 
   type t = {
     scanned     : (Rooted_proxy.t * Dep.t list) Scanner.Table.t;
-    generated   : (Rooted_proxy.t * Rule_set.t) Gen_key.Table.t;
+    generated   : (Rooted_proxy.t * Rule.t list) Gen_key.Table.t;
     actioned    : Rule_proxy.t Path.Table.t;
-  } with sexp
+  } with sexp, bin_io
 
   let create () = {
     scanned = Scanner.Table.create();
     generated = Gen_key.Table.create();
     actioned = Path.Table.create();
   }
+
+  let equal t1 t2 =
+    Hashtbl.equal t1.scanned t2.scanned
+      (equal_pair Rooted_proxy.equal (equal_list Dep.equal))
+    &&
+    Hashtbl.equal t1.generated t2.generated
+      (equal_pair Rooted_proxy.equal (equal_list Rule.equal))
+    &&
+    Hashtbl.equal t1.actioned t2.actioned
+      Rule_proxy.equal
+
+  let copy t = {
+    scanned = Scanner.Table.copy t.scanned;
+    generated = Gen_key.Table.copy t.generated;
+    actioned = Path.Table.copy t.actioned;
+  }
+
 
 end
 
@@ -1067,7 +1213,7 @@ module Memo = struct
      computatations *)
 
   type t = {
-    generating  : (Rule_set.t   Builder.t * DG.Node.t) Gen_key.Table.t;
+    generating  : (Ruleset.t   Builder.t * DG.Node.t) Gen_key.Table.t;
     scanning    : (Dep.t list   Builder.t * DG.Node.t) Scanner.Table.t;
     building    : (Proxy_map.t  Builder.t * DG.Node.t) Dep.Table.t;
     ruling      : (PPs.t        Builder.t * DG.Node.t) Target_rule.Table.t;
@@ -1092,7 +1238,7 @@ type t = {
 
   config : Config.t; (* messaging choices *)
   fs : Fs.t; (* file system *)
-  js : Job_scheduler.t; (* run external jobs through throttle *)
+  throttle : unit Throttle.t; (* for external jobs *)
   persist : Persist.t; (* persisant cache *)
   memo : Memo.t; (* dynmaic cache *)
   progress : Progress.t; (* track state of each dep being built *)
@@ -1111,7 +1257,7 @@ type t = {
 } with fields
 
 let set_status t status =
-  Hashtbl.set (Progress.ht t.progress) ~key:(t.me) ~data:status
+  Progress.set_status t.progress ~key:(t.me) ~data:status
 
 let push_dependency t item =
   {t with node = DG.create_dependency t.discovered_graph t.node item}
@@ -1128,49 +1274,126 @@ let memo_ruling t = t.memo.Memo.ruling
 let memo_root t = t.memo.Memo.root
 
 let build_dep : (t ->  Dep.t -> Proxy_map.t Builder.t) =
-  fun t dep -> t.recurse_build_dep {t with me = dep} dep
+  fun t dep -> t.recurse_build_dep t dep
 
 
-let share_and_check_for_cycles :
-    (* memoize / check for cycles...
-       3 places where this function is called, wraps for:
-       - build_dep
-       - generate_ruleset_if_necessary
-       - run_target_rule_action_if_necessary
-       Which are the 3 places in the build description where sharing can be encountered
-       - deps can be shared betweenmultiple rules/scanner/aliase
-       - rule-generation is shared betwen all goals in a gen_key (scheme+dir)
-       - rules are shared between the multiple targets that the rule generates
-       For each sharing point we must ensure that only one builder computation is setup
-    *)
-    (t ->
-     key : 'a ->
-     memo : ('a, 'b Builder.t * DG.Node.t) Hashtbl.t ->
-     item : DG.Item.t ->
-     f : (t -> 'b Builder.t) ->
-     'b Builder.t
-    ) =
-  fun t ~key ~memo ~item ~f ->
-    match (Hashtbl.find memo key) with
-    | Some (builder,node) ->
-      begin
-        incr c_share;
-        DG.link_dependants_no_cycle_check node ~additional:t.node;
-        builder;
-      end
-    | None ->
-      let t = push_dependency t item in
-      let builder = f t in (* critical - [f] must be called only once *)
-      let builder =
-        Builder.when_redo builder
-          ~f:(fun () ->
-            (*Message.message "remove_all_dependencies: %s" (item_to_string item);*)
-            DG.remove_all_dependencies t.node;
+let enqueue_with_shutdown t run_kind f =
+  set_status t (Status.Throttled run_kind);
+  Throttle.enqueue t.throttle (fun () ->
+    if Heart.is_broken Heart.is_shutdown
+    then (
+      Deferred.return (Error (`other_error Shutdown));
+    )
+    else (
+      set_status t (Status.Running run_kind);
+      f () >>= fun res ->
+      set_status t Status.Checking;
+      Deferred.return res
+    )
+  )
+
+(*----------------------------------------------------------------------
+  running things - generator, scanners, actions
+----------------------------------------------------------------------*)
+
+let run_generator : (t -> RR.t -> Gen_key.t -> Rule_generator.t -> Ruleset.t Builder.t) =
+  fun t rr gen_key generator ->
+    set_status t (Status.Internal Run_kind.Generator);
+    Message.reason "Generating rules: %s [%s]"
+      (Gen_key.to_string gen_key)
+      (RR.to_string rr);
+    Builder.try_deferred ~err:(fun exn -> Reason.Generator_raised exn) (fun () ->
+      Effort.track generation_calls (fun () ->
+        Rule_generator.gen generator
+      )
+    ) *>>= fun rules ->
+    match (Ruleset.create rules) with
+    | `ok ruleset -> return ruleset
+    | `dups paths -> error (Reason.Duplicate_rules_for_paths paths)
+
+
+exception Scanning_with_internal_action_not_supported of Action_id.t
+
+let run_scanner :
+    (t -> RR.t -> Env1.t -> Scanner.t -> Dep.t list Builder.t) =
+  fun t rr env1 scanner ->
+    let message() =
+      Message.reason "Scanning: %s [%s]" (Scanner.to_string scanner) (RR.to_string rr)
+    in
+    match scanner with
+    | `old_internal scan_id ->
+      Builder.try_deferred ~err:(fun exn -> Reason.Scanner_raised exn) (fun () ->
+        message();
+        set_status t (Status.Internal Run_kind.Scanner);
+        Effort.track scanner_calls (fun () ->
+          Env1.run_scanner env1 scan_id
+        )
+      )
+    | `local_deps (dir1,action) ->
+      match Action.case action with
+      (* todo - think about combining (internal) scanner-actions with internal action *)
+      | `id action_id ->
+        error (Reason.Scanner_raised
+                 (Scanning_with_internal_action_not_supported action_id))
+      | `xaction x ->
+        let delay_for_dev = Config.delay_for_dev t.config in
+        let need = "scanner" in
+        let {Xaction.dir;prog;args} = x in
+        Builder.of_deferred (fun () ->
+          enqueue_with_shutdown t Run_kind.Scanner (fun () ->
+            message();
+            Run_external_job.shell_stdout ~delay_for_dev ~need ~dir ~prog ~args
           )
-      in
-      (* we use add_exn, because each key will be memoized exactly once *)
-      Hashtbl.add_exn memo ~key ~data:(builder,t.node);
-      builder
+        ) *>>= function
+        | Ok stdout                  -> return (Dep.parse_string_as_deps ~dir:dir1 stdout)
+        | Error `non_zero_status     -> error Reason.Non_zero_status
+        | Error (`other_error exn)   -> error (Reason.Running_external_action_raised exn)
+
+
+let run_action :
+    (t -> RR.t -> Env1.t -> Action.t -> targets:Path.t list -> need:string ->
+     unit Builder.t) =
+  fun t rr env1 action ~targets ~need ->
+    let message() =
+      Message.reason "Building: %s [%s]"
+        (String.concat ~sep:" " (List.map targets ~f:Path.to_rrr_string))
+        (RR.to_string rr)
+    in
+    match Action.case action with
+    | `id action_id ->
+      Builder.try_deferred ~err:(fun exn -> Reason.Internal_action_raised exn) (fun ()->
+        message();
+        set_status t (Status.Internal Run_kind.Action);
+        Env1.run_internal_action env1 action_id
+      )
+    | `xaction x ->
+      let delay_for_dev = Config.delay_for_dev t.config in
+      let {Xaction.dir;prog;args} = x in
+      Builder.of_deferred (fun () ->
+        enqueue_with_shutdown t Run_kind.Action (fun () ->
+          message();
+          Run_external_job.shell ~delay_for_dev ~need ~dir ~prog ~args
+        )
+      ) *>>= function
+      | Ok ()                      -> return ()
+      | Error `non_zero_status     -> error Reason.Non_zero_status
+      | Error (`other_error exn)   -> error (Reason.Running_external_action_raised exn)
+
+
+let run_action :
+    (t -> RR.t -> Env1.t -> Action.t -> targets:Path.t list -> need:string ->
+     unit Builder.t) =
+  (* After running an action, synchronise until all inotify events triggered while the
+     action was run have been delivered (and acted upon) by this process *)
+  fun t rr env1 action ~targets ~need ->
+    let sync_contents = Action.to_string action in
+    Builder.wrap (
+      Fs.sync_inotify_delivery t.fs ~sync_contents (
+        Builder.expose (
+          run_action t rr env1 action ~targets ~need
+        )
+      )
+    )
 
 
 (*----------------------------------------------------------------------
@@ -1227,13 +1450,55 @@ let jenga_root : (t -> (Env1.t * Root_proxy.t) Builder.t) =
   build
 ----------------------------------------------------------------------*)
 
+let share_and_check_for_cycles :
+    (* memoize / check for cycles...
+       3 places where this function is called, wraps for:
+       - build_dep
+       - generate_ruleset_if_necessary
+       - run_target_rule_action_if_necessary
+       Which are the 3 places in the build description where sharing can be encountered
+       - deps can be shared betweenmultiple rules/scanner/aliase
+       - rule-generation is shared betwen all goals in a gen_key (scheme+dir)
+       - rules are shared between the multiple targets that the rule generates
+       For each sharing point we must ensure that only one builder computation is setup
+    *)
+    (t ->
+     key : 'a ->
+     memo : ('a, 'b Builder.t * DG.Node.t) Hashtbl.t ->
+     item : DG.Item.t ->
+     f : (t -> 'b Builder.t) ->
+     'b Builder.t
+    ) =
+  fun t ~key ~memo ~item ~f ->
+    match (Hashtbl.find memo key) with
+    | Some (builder,node) ->
+      begin
+        set_status t Status.Blocked;
+        DG.link_dependants_no_cycle_check node ~additional:t.node;
+        builder;
+      end
+    | None ->
+      let t = push_dependency t item in
+      let builder = f t in (* critical - [f] must be called only once *)
+      let builder =
+        Builder.before_redo builder
+          ~f:(fun () ->
+            (*Message.message "remove_all_dependencies: %s" (item_to_string item);*)
+            DG.remove_all_dependencies t.node;
+          )
+      in
+      (* we use add_exn, because each key will be memoized exactly once *)
+      Hashtbl.add_exn memo ~key ~data:(builder,t.node);
+      builder
+
+
 let build_deps : (t -> Dep.t list -> Proxy_map.t Builder.t) =
   (* Build a collection of [deps] in parallel.
      Error if any of [deps] errors
      - but for a new reason: [Error_in_deps], listing those deps in error.
   *)
   fun t deps ->
-    set_status t Status.Waiting;
+    set_status t Status.Blocked;
     Builder.for_all_collect_errors deps ~f:(build_dep t) *>>= fun (pms,errors) ->
     set_status t Status.Checking;
     match errors with
@@ -1244,7 +1509,7 @@ let build_deps : (t -> Dep.t list -> Proxy_map.t Builder.t) =
       | `ok pm -> return pm
 
 
-let generate_ruleset_if_necessary : (t -> Gen_key.t -> Rule_set.t Builder.t) =
+let generate_ruleset_if_necessary : (t -> Gen_key.t -> Ruleset.t Builder.t) =
   (* Run rule generation (for a goal) iff:
      - it has never been run before
      - or the proxy indicated it is out of date.
@@ -1259,24 +1524,27 @@ let generate_ruleset_if_necessary : (t -> Gen_key.t -> Rule_set.t Builder.t) =
       build_deps t generator_deps *>>= fun proxy_map ->
       let rooted_proxy = Rooted_proxy.create root_proxy proxy_map in
       let run_and_cache rr =
-        set_status t (Status.Running "generator");
-        run_generator rr gen_key generator *>>= fun ruleset ->
+        run_generator t rr gen_key generator *>>= fun ruleset ->
+        let rules = Ruleset.rules ruleset in
         set_status t Status.Checking;
-        Hashtbl.set (generated t) ~key:gen_key ~data:(rooted_proxy,ruleset);
+        Hashtbl.set (generated t) ~key:gen_key ~data:(rooted_proxy,rules);
         return ruleset
       in
       match (Hashtbl.find (generated t) gen_key) with
       | None -> run_and_cache RR.No_record_of_being_run_before
-      | Some (prev,ruleset) ->
+      | Some (prev,rules) ->
         let insensitive = false in (* always be correct/conservative for generators *)
         match Rooted_proxy.diff ~insensitive prev rooted_proxy with
         | Some `root_changed -> run_and_cache RR.Jenga_root_changed
         | Some (`proxy_map_changed keys) -> run_and_cache (RR.Deps_have_changed keys)
         | None ->
+          (* ok to use create_exn because there can be no duplicates
+             in the rules we saved in the generated cache *)
+          let ruleset = Ruleset.create_exn rules in
           return ruleset (* Up to date; dont run anything *)
 
 
-let generate_ruleset_if_necessary : (t -> Gen_key.t -> Rule_set.t Builder.t) =
+let generate_ruleset_if_necessary : (t -> Gen_key.t -> Ruleset.t Builder.t) =
   (* memo *)
   fun t gen_key ->
     share_and_check_for_cycles t
@@ -1308,8 +1576,7 @@ let run_scanner_if_necessary : (t -> Dep.t list -> Scanner.t -> Dep.t list Build
     build_deps t deps *>>= fun proxy_map ->
     let rooted_proxy = Rooted_proxy.create root_proxy proxy_map in
     let run_and_cache rr =
-      set_status t (Status.Running "scanner");
-      run_scanner rr env1 t.js scanner *>>= fun scanned_deps ->
+      run_scanner t rr env1 scanner *>>= fun scanned_deps ->
       set_status t Status.Checking;
       Hashtbl.set (scanned t) ~key:scanner ~data:(rooted_proxy,scanned_deps);
       return scanned_deps
@@ -1439,11 +1706,9 @@ let run_target_rule_action_if_necessary
     (* The persistent caching is keyed of the [head_target] *)
     let head_target,other_targets = Target_rule.head_and_rest_targets tr in
     let run_and_cache rr =
-      set_status t (Status.Running "action");
       prevent_action_overlap t.fs ~targets (
-        run_action rr env1 t.js action ~targets ~need
+        run_action t rr env1 action ~targets ~need
       ) *>>= fun () ->
-      set_status t Status.Checking;
       check_targets t targets *>>= function
       | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
       | `ok path_tagged_proxys ->
@@ -1533,13 +1798,13 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
   fun t goal ->
     jenga_root t *>>= fun (env1,__root_proxy) ->
     begin match (Env1.lookup_gen_key env1 goal) with
-    | None -> return Rule_set.empty
+    | None -> return Ruleset.empty
     | Some gen_key -> generate_ruleset_if_necessary t gen_key
     end *>>= fun ruleset ->
     match Goal.case goal with
     | `alias alias_id ->
       begin
-        match (Rule_set.lookup_alias ruleset alias_id) with
+        match (Ruleset.lookup_alias ruleset alias_id) with
         | None -> error Reason.No_definition_for_alias
         | Some deps ->
           build_deps t deps *>>= fun pm ->
@@ -1547,7 +1812,7 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
       end
     | `path demanded ->
       begin
-        match (Rule_set.lookup_target ruleset demanded) with
+        match (Ruleset.lookup_target ruleset demanded) with
         | Some tr ->
           build_using_target_rule t tr ~demanded *>>= fun pm ->
           return (What.Something_else, pm)
@@ -1590,25 +1855,31 @@ let build_dep : (t -> Dep.t -> (What.t * Proxy_map.t) Builder.t) =
     build_dep t dep
 
 
-let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
-  (* Expose the builder's result/error for reporting *)
+let build_dep : (t -> Dep.t -> (What.t * Proxy_map.t) Builder.t) =
+  (* Report considering/re-considering *)
   fun t dep ->
-    incr c_consider;
-    if Config.show_considering t.config then  (
+    if Config.show_considering t.config
+    then (
       Message.message "Considering: %s" (Dep.to_string dep);
     );
     set_status t Status.Checking;
     let builder = build_dep t dep in
-    let builder = Builder.when_redo builder
+    let builder = Builder.before_redo builder
       ~f:(fun () ->
-        incr c_reconsider;
-        if Config.show_considering t.config then  (
+        if Config.show_considering t.config || Config.show_reconsidering t.config
+        then  (
           Message.message "Re-considering: %s" (Dep.to_string dep)
         );
         set_status t Status.Checking;
-        incr c_reconsider;
       )
     in
+    builder
+
+
+let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
+  (* Expose the builder's result/error for reporting *)
+  fun t dep ->
+    let builder = build_dep t dep in
     Builder.wrap (
       Tenacious.bind (
         Builder.expose builder
@@ -1623,6 +1894,8 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
       )
     )
 
+let build_dep : (t ->  Dep.t -> Proxy_map.t Builder.t) =
+  fun t dep -> build_dep {t with me = dep} dep
 
 let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
   fun t dep ->
@@ -1637,7 +1910,7 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
 let build_one_root_dep :
     (
       jenga_root_path: Path.LR.t ->
-      Job_scheduler.t ->
+      throttle: unit Throttle.t ->
       Fs.t ->
       Persist.t ->
       Memo.t ->
@@ -1652,13 +1925,13 @@ let build_one_root_dep :
      And here we break out of the Builder monad, and revert to the plain
      tenacious monad - ignoring the proxy map or any errors.
   *)
-  fun ~jenga_root_path js fs persist memo discovered_graph
+  fun ~jenga_root_path ~throttle fs persist memo discovered_graph
     config progress ~demanded ->
     let node = DG.create_root discovered_graph in
     let t = {
       config;
       fs;
-      js;
+      throttle;
       persist;
       memo;
       progress;
@@ -1745,50 +2018,6 @@ let periodically_while_not_fin ~span ~fin ~f =
 
 
 (*----------------------------------------------------------------------
- remove_unreachable_targets_from_progress_monitor
-----------------------------------------------------------------------*)
-
-let dg_iter_reachable dg ~f =
-  let visiting_or_visited = DG.Node.Hash_set.create () in
-  let rec walk node =
-    let stop = Hash_set.mem visiting_or_visited node in
-    if stop then () else (
-      Hash_set.add visiting_or_visited node;
-      f node;
-      List.iter (DG.dependencies node) ~f:walk
-    )
-  in
-  List.iter (DG.roots dg) ~f:walk
-
-let remove_unreachable_targets_from_progress_monitor : (Progress.t -> DG.t -> unit) =
-  fun progress dg ->
-    let removal_candidates = Dep.Hash_set.create () in
-    Hashtbl.iter (Progress.ht progress) ~f:(fun ~key:dep ~data:_ ->
-      Hash_set.add removal_candidates dep; (* add dep as candiate for removal *)
-    );
-    dg_iter_reachable dg ~f:(fun node ->
-      match (DG.lookup_item dg node) with
-      | DG.Item.Dep dep ->
-        Hash_set.remove removal_candidates dep (* dep is reachable; dont remove *)
-      | _ -> ()
-    );
-    (* anything now left in removal_candidates is unreachable, and should be removed *)
-    let n = Hash_set.length removal_candidates in
-    let m = Hashtbl.length (Progress.ht progress) in
-    match n with
-    | 0 -> ()
-    | _ ->
-      Message.message
-        "remove unreachable targets from progress monitor: %d of %d, leaving %d"
-        n m (m-n);
-      Hash_set.iter removal_candidates ~f:(fun dep ->
-        (*Message.message "- %s" (Dep.to_string dep);*)
-        Hashtbl.remove (Progress.ht progress) dep;
-      )
-
-
-
-(*----------------------------------------------------------------------
  cycle detection
 ----------------------------------------------------------------------*)
 
@@ -1865,7 +2094,7 @@ let break_a_cycle_if_found dg =
       let rec loop acc = function
         | [] -> assert false
         | node::nodes ->
-          if Int.(=) 0 (DG.Node.compare node the_nub) then List.rev (node::acc) else
+          if (DG.Node.equal node the_nub) then List.rev (node::acc) else
             loop (node::acc) nodes
       in
       loop [] full_path
@@ -1915,7 +2144,7 @@ let build_once :
     Tenacious.exec top_tenacious >>= fun ((),heart) ->
 
     (* to avoid reporting of stale errors etc... *)
-    remove_unreachable_targets_from_progress_monitor progress dg;
+    Progress.mask_unreachable progress dg;
 
     let counts = Progress.snap progress in
     let duration = Time.diff (Time.now()) start_time in
@@ -1949,10 +2178,10 @@ let build_forever =
     let memo = Memo.create () in
     let discovered_graph = DG.create () in
 
-    let js =
-      let delay_for_dev = Config.delay_for_dev config in
+    let throttle =
       let max_concurrent_jobs = Config.j_number config in
-      Job_scheduler.create ~delay_for_dev ~max_concurrent_jobs
+      Throttle.create ~continue_on_error:false ~max_concurrent_jobs
+
     in
 
     (* construct the top-level tenacious builder only once *)
@@ -1960,7 +2189,7 @@ let build_forever =
       Tenacious.all_unit (
         List.map top_level_demands ~f:(fun demanded ->
           build_one_root_dep
-            ~jenga_root_path js fs persist memo discovered_graph
+            ~jenga_root_path ~throttle fs persist memo discovered_graph
             config progress ~demanded
         )
       )
@@ -2013,7 +2242,7 @@ let build_forever =
         Message.polling ();
         if Config.show_sensitized config then (
           List.iter (Heart.to_sensitivity_list heart) ~f:(fun desc ->
-            Message.sensitized_on desc
+            Message.sensitized_on ~desc
           )
         );
         (* wait here until something changes on the file-system *)
@@ -2026,3 +2255,30 @@ let build_forever =
     in
     build_and_poll () >>= fun () ->
     Deferred.return ()
+
+(*----------------------------------------------------------------------
+ Run_now
+----------------------------------------------------------------------*)
+
+module Run_now = struct
+
+  exception Run_now_of_internal_action_not_supported of Action_id.t
+  exception Non_zero_status_from_action_run_now of Action.t
+
+  let lift_for_run_now ~shell action =
+    match Action.case action with
+    | `id id -> raise (Run_now_of_internal_action_not_supported id)
+    | `xaction x ->
+      let need = "run_now" in
+      let delay_for_dev = None in
+      let {Xaction.dir;prog;args} = x in
+      shell ~delay_for_dev ~need ~dir ~prog ~args >>= function
+      | Error `non_zero_status     -> raise (Non_zero_status_from_action_run_now action)
+      | Error (`other_error exn)   -> raise exn
+      | Ok x                       -> Deferred.return x
+
+  let run_action_now        = lift_for_run_now ~shell:Run_external_job.shell
+  let run_action_now_stdout = lift_for_run_now ~shell:Run_external_job.shell_stdout
+
+
+end

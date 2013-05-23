@@ -5,13 +5,7 @@ open Async.Std
 
 type state = Broken | Fragile of (unit -> unit) list
 
-module Desc = struct
-  type t = string with sexp_of
-  let create s = s
-  let to_string t = t
-end
-
-type node = Base of Desc.t | Node of h * h
+type node = Base of string | Node of h * h
 and h = {
   u : int ;
   node : node;
@@ -46,7 +40,7 @@ let node_is_broken h =
 
 module Glass = struct
   type t = h
-  let create desc = create_u ~node:(Base desc)
+  let create ~desc = create_u ~node:(Base desc)
   let is_broken = node_is_broken
   let break = break
   let desc h = match h.node with | Base desc -> desc | Node _ -> assert false
@@ -103,4 +97,9 @@ let collect pred t =
     walk [] h
 
 let to_sensitivity_list = collect (fun _ -> true)
-(*let to_broken_list = collect node_is_broken*)
+
+
+let shutdown_glass = Glass.create ~desc:"shutdown_glass"
+let shutdown () = Glass.break shutdown_glass
+let is_shutdown = of_glass shutdown_glass
+

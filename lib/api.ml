@@ -97,24 +97,4 @@ let parse_rules_from_simple_makefile path =
       let implicit_default_rule = Rule.default ~dir (List.map targets ~f:Dep.path) in
       return (implicit_default_rule :: rules)
 
-
-let js_run_now =
-  let delay_for_dev = None in
-  let max_concurrent_jobs = 100 in
-  Job_scheduler.create ~delay_for_dev ~max_concurrent_jobs
-
-
-exception Run_now_of_internal_action_not_supported of Action_id.t
-exception Non_zero_status_from_action_run_now of Action.t
-
-let lift_for_run_now ~f action =
-  match Action.case action with
-  | `id id -> raise (Run_now_of_internal_action_not_supported id)
-  | `xaction x ->
-    f x js_run_now ~need:"run_now" >>= function
-    | Error `non_zero_status     -> raise (Non_zero_status_from_action_run_now action)
-    | Error (`other_error exn)   -> raise exn
-    | Ok x                       -> return x
-
-let run_action_now          = lift_for_run_now ~f:Xaction.run_now
-let run_action_now_stdout   = lift_for_run_now ~f:Xaction.run_now_stdout
+include Build.Run_now

@@ -38,6 +38,7 @@ module Node = struct
   end
   include T
   include Hashable.Make(T)
+  let equal t1 t2 = Int.(=) t1.u t2.u
 
 end
 

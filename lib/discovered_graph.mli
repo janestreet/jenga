@@ -21,6 +21,7 @@ type t (* item-graph + roots *)
 module Node : sig
   type t
   include Hashable with type t := t
+  val equal : t -> t -> bool
 end
 
 val roots : t -> Node.t list
@@ -35,3 +36,5 @@ val disregard_roots : t -> unit
 val create_dependency : t -> Node.t -> Item.t -> Node.t
 val link_dependants_no_cycle_check : Node.t -> additional:Node.t -> unit
 val remove_all_dependencies : Node.t -> unit
+
+val iter_reachable : t -> f:(Node.t -> unit) -> unit

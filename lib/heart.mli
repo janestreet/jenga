@@ -9,16 +9,10 @@ open Async.Std
 
 type t
 
-module Desc : sig
-  type t with sexp_of
-  val create : string -> t
-  val to_string : t -> string
-end
-
 module Glass : sig
   type t
-  val create : Desc.t -> t
-  val desc : t -> Desc.t
+  val create : desc:string -> t
+  val desc : t -> string
   val is_broken : t -> bool
   val break : t -> unit
 end
@@ -31,5 +25,7 @@ val combine : t list -> t
 val is_broken : t -> bool
 val when_broken : t -> unit Deferred.t
 
-val to_sensitivity_list : t -> Desc.t list
-(*val to_broken_list : t -> Desc.t list*)
+val to_sensitivity_list : t -> string list
+
+val shutdown : unit -> unit (* for C-c handler *)
+val is_shutdown : t
