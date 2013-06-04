@@ -47,6 +47,7 @@ val create : Persist.t -> t Deferred.t
 module Digest_result : sig
   type t = [
   | `stat_error of Error.t
+  | `is_a_dir
   | `undigestable of Kind.t
   | `digest_error of Error.t
   | `digest of Digest.t

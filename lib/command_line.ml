@@ -14,6 +14,12 @@ let j_number =
   +> Spec.flag "j" (Spec.optional_with_default default Spec.int)
     ~doc:(sprintf "<jobs> maximum number of parallel jobs (default: %d)" default)
 
+let f_number =
+  let default = 1 in
+  Spec.step (fun m x -> m ~f_number:x)
+  +> Spec.flag "f" (Spec.optional_with_default default Spec.int)
+    ~doc:(sprintf "<forkers> #additional procs for forking (default: %d)" default)
+
 let poll_forever =
   Spec.step (fun m x -> m ~poll_forever:x)
   +> Spec.flag "poll-forever" ~aliases:["P"] Spec.no_arg
@@ -114,6 +120,7 @@ let anon_demands =
 let go_command =
   Command.basic (
     j_number
+    ++ f_number
     ++ poll_forever
     ++ verbose
     ++ show_run_reason
@@ -138,7 +145,7 @@ let go_command =
     ~readme:(fun () -> String.concat ~sep:"\n" [
       "By default building the .DEFAULT target.";
     ])
-    (fun ~j_number ~poll_forever
+    (fun ~j_number ~f_number ~poll_forever
       ~verbose ~show_run_reason ~show_checked ~show_considering ~show_reconsidering
       ~quiet ~debug ~sequential_deps ~show_sensitized
       ~delay_for_dev ~report_long_cycle_times
@@ -150,6 +157,7 @@ let go_command =
         let config = {
           Config.
           j_number;
+          f_number;
           poll_forever;
           verbose;
           show_run_reason;

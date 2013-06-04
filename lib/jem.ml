@@ -24,7 +24,7 @@ type config  = {
   brief : bool;
 }
 
-let message fmt = ksprintf (fun s -> Printf.printf "%s\r%!" s) fmt
+let message fmt = ksprintf (fun s -> Printf.printf "\027[2K%s\r%!" s) fmt
 
 let run config =
 

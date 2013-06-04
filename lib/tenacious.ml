@@ -239,8 +239,65 @@ module T = struct
 
 end
 
-include T
+(*include T*)
 
+(*----------------------------------------------------------------------
+tenacious select...
+----------------------------------------------------------------------*)
+
+module type Ten_sig = sig
+  type 'a t
+  val return : 'a -> 'a t
+  val bind : 'a t -> ('a -> 'b t) -> 'b t
+  val all : 'a t list -> 'a list t
+  val exec_cancelable : 'a t -> cancel:Heart.t -> ('a * Heart.t) option Deferred.t
+  val lift_cancelable :        (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> 'a t
+end
+
+
+
+module Ten_dummy = struct
+
+  type 'a t = 'a Deferred.t
+
+  let return = Deferred.return
+  let bind = Deferred.bind
+  let all = Deferred.all
+
+  let exec_cancelable t ~cancel:_ =
+    Deferred.map t ~f:(fun x -> Some (x,Heart.unbreakable))
+
+  let lift_cancelable f =
+    Deferred.map (f ~cancel:Heart.unbreakable) ~f:(function
+    | None -> assert false
+    | Some (x,_heart) -> x
+    )
+
+end
+
+let dummy =
+  match Core.Std.Sys.getenv "DUMMY_TEN" with
+  | None -> false
+  | Some _ -> true
+
+let m =
+  match dummy with
+  | false -> (module T : Ten_sig)
+  | true -> (module Ten_dummy : Ten_sig)
+
+let () =
+  if dummy then (
+    Printf.eprintf "tenacious, dummy = %b\n%!" dummy
+  )
+
+module M = (val m : Ten_sig)
+
+include M
+
+
+(*----------------------------------------------------------------------
+
+----------------------------------------------------------------------*)
 
 (* non primitive ops... *)
 

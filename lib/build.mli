@@ -11,7 +11,7 @@ end
 
 module Progress : sig
   type t
-  val create : unit -> t
+  val create : Fs.t -> t
   module Counts : sig
     type t with bin_io
     val to_string : t -> string

@@ -79,6 +79,7 @@ end
 module Env : sig
   type t = Description.Env.t
   val create :
+    ?putenv:(string * string) list ->
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?action : (Sexp.t -> unit Deferred.t) ->
     ?scan : (Sexp.t -> Dep.t list Deferred.t) ->
@@ -87,10 +88,15 @@ module Env : sig
 end
 
 val verbose : unit -> bool
-val load_sexp_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a Deferred.t
-val load_sexps_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a list Deferred.t
-val parse_rules_from_simple_makefile : Path.t -> Rule.t list Deferred.t
+
 
 val run_action_now : Action.t -> unit Deferred.t
 val run_action_now_stdout : Action.t -> string Deferred.t
 
+
+val enqueue_file_access : (unit -> 'a Deferred.t) -> 'a Deferred.t
+
+(* these all wrap with enqueue_file_access *)
+val load_sexp_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a Deferred.t
+val load_sexps_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a list Deferred.t
+val parse_rules_from_simple_makefile : Path.t -> Rule.t list Deferred.t

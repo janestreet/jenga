@@ -26,9 +26,14 @@ let insensitive_scanners_and_internal_actions =
   effort
 ----------------------------------------------------------------------*)
 
-let generation_calls = Effort.Counter.create "gen"
-let scanner_calls = Effort.Counter.create "scan"
-let external_action_counter = Effort.Counter.create "act"
+(* What did we do? - gen/scan/act *)
+let generators_run = Effort.Counter.create "gen"
+let scanners_run = Effort.Counter.create "scan"
+let actions_run = Effort.Counter.create "act"
+
+(* How did we do it? - job (external process) / user code (internal-ml-function) *)
+let external_jobs_run = Effort.Counter.create "job"
+let user_functions_run = Effort.Counter.create "user"
 
 let the_effort =
   Effort.create [
@@ -36,9 +41,11 @@ let the_effort =
     Fs.digest_counter;
     Fs.ls_counter;
     Fs.mkdir_counter;
-    generation_calls;
-    scanner_calls;
-    external_action_counter;
+    generators_run;
+    scanners_run;
+    actions_run;
+    external_jobs_run;
+    user_functions_run;
   ]
 
 let effort_string() =
@@ -48,17 +55,45 @@ let zero_effort() =
   Effort.reset_to_zero the_effort
 
 (*----------------------------------------------------------------------
- setup_command_lookup_path
+ stale targets
 ----------------------------------------------------------------------*)
 
-let setup_command_lookup_path =
-    (* lookup once and remember to avoid repeated pushing on to the front *)
+let remove_stale_artifacts ~gen_key:_ ~stale =
+  match stale with [] -> return () | _::_ ->
+    Deferred.List.iter stale ~f:(fun path ->
+      let path_string = Path.to_rrr_string path in
+      try_with (fun () -> Sys.remove path_string) >>= function
+      | Ok () ->
+        Message.message "Removed state build artifact: %s" path_string;
+        return ()
+      | Error _ ->
+        try_with (fun () -> Sys.file_exists path_string) >>= function
+        | Error _ ->
+          Message.error "Sys.file_exists failed: %s" path_string;
+          return ()
+        | Ok res -> match res with
+          | `Unknown
+          | `Yes ->
+            (* looks like the remove failed *)
+            Message.error "Sys.remove failed: %s" path_string;
+            return ()
+          | `No ->
+            (* looks like file was not there - a target we had never built *)
+            return ()
+    )
+
+(*----------------------------------------------------------------------
+ putenv_for_path
+----------------------------------------------------------------------*)
+
+let putenv_for_path =
+  (* lookup once and remember to avoid repeated pushing on to the front *)
   let orig_path = match (Core.Std.Sys.getenv "PATH") with | None -> "" | Some s -> s in
 
   let minimal_path_kept_even_after_replacement = "/bin:/usr/bin:/usr/local/bin" in
-    (* Without this minimal path, user replacement can terminally break Jenga!
-       For example, the ocaml_plugin module replies on the path to find "objcopy"
-    *)
+  (* Without this minimal path, user replacement can terminally break Jenga!
+     For example, the ocaml_plugin module replies on the path to find "objcopy"
+  *)
   let colonize xs = String.concat (List.map xs ~f:(fun x -> x ^ ":")) in
   fun spec ->
     let replacement_path  =
@@ -66,7 +101,7 @@ let setup_command_lookup_path =
       | `Extend xs -> colonize xs ^ orig_path
       | `Replace xs -> colonize xs ^ minimal_path_kept_even_after_replacement
     in
-    Core.Std.Unix.putenv ~key:"PATH" ~data:replacement_path
+    replacement_path
 
 (*----------------------------------------------------------------------
  new - Env1
@@ -78,6 +113,7 @@ module Env1 : sig
 
   type t
   val of_env : Env.t ->  [ `ok of t | `dups of scheme_id list ]
+  val putenv : t -> (string * string) list
   val lookup_gen_key : t -> Goal.t -> Gen_key.t option
   val run_generator_scheme : t -> Gen_key.t -> (Rule_generator.t,exn) Result.t
   val run_scanner : t -> Scan_id.t -> Dep.t list Deferred.t
@@ -86,6 +122,7 @@ module Env1 : sig
 end = struct
 
   type t = {
+    putenv : (string * string) list;
     lookup_gen_key : Goal.t -> Gen_key.t option;
     run_generator_scheme : Gen_key.t -> (Rule_generator.t,exn) Result.t;
     run_scanner : Scan_id.t -> Dep.t list Deferred.t;
@@ -93,7 +130,7 @@ end = struct
   } with fields
 
   let of_env env =
-    let {Env. command_lookup_path; action; scan; schemes} = env in
+    let {Env. putenv; command_lookup_path; action; scan; schemes} = env in
 
     (* Each time we construct the Env1 form the Env, we reset the command lookup path.
 
@@ -101,10 +138,10 @@ end = struct
        the JR.ml is changed by the user, and this is the only time the command_lookup_path
        might get changed.
     *)
-    let () =
+    let putenv = putenv @
       match command_lookup_path with
-      | None -> ()
-      | Some spec -> setup_command_lookup_path spec
+      | None -> []
+      | Some spec -> [("PATH",putenv_for_path spec)]
     in
 
     (* manipulate the user schemes list into the two lookup stages required
@@ -140,6 +177,16 @@ end = struct
       | Some scheme ->
         Some (Gen_key.create ~tag:(Rule_scheme.tag scheme) ~dir:(Goal.directory goal))
     in
+
+    (*let lookup_gen_key goal =
+      let opt_gen_key = lookup_gen_key goal in
+      Message.message "lookup_gen_key: %s -> %s"
+        (Goal.to_string goal)
+        (match opt_gen_key with
+        | None -> "None"
+        | Some gen_key -> Gen_key.to_string gen_key);
+      opt_gen_key
+    in*)
 
     (* stage 2 *)
     let dups = ref [] in
@@ -181,6 +228,7 @@ end = struct
     match dups with | _::_ -> `dups dups
     | [] ->
       `ok {
+        putenv;
         lookup_gen_key;
         run_generator_scheme;
         run_scanner;
@@ -205,6 +253,8 @@ module Ruleset : sig
   val lookup_alias : t -> Alias.t -> Dep.t list option
 
   val rules : t -> Rule.t list
+
+  val compare_for_stale : t -> old:t -> Path.t list
 
 end = struct
 
@@ -258,6 +308,16 @@ end = struct
     match create xs with
     | `dups _ -> failwith "Ruleset.create_exn reports dups"
     | `ok x -> x
+
+  let compare_for_stale t ~old =
+    let is_new_target target =
+      match (lookup_target t target) with | None -> false | Some _ -> true
+    in
+    let old_targets = List.concat_map old.rules ~f:Rule.targets in
+    let stale_targets =
+      List.filter old_targets ~f:(fun target -> not (is_new_target target))
+    in
+    stale_targets
 
 end
 
@@ -504,6 +564,12 @@ end
   (error) reason
 ----------------------------------------------------------------------*)
 
+module Run_kind = struct
+  type t = Generator | Scanner | Action
+  with sexp_of
+  let to_string t = Sexp.to_string (sexp_of_t t)
+end
+
 (*let tr_to_string tr = Target_rule.to_string tr*)
 let tr_to_string tr = (* just show targets or else too verbose *)
   String.concat ~sep:" " (List.map (Target_rule.targets tr) ~f:Path.to_rrr_string)
@@ -518,76 +584,85 @@ let item_to_string = function
 module Reason = struct
 
   type t =
+  | Shutdown
   | Error_in_deps                     of (Dep.t * t) list
   | Digest_error
   | Undigestable                      of Fs.Kind.t
   | Glob_error                        of string
   | Jenga_root_problem                of string
-
   | No_definition_for_alias
   | No_rule_or_source
   | Non_zero_status
   | No_directory_for_target           of string
-
   | Inconsistent_proxies              of Proxy_map.inconsistency
   | Duplicate_scheme_ids              of scheme_id list
-
   | Scheme_raised                     of exn
-  | Generator_raised                  of exn
-  | Internal_action_raised            of exn
-  | Running_external_action_raised    of exn
-  | Scanner_raised                    of exn
-
+  | Running_job_raised    of exn
   | Duplicate_rules_for_paths         of Path.t list
   | Rule_failed_to_generate_targets   of Path.t list
+  | Usercode_raised                   of Run_kind.t * exn
   (* | Cycle... *)
+  | Scanning_with_internal_action_not_supported of Action_id.t
 
+  let to_string_one_line = function
+    | Shutdown                          -> "Shutdown"
+    | Error_in_deps _                   -> "Unable to build dependencies"
+    | Digest_error                      -> "unable to digest file"
+    | Glob_error s                      -> sprintf "glob error: %s" s
+    | Jenga_root_problem s              -> sprintf "Problem with JengaRoot.ml: %s" s
+    | No_definition_for_alias           -> "No definition found for alias"
+    | No_rule_or_source                 -> "No rule or source found for target"
+    | Non_zero_status                   -> "External command has non-zero exit code"
+    | No_directory_for_target s         -> sprintf "No directory for target: %s" s
+    | Scheme_raised _                   -> "Generator scheme raised exception"
+    | Running_job_raised _              -> "Running external job raised exception"
+    | Duplicate_rules_for_paths _       -> "Duplicate rules for paths"
+    | Rule_failed_to_generate_targets _ -> "Rule failed to generate targets"
 
-  let to_string = function
-
-    | Error_in_deps _ -> "Unable to build dependencies"
-    | Digest_error -> "unable to digest file"
-    | Undigestable k -> sprintf "undigestable file kind: %s" (Fs.Kind.to_string k)
-    | Glob_error s -> sprintf "glob error: %s" s
-    | Jenga_root_problem s -> sprintf "Problem with JengaRoot.ml: %s" s
-
-    | No_definition_for_alias -> "No definition found for alias"
-    | No_rule_or_source -> "No rule or source found for target"
-    | Non_zero_status -> "External action completed with non-zero exit code"
-    | No_directory_for_target s -> sprintf "No directory for target: %s" s
-
-    | Duplicate_scheme_ids xs ->
+    | Usercode_raised (k,_) ->
+      sprintf "User-code(%s) raised exception" (Run_kind.to_string k)
+    | Undigestable k                    ->
+      sprintf "undigestable file kind: %s" (Fs.Kind.to_string k)
+    | Duplicate_scheme_ids xs           ->
       sprintf "Duplicate schemes with ids: %s"
         (String.concat ~sep:" " (List.map xs ~f:(sprintf "%S")))
-
     | Inconsistent_proxies inconsistency ->
       sprintf "Inconsistency proxies on keys: %s"
         (String.concat ~sep:" " (List.map inconsistency ~f:(fun (key,_) ->
           Pm_key.to_string key)))
 
-    (* multi line errors *)
-    | Scheme_raised exn ->
-      sprintf "Generator scheme raised exception:\n%s" (Exn.to_string exn)
+    | Scanning_with_internal_action_not_supported id ->
+      sprintf "Scanning_with_internal_action_not_supported : %s"
+        (Action_id.to_string id)
 
-    | Generator_raised exn ->
-      sprintf "Generator raised exception:\n%s" (Exn.to_string exn)
+  let to_extra_lines = function
+    | Shutdown
+    | Error_in_deps _
+    | Digest_error
+    | Undigestable _
+    | Glob_error _
+    | Jenga_root_problem _
+    | No_definition_for_alias
+    | No_rule_or_source
+    | Non_zero_status
+    | No_directory_for_target _
+    | Duplicate_scheme_ids _
+    | Inconsistent_proxies _
+    | Scanning_with_internal_action_not_supported _
+      -> []
 
-    | Internal_action_raised exn ->
-      sprintf "Internal action raised exception:\n%s" (Exn.to_string exn)
+    | Scheme_raised exn
+    | Usercode_raised (_,exn)
+    | Running_job_raised exn
+      -> [Exn.to_string exn]
 
-    | Running_external_action_raised exn ->
-      sprintf "Running external action raised exception:\n%s" (Exn.to_string exn)
+    | Duplicate_rules_for_paths paths
+    | Rule_failed_to_generate_targets paths
+      -> List.map paths ~f:(fun path -> "- " ^ Path.to_rrr_string path)
 
-    | Scanner_raised exn ->
-      sprintf "Scanner raised exception:\n%s" (Exn.to_string exn)
-
-    | Duplicate_rules_for_paths paths ->
-      sprintf "Duplicate rules for paths:\n- %s"
-        (String.concat ~sep:"\n- " (List.map paths ~f:Path.to_rrr_string))
-
-    | Rule_failed_to_generate_targets paths ->
-      sprintf "Rule failed to generate targets:\n- %s"
-        (String.concat ~sep:"\n- " (List.map paths ~f:Path.to_rrr_string))
+  let messages dep t =
+    Message.error "%s: %s" (Dep.to_string dep) (to_string_one_line t);
+    List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s);
 
 end
 
@@ -601,19 +676,18 @@ module What = struct (* what was build *)
   type t = Source | Something_else
 end
 
-module Run_kind = struct
-  type t = Generator | Scanner | Action
-  with sexp_of
-  let to_string t = Sexp.to_string (sexp_of_t t)
-end
-
 module Status = struct
   type t =
-  | Checking
-  | Blocked         (* for deps to be checked *)
-  | Throttled of Run_kind.t
+  | Checking (* the default status we return to after doing anything of significance, such
+                as running a generator/scanner or action *)
+  | Blocked (* for deps to be checked *)
+
+  (* Jwait/Running show when an external job is in/though the -j throttle *)
+  | Jwait of Run_kind.t
   | Running of Run_kind.t
-  | Internal of Run_kind.t
+
+  | Usercode of Run_kind.t
+
   | Built of What.t
   | Error of Reason.t
 end
@@ -621,7 +695,7 @@ end
 module Progress : sig
 
   type t
-  val create : unit -> t
+  val create : Fs.t -> t
 
   val set_status : t -> key:Dep.t -> data:Status.t -> unit
   val mask_unreachable : t -> DG.t -> unit
@@ -644,11 +718,13 @@ module Progress : sig
 end = struct
 
   type t = {
+    fs : Fs.t;
     status : Status.t Dep.Table.t;
     mutable mask : Dep.Hash_set.t;
   }
 
-  let create () = {
+  let create fs = {
+    fs;
     status = Dep.Table.create();
     mask = Dep.Hash_set.create () ;
   }
@@ -687,35 +763,28 @@ end = struct
       match status with
       | Status.Checking                       -> cat Dot.Catagory.Waiting
       | Status.Blocked                        -> cat Dot.Catagory.Waiting
-      | Status.Throttled _                    -> cat Dot.Catagory.Waiting
+      | Status.Jwait _                        -> cat Dot.Catagory.Waiting
       | Status.Running _                      -> cat Dot.Catagory.Working
-      | Status.Internal _                     -> cat Dot.Catagory.Working
+      | Status.Usercode _                     -> cat Dot.Catagory.Working
       | Status.Built _                        -> cat Dot.Catagory.Good
       | Status.Error (Reason.Error_in_deps _) -> cat Dot.Catagory.Child_error
       | Status.Error _                        -> cat Dot.Catagory.Error
 
-  let final_status_to_string = function
-    | Status.Checking       -> "unexpectedly Checking"
-    | Status.Blocked        -> "unexpectedly Blocked"
-    | Status.Throttled k    -> sprintf "unexpectedly Throttled: %s" (Run_kind.to_string k)
-    | Status.Running k      -> sprintf "unexpectedly Running: %s" (Run_kind.to_string k)
-    | Status.Internal k     -> sprintf "unexpectedly Internal: %s" (Run_kind.to_string k)
-    | Status.Built _        -> "built"
-    | Status.Error reason   -> Reason.to_string reason
-
-  let suppress_reports_for = function
-    (* suppress reporting errors for
-       - stuff which was built ok
-       - error_in_deps errors (they'll be reported at the child)
-    *)
-    | Status.Built _ -> true
-    | Status.Error (Reason.Error_in_deps _) -> true
-    | _ -> false
-
   let message_errors t =
     iter_unmasked t ~f:(fun ~key:dep ~data:status ->
-      if suppress_reports_for status then () else
-        Message.error "%s: %s" (Dep.to_string dep) (final_status_to_string status)
+      match (
+        match status with
+        (* suppress shutdown/dep-errors errors *)
+        | Status.Error Reason.Shutdown
+        | Status.Error (Reason.Error_in_deps _)
+          -> None
+        | Status.Error reason -> Some reason
+        | _ -> None
+      ) with
+      | None -> ()
+      | Some reason ->
+        Message.error "(summary) %s: %s" (Dep.to_string dep)
+          (Reason.to_string_one_line reason)
     )
 
   module Counts = struct
@@ -724,29 +793,47 @@ end = struct
       (* still working... *)
       checking  : int;
       blocked   : int;
-      throttled : int;
+      jwait     : int;
       running   : int; (* external scanner/action *)
-      internal  : int; (* internal generator/scanner/action *)
+      usercode  : int; (* internal generator/scanner/action *)
       (* done... *)
       source    : int;
       built     : int; (* non source *)
       error     : int;
       failure   : int; (* error in dep *)
+
+      fds : int;
+
     } with bin_io
+
+    let zero = {
+     checking   = 0;
+     blocked    = 0;
+     jwait      = 0;
+     running    = 0;
+     usercode   = 0;
+     source     = 0;
+     built      = 0;
+     error      = 0;
+     failure    = 0;
+     fds = 0;
+    }
 
     let total {
       checking;
       blocked;
-      throttled;
+      jwait;
       running;
-      internal;
+      usercode;
       source;
       built;
       error;
-      failure
+      failure;
+
+      fds=_;
     } =
       source + built + error + failure +
-      checking + blocked + throttled + running + internal
+      checking + blocked + jwait + running + usercode
 
     let good t = t.built + t.source
     let fraction t = (good t) , (total t)
@@ -756,13 +843,14 @@ end = struct
     let to_labelled {
       checking;
       blocked;
-      throttled;
+      jwait;
       running;
-      internal;
+      usercode;
       source;
       built;
       error;
-      failure
+      failure;
+      fds;
     } = [
 
       ("built", built,
@@ -783,14 +871,17 @@ end = struct
       ("block", blocked,
        "the build of this target is blocked on one or more dependencies");
 
-      ("wait", throttled,
+      ("jwait", jwait,
        "target is ready to run an external command, but is limited by the -j threshold");
 
       ("run", running,
        "target is running an external build command (action or scanner)");
 
-      ("user", internal,
+      ("user", usercode,
        "target is running user ML code in the JengaRoot.ml");
+
+      ("fds", fds,
+       "Core_extended.Fd_leak_check.get_num_open_fds ()");
 
     ]
 
@@ -801,15 +892,13 @@ end = struct
           if n>99999 then 6 else
           if n>9999 then 5 else
           if n>999 then 4 else
-          if n>99 then 3 else
-          if n>9 then 2 else
-            1
+            3
         in
         let max = len (total t) in
         fun n ->
           let i = max - len n in
-          assert(not (0>i));
-          let spaces = String.make i ' ' in
+          (*assert(not (0>i));*) (* no, not all fields are part of total - i.e. fds *)
+          let spaces = if Int.(i < 1) then "" else String.make i ' ' in
           spaces
       in
       String.concat ~sep:", "
@@ -820,9 +909,9 @@ end = struct
   let snap t =
     let checking = ref 0 in
     let blocked = ref 0 in
-    let throttled = ref 0 in
+    let jwait = ref 0 in
     let running = ref 0 in
-    let internal = ref 0 in
+    let usercode = ref 0 in
     let source = ref 0 in
     let built = ref 0 in
     let error = ref 0 in
@@ -833,9 +922,9 @@ end = struct
           match status with
           | Status.Checking                         -> checking
           | Status.Blocked                          -> blocked
-          | Status.Throttled _                      -> throttled
+          | Status.Jwait _                          -> jwait
           | Status.Running _                        -> running
-          | Status.Internal _                       -> internal
+          | Status.Usercode _                       -> usercode
           | Status.Built What.Source                -> source
           | Status.Built _                          -> built
           | Status.Error (Reason.Error_in_deps _)   -> failure
@@ -845,19 +934,19 @@ end = struct
     {Counts.
      checking   = !checking;
      blocked    = !blocked;
-     throttled  = !throttled;
+     jwait      = !jwait;
      running    = !running;
-     internal   = !internal;
+     usercode   = !usercode;
      source     = !source;
      built      = !built;
      error      = !error;
      failure    = !failure;
+
+     fds        = Core_extended.Fd_leak_check.get_num_open_fds ();
     }
 
   let readme =
-    let progress = create() in (* dummy needed to get the count labels & descriptions *)
-    let counts = snap progress in
-    let labelled = Counts.to_labelled counts in
+    let labelled = Counts.to_labelled Counts.zero in
     let justify =
       let max =
         List.fold ~init:0 ~f:(fun x y -> if Int.(x > y) then x else y)
@@ -876,24 +965,70 @@ end = struct
 end
 
 (*----------------------------------------------------------------------
- Run_external_job
+Fork_and_report
 ----------------------------------------------------------------------*)
 
 exception Shutdown
 
+module Fork_and_report :  sig
+
+  val run :
+    Config.t ->
+    stdout_expected : bool ->
+    get_result: (stdout:string -> 'a) ->
+    need:string ->
+    putenv : (string * string) list ->
+    dir:Path.t ->
+    prog:string ->
+    args:string list ->
+    ('a, [ `non_zero_status | `other_error of exn ]) Result.t Deferred.t
+
+end = struct
+
+  let run config ~stdout_expected ~get_result ~need ~putenv ~dir ~prog ~args =
+    let where = Path.to_rrr_string dir in
+    let job_start =
+      Message.job_started ~need ~stdout_expected ~where ~prog ~args
+    in
+    let start_time = Time.now() in
+    Effort.track external_jobs_run (fun () ->
+      (match Config.delay_for_dev config with
+      | None -> return ()
+      | Some seconds -> Clock.after seconds
+      ) >>= fun () ->
+      Forker.run ~putenv ~dir ~prog ~args
+    ) >>= fun {Forker.Reply. stdout;stderr;outcome} ->
+    match Heart.is_broken Heart.is_shutdown with
+    | true  ->
+      return (Error (`other_error Shutdown))
+    | false ->
+      let duration = Time.diff (Time.now()) start_time in
+      Message.job_finished job_start ~outcome ~duration ~stdout ~stderr;
+      match outcome with
+      | `success -> return (Ok (get_result ~stdout))
+      | `error _ -> return (Error `non_zero_status)
+
+end
+
+(*----------------------------------------------------------------------
+ Run_external_job
+----------------------------------------------------------------------*)
+
 module Run_external_job : sig
 
   val shell :
-    delay_for_dev:Time.Span.t option ->
+    Config.t ->
     need:string ->
+    putenv : (string * string) list ->
     dir:Path.t ->
     prog:string ->
     args:string list ->
     (unit, [ `non_zero_status | `other_error of exn ]) Result.t Deferred.t
 
   val shell_stdout :
-    delay_for_dev:Time.Span.t option ->
+    Config.t ->
     need:string ->
+    putenv : (string * string) list ->
     dir:Path.t ->
     prog:string ->
     args:string list ->
@@ -901,86 +1036,15 @@ module Run_external_job : sig
 
 end = struct
 
-  let lines s =
-    match s with
-    | "" -> []
-    | "\n" -> [""]
-    | _ ->
-      let s =
-        match String.chop_suffix s ~suffix:"\n" with
-        | None -> s
-        | Some s -> s
-      in
-      String.split s ~on:'\n'
-
-  let run =
-    fun ~stdout_expected ~get_result ~delay_for_dev ~need ~dir ~prog ~args ->
-
-      let where = Path.to_rrr_string dir in
-
-      let job_start =
-        Message.job_started ~need ~stdout_expected ~where ~prog ~args
-      in
-      let start_time = Time.now() in
-
-      Effort.track external_action_counter (fun () ->
-        try_with (fun () ->
-          (match delay_for_dev with
-          | None -> return ()
-          | Some seconds -> Clock.after seconds
-          ) >>= fun () ->
-          Async_shell.run_full_and_error
-            ~working_dir:(Path.to_absolute_string dir) prog args
-        )
-      ) >>= fun result ->
-
-      match Heart.is_broken Heart.is_shutdown with
-      | true  ->
-        return (Error (`other_error Shutdown))
-
-      | false ->
-
-        let duration = Time.diff (Time.now()) start_time in
-
-        match result with
-        | Ok (stdout,stderr) ->
-          let result = get_result ~stdout in
-          let stdout = lines stdout in
-          let stderr = lines stderr in
-          let outcome = `success in
-          Message.job_finished job_start ~outcome ~duration ~stdout ~stderr;
-          return (Ok result)
-
-        | Error exn ->
-          let exn = Monitor.extract_exn exn in
-          let module SP = Async_shell.Process in
-
-          match exn with
-          | Async_shell.Process.Failed res ->
-            let outcome = `error (SP.status_to_string res.SP.status) in
-            let stdout = lines res.SP.stdout in
-            let stderr = lines res.SP.stderr in
-            Message.job_finished job_start ~outcome ~duration ~stdout ~stderr;
-            return (Error `non_zero_status)
-
-          | _ -> (* what? *)
-            let outcome = `error (Exn.to_string exn) in
-            let stdout = [] in
-            let stderr = [] in
-            Message.job_finished job_start ~outcome ~duration ~stdout ~stderr;
-            return (Error (`other_error exn))
-
-
-
   let shell =
     (* ignore stdout for commands run for effect *)
-    run
+    Fork_and_report.run
       ~stdout_expected:false
       ~get_result:(fun ~stdout:_ -> ())
 
   let shell_stdout =
     (* grab stdout for commands run as scanner *)
-    run
+    Fork_and_report.run
       ~stdout_expected:true
       ~get_result:(fun ~stdout -> stdout)
 
@@ -1008,7 +1072,6 @@ module Builder : sig (* layer error monad within tenacious monad *)
     'a list -> f:('a -> 'b t) -> ('b list * ('a * Reason.t) list) t
 
   val of_deferred : (unit -> 'a Deferred.t) -> 'a t
-  val try_deferred : (unit -> 'a Deferred.t) -> err:(exn -> Reason.t) -> 'a t
 
   val desensitize : 'a t -> ('a * Heart.t) t
   val sensitize : Heart.t -> unit t
@@ -1061,13 +1124,6 @@ end = struct
       Deferred.return (Ok x,Heart.unbreakable)
     )
 
-  let try_deferred f ~err =
-    Tenacious.lift (fun () ->
-      Monitor.try_with f >>= function
-      | Ok x -> Deferred.return (Ok x,Heart.unbreakable)
-      | Error exn -> Deferred.return (Error (err exn), Heart.unbreakable)
-    )
-
   let desensitize t = (* if not error *)
     Tenacious.lift_cancelable (fun ~cancel ->
       Deferred.bind (Tenacious.exec_cancelable ~cancel t) (function
@@ -1089,6 +1145,7 @@ end
 let return = Builder.return
 let ( *>>= ) = Builder.bind
 let error = Builder.error
+
 
 let build_all_in_sequence xs ~f = (* stopping on first error *)
   let rec loop acc = function
@@ -1124,41 +1181,6 @@ module RR = struct
 
 end
 
-(*----------------------------------------------------------------------
-  File system interface
-----------------------------------------------------------------------*)
-
-let digest_path
-    : (Fs.t -> Path.t -> [ `file of Digest.t | `missing ] Builder.t) =
-  fun fs path ->
-    Builder.of_tenacious (Fs.digest_file fs ~file:path) *>>= function
-    | `stat_error _   -> return `missing
-    | `undigestable k -> error (Reason.Undigestable k)
-    | `digest_error _ -> error Reason.Digest_error
-    | `digest digest  -> return (`file digest)
-
-let look_for_source : (Fs.t -> Path.t -> Proxy.t option Builder.t) =
-  fun fs path ->
-    digest_path fs path *>>= function
-    | `file digest    -> return (Some (Proxy.of_digest digest))
-    | `missing        -> return None
-
-let need_glob : (Fs.t -> Glob.t -> (What.t * Proxy_map.t) Builder.t) =
-  fun fs glob ->
-    Builder.of_tenacious (Fs.list_glob fs glob) *>>= function
-    | `stat_error _   -> error (Reason.Glob_error "no such directory")
-    | `not_a_dir      -> error (Reason.Glob_error "not a directory")
-    | `listing_error _-> error (Reason.Glob_error "unable to list")
-    | `listing listing ->
-      return (What.Something_else,
-              Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing))
-
-let ensure_directory : (Fs.t -> dir:Path.t -> unit Builder.t) =
-  fun fs ~dir ->
-    Builder.of_tenacious (Fs.ensure_directory fs ~dir) *>>= function
-    | `ok -> return ()
-    | `not_a_dir -> error (Reason.No_directory_for_target "not a directory")
-    | `failed -> error (Reason.No_directory_for_target "failed to create")
 
 (*----------------------------------------------------------------------
   Persist - static cache - saved to file between runs
@@ -1238,7 +1260,7 @@ type t = {
 
   config : Config.t; (* messaging choices *)
   fs : Fs.t; (* file system *)
-  throttle : unit Throttle.t; (* for external jobs *)
+  job_throttle : unit Throttle.t; (* -j throttle for external jobs *)
   persist : Persist.t; (* persisant cache *)
   memo : Memo.t; (* dynmaic cache *)
   progress : Progress.t; (* track state of each dep being built *)
@@ -1277,9 +1299,9 @@ let build_dep : (t ->  Dep.t -> Proxy_map.t Builder.t) =
   fun t dep -> t.recurse_build_dep t dep
 
 
-let enqueue_with_shutdown t run_kind f =
-  set_status t (Status.Throttled run_kind);
-  Throttle.enqueue t.throttle (fun () ->
+let enqueue_external_job t run_kind f =
+  set_status t (Status.Jwait run_kind);
+  Throttle.enqueue t.job_throttle (fun () ->
     if Heart.is_broken Heart.is_shutdown
     then (
       Deferred.return (Error (`other_error Shutdown));
@@ -1292,27 +1314,106 @@ let enqueue_with_shutdown t run_kind f =
     )
   )
 
+let error t reason =
+  let show_now =
+    match reason with
+    | Reason.Non_zero_status (* we see the error message from the command *)
+    | Reason.Error_in_deps _
+    | Reason.Shutdown
+        -> false
+    | _
+      -> true
+  in
+  if show_now then (
+    Reason.messages t.me reason;
+  );
+  error reason
+
+
+let try_deferred t ~reason f =
+  Builder.of_deferred (fun () ->
+    Monitor.try_with f
+  ) *>>= function
+  | Ok x -> return x
+  | Error exn ->
+    let exn = Monitor.extract_exn exn in
+    error t (reason exn)
+
+
+let run_user_code t env1 run_kind f =
+  let reason = (fun exn -> Reason.Usercode_raised (run_kind,exn)) in
+  try_deferred t ~reason (fun () ->
+    Effort.track user_functions_run (fun () ->
+      set_status t (Status.Usercode run_kind);
+      let putenv = Env1.putenv env1 in
+      List.iter putenv ~f:(fun (key,data) -> Core.Std.Unix.putenv ~key ~data);
+      f() >>= fun res ->
+      set_status t Status.Checking;
+      Deferred.return res
+    )
+  )
+
+
+(*----------------------------------------------------------------------
+  File system interface
+----------------------------------------------------------------------*)
+
+let digest_path
+    : (t -> Path.t -> [ `file of Digest.t | `missing | `is_a_dir ] Builder.t) =
+  fun t path ->
+    Builder.of_tenacious (Fs.digest_file t.fs ~file:path) *>>= function
+    | `stat_error _   -> return `missing
+    | `is_a_dir       -> return `is_a_dir
+    | `undigestable k -> error t (Reason.Undigestable k)
+    | `digest_error _ -> error t Reason.Digest_error
+    | `digest digest  -> return (`file digest)
+
+let look_for_source : (t -> Path.t -> Proxy.t option Builder.t) =
+  fun t path ->
+    digest_path t path *>>= function
+    | `file digest    -> return (Some (Proxy.of_digest digest))
+    | `missing        -> return None
+    | `is_a_dir       -> return None
+
+let need_glob : (t -> Glob.t -> (What.t * Proxy_map.t) Builder.t) =
+  fun t glob ->
+    Builder.of_tenacious (Fs.list_glob t.fs glob) *>>= function
+    | `stat_error _   -> error t (Reason.Glob_error "no such directory")
+    | `not_a_dir      -> error t (Reason.Glob_error "not a directory")
+    | `listing_error _-> error t (Reason.Glob_error "unable to list")
+    | `listing listing ->
+      return (What.Something_else,
+              Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing))
+
+let ensure_directory : (t -> dir:Path.t -> unit Builder.t) =
+  fun t ~dir ->
+    Builder.of_tenacious (Fs.ensure_directory t.fs ~dir) *>>= function
+    | `ok -> return ()
+    | `not_a_dir -> error t (Reason.No_directory_for_target "not a directory")
+    | `failed -> error t (Reason.No_directory_for_target "failed to create")
+
 (*----------------------------------------------------------------------
   running things - generator, scanners, actions
 ----------------------------------------------------------------------*)
 
-let run_generator : (t -> RR.t -> Gen_key.t -> Rule_generator.t -> Ruleset.t Builder.t) =
-  fun t rr gen_key generator ->
-    set_status t (Status.Internal Run_kind.Generator);
-    Message.reason "Generating rules: %s [%s]"
-      (Gen_key.to_string gen_key)
-      (RR.to_string rr);
-    Builder.try_deferred ~err:(fun exn -> Reason.Generator_raised exn) (fun () ->
-      Effort.track generation_calls (fun () ->
+let run_generator :
+    (t -> Env1.t -> RR.t -> Gen_key.t -> Rule_generator.t -> Ruleset.t Builder.t) =
+  fun t env1 rr gen_key generator ->
+    let message() =
+      Message.reason "Generating rules: %s [%s]"
+        (Gen_key.to_string gen_key)
+        (RR.to_string rr);
+    in
+    run_user_code t env1 Run_kind.Generator (fun () ->
+      message();
+      Effort.track generators_run (fun () ->
         Rule_generator.gen generator
       )
     ) *>>= fun rules ->
     match (Ruleset.create rules) with
     | `ok ruleset -> return ruleset
-    | `dups paths -> error (Reason.Duplicate_rules_for_paths paths)
+    | `dups paths -> error t (Reason.Duplicate_rules_for_paths paths)
 
-
-exception Scanning_with_internal_action_not_supported of Action_id.t
 
 let run_scanner :
     (t -> RR.t -> Env1.t -> Scanner.t -> Dep.t list Builder.t) =
@@ -1322,32 +1423,32 @@ let run_scanner :
     in
     match scanner with
     | `old_internal scan_id ->
-      Builder.try_deferred ~err:(fun exn -> Reason.Scanner_raised exn) (fun () ->
+      run_user_code t env1 Run_kind.Scanner (fun () ->
         message();
-        set_status t (Status.Internal Run_kind.Scanner);
-        Effort.track scanner_calls (fun () ->
+        Effort.track scanners_run (fun () ->
           Env1.run_scanner env1 scan_id
         )
       )
     | `local_deps (dir1,action) ->
       match Action.case action with
-      (* todo - think about combining (internal) scanner-actions with internal action *)
       | `id action_id ->
-        error (Reason.Scanner_raised
-                 (Scanning_with_internal_action_not_supported action_id))
+        error t (Reason.Scanning_with_internal_action_not_supported action_id)
       | `xaction x ->
-        let delay_for_dev = Config.delay_for_dev t.config in
         let need = "scanner" in
+        let putenv = Env1.putenv env1 in
         let {Xaction.dir;prog;args} = x in
         Builder.of_deferred (fun () ->
-          enqueue_with_shutdown t Run_kind.Scanner (fun () ->
+          enqueue_external_job t Run_kind.Scanner (fun () ->
             message();
-            Run_external_job.shell_stdout ~delay_for_dev ~need ~dir ~prog ~args
+            Effort.track scanners_run (fun () ->
+              Run_external_job.shell_stdout t.config ~need ~putenv ~dir ~prog ~args
+            )
           )
         ) *>>= function
         | Ok stdout                  -> return (Dep.parse_string_as_deps ~dir:dir1 stdout)
-        | Error `non_zero_status     -> error Reason.Non_zero_status
-        | Error (`other_error exn)   -> error (Reason.Running_external_action_raised exn)
+        | Error `non_zero_status     -> error t Reason.Non_zero_status
+        | Error (`other_error Shutdown) -> error t Reason.Shutdown
+        | Error (`other_error exn)   -> error t (Reason.Running_job_raised exn)
 
 
 let run_action :
@@ -1361,23 +1462,31 @@ let run_action :
     in
     match Action.case action with
     | `id action_id ->
-      Builder.try_deferred ~err:(fun exn -> Reason.Internal_action_raised exn) (fun ()->
+      run_user_code t env1 Run_kind.Action (fun ()->
         message();
-        set_status t (Status.Internal Run_kind.Action);
-        Env1.run_internal_action env1 action_id
+        Effort.track actions_run (fun () ->
+          Env1.run_internal_action env1 action_id
+        )
       )
     | `xaction x ->
-      let delay_for_dev = Config.delay_for_dev t.config in
+      (* The putenv is determined from the env defined in JengaRoot.ml
+         but we really DONT want every command to be sensitize to JengaRoot.ml
+         (its a compromise, but a necessary one!)
+      *)
+      let putenv = Env1.putenv env1 in
       let {Xaction.dir;prog;args} = x in
       Builder.of_deferred (fun () ->
-        enqueue_with_shutdown t Run_kind.Action (fun () ->
+        enqueue_external_job t Run_kind.Action (fun () ->
           message();
-          Run_external_job.shell ~delay_for_dev ~need ~dir ~prog ~args
+          Effort.track actions_run (fun () ->
+            Run_external_job.shell t.config ~need ~putenv ~dir ~prog ~args
+          )
         )
       ) *>>= function
       | Ok ()                      -> return ()
-      | Error `non_zero_status     -> error Reason.Non_zero_status
-      | Error (`other_error exn)   -> error (Reason.Running_external_action_raised exn)
+      | Error `non_zero_status     -> error t Reason.Non_zero_status
+      | Error (`other_error Shutdown) -> error t Reason.Shutdown
+      | Error (`other_error exn)   -> error t (Reason.Running_job_raised exn)
 
 
 let run_action :
@@ -1400,9 +1509,9 @@ let run_action :
   jenga_root
 ----------------------------------------------------------------------*)
 
-let digest_path_lr fs path_lr =
+let digest_path_lr t path_lr =
   match Path.LR.case path_lr with
-  | `local path -> digest_path fs path *>>= fun x -> return (Some x)
+  | `local path -> digest_path t path *>>= fun x -> return (Some x)
   | `remote _ ->
     (* remote paths are not properly supported yet
        - just here to allow regression tests to use external_jenga_root
@@ -1417,19 +1526,20 @@ let jenga_root : (t -> (Env1.t * Root_proxy.t) Builder.t) =
      which will reload any time the JengaRoot.ml is modified *)
   fun t ->
     (
-      digest_path_lr t.fs t.jenga_root_path *>>= function
+      digest_path_lr t t.jenga_root_path *>>= function
       | None -> return None
       | Some res -> match res with
-        (*| `directory -> error (Reason.Jenga_root_problem "is a directory")*)
-        | `missing -> error (Reason.Jenga_root_problem "missing")
+        (*| `directory -> error t (Reason.Jenga_root_problem "is a directory")*)
+        | `missing -> error t (Reason.Jenga_root_problem "missing")
+        | `is_a_dir -> error t (Reason.Jenga_root_problem "is-a-directory")
         | `file digest -> return (Some digest)
     )
     *>>= fun digest_opt ->
     Builder.of_deferred (fun () -> Load_root.get_env t.jenga_root_path) *>>= function
-    | Error _ -> error (Reason.Jenga_root_problem "failed to load")
+    | Error _ -> error t (Reason.Jenga_root_problem "failed to load")
     | Ok env ->
       match (Env1.of_env env) with
-      | `dups xs -> error (Reason.Duplicate_scheme_ids xs)
+      | `dups xs -> error t (Reason.Duplicate_scheme_ids xs)
       | `ok env1 -> return (env1,Root_proxy.create digest_opt) (* all ok *)
 
 let jenga_root : (t -> (Env1.t * Root_proxy.t) Builder.t) =
@@ -1502,10 +1612,10 @@ let build_deps : (t -> Dep.t list -> Proxy_map.t Builder.t) =
     Builder.for_all_collect_errors deps ~f:(build_dep t) *>>= fun (pms,errors) ->
     set_status t Status.Checking;
     match errors with
-    | _::_ -> error (Reason.Error_in_deps errors)
+    | _::_ -> error t (Reason.Error_in_deps errors)
     | [] ->
       match (Proxy_map.merge pms) with
-      | `err inconsistency -> error (Reason.Inconsistent_proxies inconsistency)
+      | `err inconsistency -> error t (Reason.Inconsistent_proxies inconsistency)
       | `ok pm -> return pm
 
 
@@ -1518,29 +1628,39 @@ let generate_ruleset_if_necessary : (t -> Gen_key.t -> Ruleset.t Builder.t) =
   fun t gen_key ->
     jenga_root t *>>= fun (env1,root_proxy) ->
     match (Env1.run_generator_scheme env1 gen_key) with
-    | Error exn -> error (Reason.Scheme_raised exn)
+    | Error exn -> error t (Reason.Scheme_raised exn)
     | Ok generator ->
       let generator_deps = Rule_generator.deps generator in
       build_deps t generator_deps *>>= fun proxy_map ->
       let rooted_proxy = Rooted_proxy.create root_proxy proxy_map in
-      let run_and_cache rr =
-        run_generator t rr gen_key generator *>>= fun ruleset ->
+      let run_and_cache ~old rr =
+        run_generator t env1 rr gen_key generator *>>= fun ruleset ->
+        begin
+          match old with
+          | None -> return ()
+          | Some old_ruleset ->
+            let stale = Ruleset.compare_for_stale ruleset ~old:old_ruleset in
+            Builder.of_deferred (fun () ->
+              remove_stale_artifacts ~gen_key ~stale
+            )
+        end *>>= fun () ->
         let rules = Ruleset.rules ruleset in
         set_status t Status.Checking;
         Hashtbl.set (generated t) ~key:gen_key ~data:(rooted_proxy,rules);
         return ruleset
       in
       match (Hashtbl.find (generated t) gen_key) with
-      | None -> run_and_cache RR.No_record_of_being_run_before
+      | None -> run_and_cache ~old:None RR.No_record_of_being_run_before
       | Some (prev,rules) ->
+        (* ok to use create_exn because there can be no duplicates
+           in the rules we saved in the generated cache *)
+        let ruleset = Ruleset.create_exn rules in
         let insensitive = false in (* always be correct/conservative for generators *)
         match Rooted_proxy.diff ~insensitive prev rooted_proxy with
-        | Some `root_changed -> run_and_cache RR.Jenga_root_changed
-        | Some (`proxy_map_changed keys) -> run_and_cache (RR.Deps_have_changed keys)
+        | Some `root_changed -> run_and_cache ~old:(Some ruleset) RR.Jenga_root_changed
+        | Some (`proxy_map_changed keys) ->
+          run_and_cache ~old:(Some ruleset) (RR.Deps_have_changed keys)
         | None ->
-          (* ok to use create_exn because there can be no duplicates
-             in the rules we saved in the generated cache *)
-          let ruleset = Ruleset.create_exn rules in
           return ruleset (* Up to date; dont run anything *)
 
 
@@ -1638,7 +1758,7 @@ let check_targets :
   *)
   fun t paths ->
     build_all_in_sequence paths ~f:(fun path ->
-      look_for_source t.fs path *>>= fun res -> return (path,res)
+      look_for_source t path *>>= fun res -> return (path,res)
     ) *>>= fun tagged ->
     let good,bad =
       List.partition_map tagged ~f:(function
@@ -1655,7 +1775,7 @@ let ensure_target_dirs : (t -> Path.t list -> unit Builder.t) =
   fun t targets ->
     build_all_in_sequence targets ~f:(fun target ->
       let dir = Path.dirname target in
-      ensure_directory t.fs ~dir
+      ensure_directory t ~dir
     ) *>>= fun (_:unit list) ->
     return ()
 
@@ -1669,7 +1789,7 @@ let prevent_action_overlap
         ~table:(Fs.active_targets fs)
         ~keys:targets
         ~notify_wait:(fun key ->
-          Message.message "waiting for action to complete for: %s"
+          Message.trace "waiting for action to complete for: %s"
             (Path.to_rrr_string key);
         )
         (*~notify_add:(fun target ->
@@ -1710,10 +1830,10 @@ let run_target_rule_action_if_necessary
         run_action t rr env1 action ~targets ~need
       ) *>>= fun () ->
       check_targets t targets *>>= function
-      | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
+      | `missing paths -> error t (Reason.Rule_failed_to_generate_targets paths)
       | `ok path_tagged_proxys ->
         match (Proxy_map.create_by_path path_tagged_proxys) with
-        | `err inconsistency -> error (Reason.Inconsistent_proxies inconsistency)
+        | `err inconsistency -> error t (Reason.Inconsistent_proxies inconsistency)
         | `ok targets_proxy_map ->
           let rule_proxy = {
             Rule_proxy.
@@ -1747,7 +1867,7 @@ let run_target_rule_action_if_necessary
           | `missing paths -> run_and_cache (RR.Targets_missing paths)
           | `ok path_tagged_proxys ->
             match (Proxy_map.create_by_path path_tagged_proxys) with
-            | `err inconsistency -> error (Reason.Inconsistent_proxies inconsistency)
+            | `err inconsistency -> error t (Reason.Inconsistent_proxies inconsistency)
             | `ok targets_proxy_map ->
               match (Proxy_map.diff prev.Rule_proxy.targets targets_proxy_map) with
               | Some keys ->
@@ -1805,7 +1925,7 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
     | `alias alias_id ->
       begin
         match (Ruleset.lookup_alias ruleset alias_id) with
-        | None -> error Reason.No_definition_for_alias
+        | None -> error t Reason.No_definition_for_alias
         | Some deps ->
           build_deps t deps *>>= fun pm ->
           return (What.Something_else, pm)
@@ -1817,11 +1937,27 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
           build_using_target_rule t tr ~demanded *>>= fun pm ->
           return (What.Something_else, pm)
         | None ->
-          look_for_source t.fs demanded *>>= function
-          | None -> error Reason.No_rule_or_source
-          | Some proxy ->
+          (* is there a source file?..
+             desensitize in case the path in a directory
+          *)
+          Builder.desensitize (digest_path t demanded) *>>= fun (res,heart) ->
+          match res with
+          | `missing ->
+            (* resensitize if there is there is nothing at this path *)
+            Builder.sensitize heart *>>= fun () ->
+            error t Reason.No_rule_or_source
+          | `file digest ->
+            (* resensitize if this path is a file *)
+            Builder.sensitize heart *>>= fun () ->
+            let proxy = Proxy.of_digest digest in
             let pm = Proxy_map.single (Pm_key.of_path demanded) proxy in
             return (What.Source, pm)
+          | `is_a_dir ->
+            (* DONT resensitize if this path is a directory *)
+            (* directory targets: foo/bar -> foo/bar/.DEFAULT *)
+            let goal = Dep.alias (Alias.default ~dir:demanded) in
+            build_dep t goal *>>= fun pm ->
+            return (What.Something_else, pm)
 
       end
 
@@ -1837,7 +1973,7 @@ let build_dep : (t -> Dep.t -> (What.t * Proxy_map.t) Builder.t) =
     | `scan (deps,scanner)      -> build_scanner t deps scanner
     | `path path                -> build_goal t (Goal.path path)
     | `alias alias              -> build_goal t (Goal.alias alias)
-    | `glob glob                -> need_glob t.fs glob
+    | `glob glob                -> need_glob t glob
     | `null                     -> return (What.Something_else, Proxy_map.empty)
 
 
@@ -1910,7 +2046,7 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
 let build_one_root_dep :
     (
       jenga_root_path: Path.LR.t ->
-      throttle: unit Throttle.t ->
+      job_throttle: unit Throttle.t ->
       Fs.t ->
       Persist.t ->
       Memo.t ->
@@ -1925,13 +2061,13 @@ let build_one_root_dep :
      And here we break out of the Builder monad, and revert to the plain
      tenacious monad - ignoring the proxy map or any errors.
   *)
-  fun ~jenga_root_path ~throttle fs persist memo discovered_graph
+  fun ~jenga_root_path ~job_throttle fs persist memo discovered_graph
     config progress ~demanded ->
     let node = DG.create_root discovered_graph in
     let t = {
       config;
       fs;
-      throttle;
+      job_throttle;
       persist;
       memo;
       progress;
@@ -2178,10 +2314,9 @@ let build_forever =
     let memo = Memo.create () in
     let discovered_graph = DG.create () in
 
-    let throttle =
+    let job_throttle =
       let max_concurrent_jobs = Config.j_number config in
-      Throttle.create ~continue_on_error:false ~max_concurrent_jobs
-
+      Throttle.create ~continue_on_error:true ~max_concurrent_jobs
     in
 
     (* construct the top-level tenacious builder only once *)
@@ -2189,7 +2324,9 @@ let build_forever =
       Tenacious.all_unit (
         List.map top_level_demands ~f:(fun demanded ->
           build_one_root_dep
-            ~jenga_root_path ~throttle fs persist memo discovered_graph
+            ~jenga_root_path
+            ~job_throttle
+            fs persist memo discovered_graph
             config progress ~demanded
         )
       )
@@ -2269,10 +2406,11 @@ module Run_now = struct
     match Action.case action with
     | `id id -> raise (Run_now_of_internal_action_not_supported id)
     | `xaction x ->
+      let config = For_user.config() in
       let need = "run_now" in
-      let delay_for_dev = None in
+      let putenv = [] in
       let {Xaction.dir;prog;args} = x in
-      shell ~delay_for_dev ~need ~dir ~prog ~args >>= function
+      shell config ~need ~putenv ~dir ~prog ~args >>= function
       | Error `non_zero_status     -> raise (Non_zero_status_from_action_run_now action)
       | Error (`other_error exn)   -> raise exn
       | Ok x                       -> Deferred.return x

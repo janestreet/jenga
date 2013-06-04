@@ -56,16 +56,18 @@ let extract_location exn =
 
 
 let load_for_jenga_with ~reader_load t_of_sexp path =
-  let filename = Path.to_rrr_string path in
-  Monitor.try_with (fun () ->
-    reader_load filename t_of_sexp
-  ) >>| function
-  | Ok t -> t
-  | Error exn ->
-    let exn = Monitor.extract_exn exn in
-    let loc = extract_location exn in
-    Message.load_sexp_error path ~loc exn;
-    raise exn
+  File_access.enqueue (fun () ->
+    let filename = Path.to_rrr_string path in
+    Monitor.try_with (fun () ->
+      reader_load filename t_of_sexp
+    ) >>| function
+    | Ok t -> t
+    | Error exn ->
+      let exn = Monitor.extract_exn exn in
+      let loc = extract_location exn in
+      Message.load_sexp_error path ~loc exn;
+      raise exn
+  )
 
 let load_sexp_for_jenga t_of_sexp = (* one *)
   load_for_jenga_with ~reader_load:Reader.load_sexp_exn t_of_sexp

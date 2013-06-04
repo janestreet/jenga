@@ -30,7 +30,7 @@ module Alias  = struct
 
   let to_string t =
     if Path.equal t.dir Path.the_root
-    then t.name
+    then sprintf ".%s" t.name
     else sprintf "%s/.%s" (Path.to_rrr_string t.dir) t.name
 
   let directory t = t.dir
@@ -338,6 +338,7 @@ end
 module Env = struct
 
   type t = {
+    putenv:(string * string) list;
     command_lookup_path : [`Replace of string list | `Extend of string list] option;
     action : Sexp.t -> unit Deferred.t;
     scan : Sexp.t -> Dep.t list Deferred.t;
@@ -346,9 +347,12 @@ module Env = struct
 
   let k_assert_false = fun _ -> assert false
 
-  let create ?command_lookup_path ?(action=k_assert_false) ?(scan=k_assert_false)
+  let create
+      ?(putenv=[]) ?command_lookup_path
+      ?(action=k_assert_false) ?(scan=k_assert_false)
       schemes =
     {
+      putenv;
       command_lookup_path;
       action;
       scan;

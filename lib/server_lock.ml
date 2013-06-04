@@ -41,9 +41,6 @@ let lock_running_server ~root_dir  ~port =
     at_exit (fun () ->
       (* To reduce user confusion: remove the .server file when jenga is not running *)
       (try Core.Std.Unix.unlink (server_filename) with _ -> ());
-      (* Also remove the .lock file.  I don't know why the Lock_file module doesn't try to
-         remove this; it only removes the .nfs_lock suffixed version of the file. *)
-      (try Core.Std.Unix.unlink (lock_filename) with _ -> ());
     );
     return ()
 

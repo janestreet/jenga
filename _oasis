@@ -2,7 +2,7 @@ OASISFormat:      0.3
 OCamlVersion:     >= 4.00.0
 FindlibVersion:   >= 1.3.2
 Name:             jenga
-Version:          109.24.00
+Version:          109.27.00
 Synopsis:         Build system
 Authors:          Jane Street Capital LLC <opensource@janestreet.com>
 Copyrights:       (C) 2013 Jane Street Capital LLC <opensource@janestreet.com>
@@ -27,7 +27,9 @@ Library jenga_lib
                       Discovered_graph,
                       Dot,
                       Effort,
+                      File_access,
                       For_user,
+                      Forker,
                       Fs,
                       Glob_to_re,
                       Heart,
@@ -45,15 +47,16 @@ Library jenga_lib
                       Run,
                       Server_lock,
                       Tenacious
-  BuildDepends:       async (>= 109.24.00),
+  BuildDepends:       async (>= 109.27.00),
                       async_inotify (>= 109.15.00),
+                      parallel (>= 109.27.00),
                       async_shell (>= 109.17.00),
                       bin_prot (>= 109.15.00),
                       bin_prot.syntax,
                       comparelib (>= 109.15.00),
                       comparelib.syntax,
-                      core (>= 109.24.00),
-                      core_extended (>= 109.24.00),
+                      core (>= 109.27.00),
+                      core_extended (>= 109.27.00),
                       fieldslib (>= 109.20.00),
                       fieldslib.syntax,
                       ocaml_plugin (>= 109.22.00),
@@ -69,6 +72,7 @@ Library jenga_lib
                       async,
                       async_shell,
                       async_inotify,
+                      parallel,
                       pcre,
                       ocaml_plugin,
                       threads

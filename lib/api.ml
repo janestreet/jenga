@@ -43,7 +43,8 @@ module Raw_sexp_makefile_rule = struct
 
   type t = string list with sexp
 
-  let load_many path = For_user.load_sexps_for_jenga t_of_sexp path
+  let load_many path =
+    For_user.load_sexps_for_jenga t_of_sexp path
 
   let split_list_at_colons =
     let rec loop acc xs  =
@@ -98,3 +99,6 @@ let parse_rules_from_simple_makefile path =
       return (implicit_default_rule :: rules)
 
 include Build.Run_now
+
+
+let enqueue_file_access = File_access.enqueue

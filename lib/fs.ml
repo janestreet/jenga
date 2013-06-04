@@ -51,17 +51,15 @@ end
 
 
 (*----------------------------------------------------------------------
- System lstat - counted
+ System lstat - counted; exns caught
 ----------------------------------------------------------------------*)
 
 let unix_lstat path =
   Effort.track lstat_counter (fun () ->
-    Unix.lstat (Path.to_absolute_string path)
+    try_with (fun () ->
+      Unix.lstat (Path.to_absolute_string path)
+    )
   )
-
-let unix_lstat_kind path =
-  unix_lstat path >>| fun u -> u.Unix.Stats.kind
-
 
 (*----------------------------------------------------------------------
   Reduced Stat info
@@ -122,11 +120,8 @@ end = struct
     }
 
   let lstat path =
-    try_with (fun () ->
-      unix_lstat path >>| fun u -> of_unix_stats u
-    ) >>= fun res ->
-    match res with
-    | Ok x -> return (Ok x)
+    unix_lstat path >>= function
+    | Ok u -> return (Ok (of_unix_stats u))
     | Error exn -> return (Error (Error.of_exn exn))
 
 end
@@ -191,24 +186,26 @@ module Compute_digest : sig
 end = struct
 
   let of_file path =
-    Effort.track digest_counter (fun () ->
-      unlogged "DIGEST: %s..." (Path.to_absolute_string path);
-      In_thread.run (fun () ->
-        try (
-          let ic = Caml.open_in_bin (Path.to_absolute_string path) in
-          let res =
-            try (
-              let d = External_digest.channel ic (-1) in
-              let res = External_digest.to_hex d in
-              unlogged "DIGEST: %s... %s" (Path.to_absolute_string path) res;
-              Ok (Digest.of_string res)
-            )
-            with exn -> Error (Error.of_exn exn)
-          in
-          Caml.close_in ic;
-          res
+    File_access.enqueue (fun () ->
+      Effort.track digest_counter (fun () ->
+        unlogged "DIGEST: %s..." (Path.to_absolute_string path);
+        In_thread.run (fun () ->
+          try (
+            let ic = Caml.open_in_bin (Path.to_absolute_string path) in
+            let res =
+              try (
+                let d = External_digest.channel ic (-1) in
+                let res = External_digest.to_hex d in
+                unlogged "DIGEST: %s... %s" (Path.to_absolute_string path) res;
+                Ok (Digest.of_string res)
+              )
+              with exn -> Error (Error.of_exn exn)
+            in
+            Caml.close_in ic;
+            res
+          )
+          with exn -> Error (Error.of_exn exn)
         )
-        with exn -> Error (Error.of_exn exn)
       )
     )
 
@@ -246,37 +243,58 @@ end = struct
   } with sexp, bin_io, compare
 
   let run_ls ~dir =
-    Effort.track ls_counter (fun () ->
-     (*Message.message "LS: %s..." (Path.to_absolute_string dir);*)
-      try_with (fun () ->
-        let path_string = Path.to_absolute_string dir in
-        Unix.opendir path_string >>= fun dir_handle ->
-        let close () =
-          don't_wait_for (
+    File_access.enqueue (fun () ->
+      let path_string = Path.to_absolute_string dir in
+      Effort.track ls_counter (fun () ->
+        try_with (fun () -> Unix.opendir path_string) >>= function
+        | Error exn -> return (Error (Error.of_exn exn)) (* opendir failed *)
+        | Ok dir_handle ->
+          (* opendir succeeded, we must be sure to close *)
+          let close () =
             try_with (fun () -> Unix.closedir dir_handle) >>| function | Ok () -> ()
             | Error exn ->
               Message.error "Unix.closedir failed: %s\n%s" path_string (Exn.to_string exn)
-          )
-        in
-        let rec loop acc =
-          try_with (fun () -> Unix.readdir dir_handle) >>= function
-          | Ok "." -> loop acc
-          | Ok ".." -> loop acc
-          | Ok string ->
-            let path = Path.relative ~dir string in
-            unix_lstat_kind path >>= fun kind ->
-            loop ((path,kind) :: acc)
-          | Error exn ->
-            match Monitor.extract_exn exn with
-            | End_of_file -> close(); return acc
-            | exn -> close(); raise exn
-        in
-        loop []
+          in
+          (* catch all exns while processing so we can close in every case *)
+          try_with (fun () ->
+            let rec loop acc =
+              try_with (fun () -> Unix.readdir dir_handle) >>= function
+              | Ok "." -> loop acc
+              | Ok ".." -> loop acc
+              | Ok string ->
+                let path = Path.relative ~dir string in
+                begin
+                  unix_lstat path >>= function
+                  | Error _e ->
+                    loop acc
+                  | Ok u ->
+                    let kind = u.Unix.Stats.kind in
+                    loop ((path,kind) :: acc)
+                end
+              | Error exn ->
+                match Monitor.extract_exn exn with
+                | End_of_file ->
+                  (* no more filenames - normal; we are finished listing *)
+                  return { listing = acc }
+                | exn ->
+                  (* some other unexpected error; raise to outer handler *)
+                  raise exn
+            in
+            loop []
+
+          ) >>= fun res ->
+          (* convert exn -> Or_error *)
+          let ore =
+            match res with
+            | Error exn -> Error (Error.of_exn exn)
+            | Ok x -> Ok x
+          in
+          (* close in every case *)
+          close () >>= fun () ->
+          return ore
       )
-      >>= function
-      | Error exn -> return (Error (Error.of_exn exn))
-      | Ok listing -> return (Ok { listing })
     )
+
 
   let paths t = List.map ~f:fst t.listing
   let paths_and_kinds t = t.listing
@@ -345,13 +363,12 @@ end = struct
 
   module Inotify = Async_inotify
 
-  type what = [`file|`dir]
-
   type t = {
     ignore : (path:string -> bool);
     expect : (path:string -> bool);
     notifier : Inotify.t ;
-    glass_hearts : (what * Heart.Glass.t) String.Table.t;
+    file_glass : Heart.Glass.t String.Table.t;
+    dir_glass : Heart.Glass.t String.Table.t;
   }
 
   let paths_of_event t =
@@ -376,33 +393,41 @@ end = struct
         (* mustn't log the watcher event, because writing to the log
            file will cause a new event !! *)
         unlogged "Watcher, event: %s" (Inotify.Event.to_string event);
+
         List.iter (paths_of_event t event) ~f:(fun path ->
           unlogged "Watcher, event/path: %s" path;
-          match (Hashtbl.find t.glass_hearts path) with
+
+          begin match (Hashtbl.find t.dir_glass path) with
           | None -> ()
-          | Some (what,glass) ->
+          | Some glass ->
             assert (not (Heart.Glass.is_broken glass));
-            begin
-              match what with
-              | `dir -> ()
-              | `file ->
-                (*
-                  Show path events to which we are sensitized...
-
-                  Don't show events for targets of currently running actions.
-
-                  Will see events for externally changed files (i.e. edited source files
-                  or removed generated files), but also for paths affected by a running
-                  jenga action which are not declared as targets of that action.
-
-                *)
-                if not (t.expect ~path) then (
-                  Message.file_changed ~desc:(Heart.Glass.desc glass)
-                )
-            end;
             Heart.Glass.break glass;
-            Hashtbl.remove t.glass_hearts path;
+            Hashtbl.remove t.dir_glass path;
+          end;
+
+          begin match (Hashtbl.find t.file_glass path) with
+          | None -> ()
+          | Some glass ->
+            assert (not (Heart.Glass.is_broken glass));
+            (*
+              Show path events to which we are sensitized...
+
+              Don't show events for targets of currently running actions.
+
+              Will see events for externally changed files (i.e. edited source files
+              or removed generated files), but also for paths affected by a running
+              jenga action which are not declared as targets of that action.
+
+            *)
+            if not (t.expect ~path) then (
+              Message.file_changed ~desc:(Heart.Glass.desc glass)
+            );
+            Heart.Glass.break glass;
+            Hashtbl.remove t.file_glass path;
+          end
+
         );
+
         return ()
       )
     )
@@ -410,24 +435,25 @@ end = struct
   let create ~ignore ~expect =
     (* Have to pass a path at creation - what a pain, dont have one yet! *)
     Inotify.create ~recursive:false ~watch_new_dirs:false "/" >>= fun (notifier,_) ->
-    let glass_hearts = String.Table.create () in
-    let t = {ignore; expect; notifier; glass_hearts} in
+    let file_glass = String.Table.create () in
+    let dir_glass = String.Table.create () in
+    let t = {ignore; expect; notifier; file_glass; dir_glass} in
     suck_notifier_pipe t (Inotify.pipe notifier);
     return t
 
   let watch_file_or_dir t ~what ~path ~desc =
-    let dir =
+    let dir, glass_cache =
       (* A notifier is setup to watch [dir], computed from [path] & [what]
          The underlying Inotify module handles repeated setup for same path.
          So we make no attempt to avoid the repeats.
       *)
       match what with
-      | `file -> Filename.dirname path
-      | `dir -> path
+      | `file -> Filename.dirname path  , t.file_glass
+      | `dir -> path                    , t.dir_glass
     in
     unlogged "watch: %s (dir: %s)" path dir;
-    match (Hashtbl.find t.glass_hearts path) with
-    | Some (_what,glass) ->
+    match (Hashtbl.find glass_cache path) with
+    | Some glass ->
       assert (not (Heart.Glass.is_broken glass));
       return (Ok (Heart.of_glass glass))
     | None ->
@@ -441,7 +467,7 @@ end = struct
         return (Error (Error.of_exn exn))
       | Ok () ->
         let glass = Heart.Glass.create ~desc in
-        Hashtbl.add_exn t.glass_hearts ~key:path ~data:(what,glass);
+        Hashtbl.add_exn glass_cache ~key:path ~data:glass;
         return (Ok (Heart.of_glass glass))
 
 
@@ -508,6 +534,7 @@ end
 module Digest_result = struct
   type t = [
   | `stat_error of Error.t
+  | `is_a_dir
   | `undigestable of Kind.t
   | `digest_error of Error.t
   | `digest of Digest.t
@@ -574,6 +601,7 @@ end = struct
     | Error e -> (remove(); Tenacious.return (`stat_error e))
     | Ok stats ->
       let kind = Stats.kind stats in
+      if (is_dir stats) then Tenacious.return `is_a_dir else
       if not (is_digestable stats) then Tenacious.return (`undigestable kind) else
         match (
           match (Hashtbl.find t.cache file) with
@@ -1002,6 +1030,7 @@ end = struct
   }
 
   let create persist =
+
     let active_targets = Path.Table.create () in
 
     let ignore ~path =
@@ -1104,7 +1133,9 @@ let sync_inotify_delivery
         Heart.when_broken created_heart >>= fun () ->
         (* Setup new watcher; unlink the file; wait for the event *)
         watch_sync_file t ~path >>= fun deleted_heart ->
-        Sys.remove path >>= fun () ->
+        File_access.enqueue (fun () ->
+          Sys.remove path
+        ) >>= fun () ->
         Heart.when_broken deleted_heart >>= fun () ->
         return ()
       in
@@ -1113,7 +1144,9 @@ let sync_inotify_delivery
       let bag_elem = Bag.add created_but_not_deleted (path,remove) in
 
       unless_shutting_down ~f:(fun () ->
-        Writer.save path ~contents:sync_contents
+        File_access.enqueue (fun () ->
+          Writer.save path ~contents:sync_contents
+        )
       ) >>= fun () ->
 
       (* run the tenacious *)

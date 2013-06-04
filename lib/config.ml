@@ -4,6 +4,7 @@ open No_polymorphic_compare let _ = _squelch_unused_module_warning_ let _ = _squ
 
 type t = {
   j_number : int;
+  f_number : int;
   poll_forever : bool;
   verbose : bool;
   show_run_reason : bool;

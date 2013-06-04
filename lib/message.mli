@@ -25,8 +25,8 @@ val job_finished :
   Job_start.t ->
   outcome : [`success | `error of string] ->
   duration : Time.Span.t ->
-  stdout : string list ->
-  stderr : string list ->
+  stdout : string ->
+  stderr : string ->
   unit
 
 val load_jenga_root : Path.LR.t -> unit

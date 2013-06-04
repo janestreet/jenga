@@ -32,8 +32,8 @@ end
 
 module Job_output = struct
   type t = {
-    stdout : string list;
-    stderr : string list;
+    stdout : string;
+    stderr : string;
   } with fields, sexp_of
 end
 
@@ -153,6 +153,17 @@ let need_quoting x = String.contains x ' '
 let quote_arg x = if need_quoting x then sprintf "'%s'" x else x
 let concat_args_quoting_spaces xs = String.concat ~sep:" " (List.map xs ~f:quote_arg)
 
+let output_lines s =
+  match s with
+  | "" -> []
+  | "\n" -> [""]
+  | _ ->
+    let s =
+      match String.chop_suffix s ~suffix:"\n" with
+      | None -> s
+      | Some s -> s
+    in
+    String.split s ~on:'\n'
 
 let omake_style_logger config event =
 
@@ -213,6 +224,8 @@ let omake_style_logger config event =
     {Job_finish. outcome; duration},
     {Job_output. stdout; stderr}
   ) ->
+    let stdout = output_lines stdout in
+    let stderr = output_lines stderr in
     if not quiet then (
       let job_failed =
         match outcome with | `success -> false | `error _ -> true
