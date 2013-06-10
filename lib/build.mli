@@ -12,13 +12,7 @@ end
 module Progress : sig
   type t
   val create : Fs.t -> t
-  module Counts : sig
-    type t with bin_io
-    val to_string : t -> string
-    val fraction : t -> (int*int)
-  end
-  val snap : t -> Counts.t
-  val readme : string list
+  val snap : t -> Mon.Progress.t
 end
 
 val build_forever :
@@ -36,3 +30,7 @@ module Run_now : sig
   val run_action_now : Description.Action.t -> unit Deferred.t
   val run_action_now_stdout : Description.Action.t -> string Deferred.t
 end
+
+val persist_saves_done : Effort.Counter.t
+
+

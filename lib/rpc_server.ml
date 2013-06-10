@@ -2,8 +2,6 @@
 open Core.Std
 open Async.Std
 
-module Progress = Build.Progress
-
 let make_periodic_pipe_writer span ~aborted ~f =
   let (r,w) = Pipe.create () in
   don't_wait_for (
@@ -33,7 +31,7 @@ let go ~root_dir progress =
     Rpc.Pipe_rpc.implement Rpc_intf.progress_stream
       (fun () () ~aborted ->
         make_periodic_pipe_writer progress_report_span ~aborted ~f:(fun () ->
-          Progress.snap progress
+          Build.Progress.snap progress
         )
       )
   in

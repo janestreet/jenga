@@ -17,6 +17,11 @@ module Path : sig
   val basename : t -> string
   val the_root : t
   val root_relative : string -> t
+
+  (* [dotdot ~dir path]
+     compute relative ".."-based-path-string to reach [path] from [dir] *)
+  val dotdot : dir:t -> t -> string
+
 end
 
 module Kind : sig
@@ -53,7 +58,6 @@ module Dep : sig
   val scan : t list -> Sexp.t -> t (* TODO: remove, in favour of more general scanner *)
   val scanner : t list -> Scanner.t -> t
   val alias : Alias.t -> t
-  val null : t
   val parse_string : dir:Path.t -> string -> t
 end
 

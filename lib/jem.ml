@@ -5,39 +5,88 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
-(* copied from run.ml *)
-let jenga_root_basename =
-  match Core.Std.Sys.getenv "JENGA_ROOT" with
-  | None -> "JengaRoot.ml"
-  | Some x -> x
-
-let discover_root() =
-  match Repo_root.discover ~marker:jenga_root_basename with
-  | `cant_find_root ->
-    failwithf "Cant find '%s' in start-dir or any ancestor dir"
-      jenga_root_basename ()
-  | `ok root -> root
-
 let retry_span = sec 0.5
 
-type config  = {
-  brief : bool;
-}
+module Finish_time_estimator : sig
+
+  type t
+  val create : decay_factor_per_second:float -> t
+  val push_todo : t -> int -> unit
+  val estimated_finish_time_string : t -> string
+
+end = struct
+
+  type t = {
+    decay_factor_per_second : float;
+    mutable rate : float; (* latest estimate of targets/sec *)
+    mutable last_push_time : Time.t;
+    mutable last_todo : int;
+  }
+
+  let create ~decay_factor_per_second = {
+    decay_factor_per_second;
+    rate = 0.0;
+    last_push_time = Time.epoch;
+    last_todo = 0;
+  }
+
+  let calc_new_rate t ~now ~todo =
+    let duration = Time.diff now t.last_push_time in
+    let seconds = Time.Span.to_sec duration in
+    assert (Float.(seconds >= 0.0));
+    let progress = t.last_todo - todo in (* might be negative *)
+    let current_rate = float progress /. seconds in
+    let decay = t.decay_factor_per_second ** seconds in
+    (decay *. t.rate) +. ((1.0 -. decay) *. current_rate)
+
+  let push_todo t todo =
+    let now = Time.now () in
+    let new_rate = calc_new_rate t ~now ~todo in
+    (
+      t.last_todo      <- todo;
+      t.last_push_time <- now;
+      t.rate           <- new_rate
+    )
+
+  let to_min_string_no_date time =
+    let ofday = Time.to_local_ofday time in
+    let span = Time.Ofday.to_span_since_start_of_day ofday in
+    let parts = Time.Span.to_parts span in
+    let module P = Time.Span.Parts in
+    sprintf "%02d:%02d" parts.P.hr parts.P.min
+
+  (*let to_sec_string_no_date t = Time.Ofday.to_sec_string (Time.to_local_ofday t)*)
+
+  let estimated_finish_time_string t =
+    if Int.(t.last_todo <= 0) then ", finished"
+    else
+      (* will never finish with a negative or zero rate *)
+      if Float.(t.rate <= 0.0) then ""
+      else
+        let duration = Time.Span.scale (sec 1.0) (float t.last_todo /. t.rate) in
+        (* pointless to show a duration which is silly big *)
+        if Time.Span.(duration > Time.Span.of_hr 12.) then ""
+        else
+          ", finish: " ^ to_min_string_no_date (Time.add (Time.now()) duration)
+
+end
 
 let message fmt = ksprintf (fun s -> Printf.printf "\027[2K%s\r%!" s) fmt
 
-let run config =
+let run mode =
 
-  let root_dir = discover_root() in
-
+  let root_dir = Init.discover_root() in
   let last_progress = ref None in
+  let estimator =
+    (* The bigger the decay-factor, the more stable the estimate *)
+    Finish_time_estimator.create ~decay_factor_per_second:0.95
+  in
 
   let string_of_progress progress =
-    let (top,bot) = Build.Progress.Counts.fraction progress in
-    let fraction_string = sprintf "%d / %d" top bot in
-    if config.brief
-    then fraction_string
-    else sprintf "%s (%s)" (Build.Progress.Counts.to_string progress) fraction_string
+    let todo = Mon.Progress.todo progress in
+    Finish_time_estimator.push_todo estimator todo;
+    let finish = Finish_time_estimator.estimated_finish_time_string estimator in
+    Mon.Progress.to_string mode progress ^ finish
   in
 
   let string_of_last_progress () =
@@ -91,7 +140,7 @@ let run config =
             return false
           | Ok conn ->
             suck_progress_pipe conn >>= fun () ->
-            message "lost connection with: %s" server_name;
+            (*message "lost connection with: %s" server_name;*)
             return true
         )
       )
@@ -108,9 +157,9 @@ let run config =
   poll_for_connection ~retry
 
 
-let main config =
+let main mode =
   Deferred.unit >>> (fun () ->
-    run config >>> (fun n ->
+    run mode >>> (fun n ->
       Shutdown.shutdown n
     )
   );
@@ -120,29 +169,16 @@ let main config =
 module Spec = Command.Spec
 let (+>) = Spec.(+>)
 
-let brief =
-  Spec.step (fun m x -> m ~brief:x)
-  +> Spec.flag "brief" Spec.no_arg
-    ~doc:" only display the omake-style progress fraction (done / total)"
+let full =
+  Spec.step (fun m x -> m ~full:x)
+  +> Spec.flag "full" Spec.no_arg
+    ~doc:" display breakdown for good & doing counts"
 
 let command_line () =
   Command.run (
-    Command.basic (brief)
-      ~summary:
-"Jenga monitor - monitor jenga running in the current repo."
-      ~readme:(fun () -> String.concat ~sep:"\n" (
-        List.concat [
-["Jem connects to a jenga instance running in the current repo,
-(or waits until one is started), and displays a stream of progress
-reports indicating the status of each target being considered.
-
-The number of targets in each of the following categorys is shown:
-"];
-           Build.Progress.readme;
-
-["
-Additionally, an omake-style progress fraction (done / total),
-where (done = built + source), is displayed."];
-          ]))
-      (fun ~brief () -> main {brief})
+    Command.basic (full)
+      ~summary:"Jenga monitor - monitor jenga running in the current repo."
+      ~readme:Mon.Progress.readme
+      (fun ~full () ->
+        main (if full then `full else `brief))
   )

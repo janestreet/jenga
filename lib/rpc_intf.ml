@@ -6,5 +6,5 @@ let progress_stream = Rpc.Pipe_rpc.create
   ~name:"progress-stream"
   ~version:0
   ~bin_query:Unit.bin_t
-  ~bin_response:Build.Progress.Counts.bin_t
+  ~bin_response:Mon.Progress.bin_t
   ~bin_error:Unit.bin_t

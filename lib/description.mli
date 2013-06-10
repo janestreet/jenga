@@ -71,7 +71,6 @@ module Dep : sig
   | `alias of Alias.t
   | `scan of t list * Scanner.t
   | `glob of Fs.Glob.t
-  | `null
   ]
 
   val to_string : t -> string
@@ -81,7 +80,6 @@ module Dep : sig
   val scan : t list -> Sexp.t -> t
   val scanner : t list -> Scanner.t -> t
   val alias : Alias.t -> t
-  val null : t
   val default : dir:Path.t -> t
   val parse_string : dir:Path.t -> string -> t
   val parse_string_as_deps : dir:Path.t -> string -> t list

@@ -38,20 +38,6 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path =
   Message.flushed () >>= fun () ->
   return 0
 
-
-let jenga_root_basename =
-  match Core.Std.Sys.getenv "JENGA_ROOT" with
-  | None -> "JengaRoot.ml"
-  | Some x -> x
-
-let discover_root() =
-  match Repo_root.discover ~marker:jenga_root_basename with
-  | `cant_find_root ->
-    failwithf "Cant find '%s' in start-dir or any ancestor dir"
-      jenga_root_basename ()
-  | `ok root -> root
-
-
 let install_signal_handlers () =
   trace "install_signal_handlers..";
   Signal.handle Signal.terminating ~f:(fun s ->
@@ -67,8 +53,8 @@ let main config =
   let root_dir,jenga_root_path =
     match Config.external_jenga_root config with
     | None ->
-      let dir = discover_root() in
-      dir,Path.LR.local (Path.root_relative jenga_root_basename)
+      let dir = Init.discover_root() in
+      dir,Path.LR.local (Path.root_relative Init.jenga_root_basename)
     | Some jenga_root ->
       let dir = Core.Std.Sys.getcwd () in
       Repo_root.set ~dir;
@@ -79,7 +65,13 @@ let main config =
 
   (* Remember the original start_dir, but then chdir to root_dir. This way jenga behaves
      the same regardless of what subdir it is started in. *)
-  let start_dir = Path.cwd() in
+
+  let start_dir =
+    match (Path.create_from_absolute (Core.Std.Sys.getcwd ())) with
+    | None -> failwith "start_dir, not under root_dir - impossible"
+    | Some x -> x
+  in
+
   Core.Std.Sys.chdir root_dir;
 
   (* Must do the chdir before Parallel.init is called, so that we have the same cwd when

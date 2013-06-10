@@ -13,7 +13,6 @@ val equal : t -> t -> bool
 val split : t -> t * string
 val dirname : t -> t
 val basename : t -> string
-val cwd : unit -> t
 val compare : t -> t -> int
 
 val to_absolute_string : t -> string
@@ -21,6 +20,11 @@ val to_rrr_string : t -> string (* "repo-root-relative" string *)
 
 val the_root : t
 val root_relative : string -> t
+
+(* [dotdot ~dir path]
+   compute relative ".."-based-path-string to reach [path] from [dir]
+*)
+val dotdot : dir:t -> t -> string
 
 val db_basename : string
 val sexp_db_basename : string

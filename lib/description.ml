@@ -154,7 +154,6 @@ module Dep = struct
     | `alias of Alias.t
     | `scan of t list * Scanner.t
     | `glob of Glob.t
-    | `null
     ]
     with sexp, bin_io, compare
     let hash = Hashtbl.hash
@@ -169,7 +168,6 @@ module Dep = struct
   let scanner ts scanner = `scan (ts,scanner)
   let scan1 ts id = `scan (ts,`old_internal id)
   let scan ts sexp = `scan (ts,`old_internal (Scan_id.of_sexp sexp))
-  let null = `null
 
   let rec to_string t =
     match t with
@@ -179,7 +177,6 @@ module Dep = struct
       sprintf "scan(: %s) - %s" (String.concat ~sep:" " (List.map deps ~f:to_string))
         (Scanner.to_string scanner)
     | `glob glob -> Fs.Glob.to_string glob
-    | `null -> "null"
 
   let default ~dir = alias (Alias.default ~dir)
 
@@ -193,7 +190,10 @@ module Dep = struct
     let dir,base =
       match String.rsplit2 string ~on:'/' with
       | None -> dir, string
-      | Some (rel_dir_string,base) -> Path.relative ~dir rel_dir_string, base
+      | Some (rel_dir_string,base) ->
+        match rel_dir_string with
+        | "." -> dir,string
+        | _ -> Path.relative ~dir rel_dir_string, base
     in
     match String.chop_prefix base ~prefix:"." with
     | None ->  path (Path.relative ~dir base)

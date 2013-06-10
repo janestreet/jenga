@@ -11,6 +11,8 @@ let jenga_show_persist =
 let message = Message.(if jenga_show_persist then message else trace)
 let message fmt = ksprintf (fun s -> message "Persist: %s" s) fmt
 
+let error fmt = ksprintf (fun s -> Message.error "Persist: %s" s) fmt
+
 let time_async f =
   let start_time = Time.now() in
   f () >>= fun res ->
@@ -29,6 +31,8 @@ module State : sig
 
   val load_db : db_filename:string -> t Deferred.t
   val save_db : t -> db_filename:string -> unit Deferred.t
+
+  val sexp_of_t : t -> Sexp.t
 
 end = struct
 
@@ -51,35 +55,37 @@ end = struct
     build_persist = Build.Persist.copy t.build_persist;
   }
 
-(* load/save bin_prot.. *)
+  (* load/save bin_prot.. *)
 
-  let try_load_db ~db_filename =
+  exception Unable_to_load_persist_db
+
+  let max_len = 200 * 1024 * 1024 (* default 100Mb is too small *)
+
+  let load_db ~db_filename =
     Sys.file_exists db_filename >>= function
     | `No | `Unknown ->
       message "load: %s - failed (does not exist; will create)" db_filename;
-      return None
+      return (empty())
     | `Yes ->
     try_with (fun () ->
       Reader.with_file db_filename ~f:(fun r ->
-        Reader.read_bin_prot r bin_reader_t
+        Reader.read_bin_prot ~max_len r bin_reader_t
       )
     ) >>= function
-      | Ok (`Ok t) -> return (Some t)
-      | Ok `Eof
-      | Error _ ->
-        message "load: %s - failed (format changed or file corrupted; ignoring)"
-          db_filename;
-        return None
-
-  let load_db ~db_filename =
-    try_load_db ~db_filename >>= function
-    | None -> return (empty())
-    | Some t -> return t
+      | Ok (`Ok t) -> return t (* successful load *)
+      | Ok `Eof ->
+        error "load: %s - failed: `Eof" db_filename;
+        raise Unable_to_load_persist_db
+      | Error exn ->
+        error "load: %s - failed:\n%s" db_filename (Exn.to_string exn);
+        raise Unable_to_load_persist_db
 
   let save_db t ~db_filename =
-    Writer.with_file_atomic db_filename ~f:(fun w ->
-      Writer.write_bin_prot w bin_writer_t t;
-      return ()
+    Effort.track Build.persist_saves_done (fun () ->
+      Writer.with_file_atomic db_filename ~f:(fun w ->
+        Writer.write_bin_prot w bin_writer_t t;
+        return ()
+      )
     )
 
 end

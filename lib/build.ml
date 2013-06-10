@@ -26,6 +26,8 @@ let insensitive_scanners_and_internal_actions =
   effort
 ----------------------------------------------------------------------*)
 
+let persist_saves_done = Effort.Counter.create "db-save" (* for use in persist.ml *)
+
 (* What did we do? - gen/scan/act *)
 let generators_run = Effort.Counter.create "gen"
 let scanners_run = Effort.Counter.create "scan"
@@ -46,6 +48,7 @@ let the_effort =
     actions_run;
     external_jobs_run;
     user_functions_run;
+    persist_saves_done;
   ]
 
 let effort_string() =
@@ -391,7 +394,6 @@ module Proxy_map : sig (* need to be keyed on Path/Glob *)
 
   type t with sexp, bin_io, compare
   val single : Pm_key.t -> Proxy.t -> t
-  val empty : t
 
   type inconsistency = (Pm_key.t * Proxy.t list) list
   with sexp_of
@@ -592,13 +594,14 @@ module Reason = struct
   | Jenga_root_problem                of string
   | No_definition_for_alias
   | No_rule_or_source
+  | Unexpected_directory
   | Non_zero_status
   | No_directory_for_target           of string
   | Inconsistent_proxies              of Proxy_map.inconsistency
   | Duplicate_scheme_ids              of scheme_id list
   | Scheme_raised                     of exn
   | Running_job_raised    of exn
-  | Duplicate_rules_for_paths         of Path.t list
+  | Multiple_rules_for_paths          of Gen_key.t * Path.t list
   | Rule_failed_to_generate_targets   of Path.t list
   | Usercode_raised                   of Run_kind.t * exn
   (* | Cycle... *)
@@ -612,12 +615,15 @@ module Reason = struct
     | Jenga_root_problem s              -> sprintf "Problem with JengaRoot.ml: %s" s
     | No_definition_for_alias           -> "No definition found for alias"
     | No_rule_or_source                 -> "No rule or source found for target"
+    | Unexpected_directory              -> "Unexpected directory found for target"
     | Non_zero_status                   -> "External command has non-zero exit code"
     | No_directory_for_target s         -> sprintf "No directory for target: %s" s
     | Scheme_raised _                   -> "Generator scheme raised exception"
     | Running_job_raised _              -> "Running external job raised exception"
-    | Duplicate_rules_for_paths _       -> "Duplicate rules for paths"
     | Rule_failed_to_generate_targets _ -> "Rule failed to generate targets"
+
+    | Multiple_rules_for_paths (gen_key,_) ->
+      sprintf "Multiple rules generated for some paths (by: %s)" (Gen_key.to_string gen_key)
 
     | Usercode_raised (k,_) ->
       sprintf "User-code(%s) raised exception" (Run_kind.to_string k)
@@ -644,6 +650,7 @@ module Reason = struct
     | Jenga_root_problem _
     | No_definition_for_alias
     | No_rule_or_source
+    | Unexpected_directory
     | Non_zero_status
     | No_directory_for_target _
     | Duplicate_scheme_ids _
@@ -656,7 +663,7 @@ module Reason = struct
     | Running_job_raised exn
       -> [Exn.to_string exn]
 
-    | Duplicate_rules_for_paths paths
+    | Multiple_rules_for_paths (_,paths)
     | Rule_failed_to_generate_targets paths
       -> List.map paths ~f:(fun path -> "- " ^ Path.to_rrr_string path)
 
@@ -673,7 +680,7 @@ end
 (* TODO: Make this status be the same type as Dot.Status *)
 
 module What = struct (* what was build *)
-  type t = Source | Something_else
+  type t = Source | Target | Alias | Scanner | Glob
 end
 
 module Status = struct
@@ -699,21 +706,9 @@ module Progress : sig
 
   val set_status : t -> key:Dep.t -> data:Status.t -> unit
   val mask_unreachable : t -> DG.t -> unit
-
   val message_errors : t -> unit
-
   val dg_status : t  -> Dep.t -> Dot.Status.t
-
-  module Counts : sig
-    type t with bin_io
-    val to_string : t -> string
-    val fraction : t -> (int*int)
-    val completed : t -> bool
-    val total : t -> int
-  end
-
-  val snap : t -> Counts.t
-  val readme : string list
+  val snap : t -> Mon.Progress.t
 
 end = struct
 
@@ -787,125 +782,6 @@ end = struct
           (Reason.to_string_one_line reason)
     )
 
-  module Counts = struct
-
-    type t = {
-      (* still working... *)
-      checking  : int;
-      blocked   : int;
-      jwait     : int;
-      running   : int; (* external scanner/action *)
-      usercode  : int; (* internal generator/scanner/action *)
-      (* done... *)
-      source    : int;
-      built     : int; (* non source *)
-      error     : int;
-      failure   : int; (* error in dep *)
-
-      fds : int;
-
-    } with bin_io
-
-    let zero = {
-     checking   = 0;
-     blocked    = 0;
-     jwait      = 0;
-     running    = 0;
-     usercode   = 0;
-     source     = 0;
-     built      = 0;
-     error      = 0;
-     failure    = 0;
-     fds = 0;
-    }
-
-    let total {
-      checking;
-      blocked;
-      jwait;
-      running;
-      usercode;
-      source;
-      built;
-      error;
-      failure;
-
-      fds=_;
-    } =
-      source + built + error + failure +
-      checking + blocked + jwait + running + usercode
-
-    let good t = t.built + t.source
-    let fraction t = (good t) , (total t)
-
-    let completed t = Int.equal (good t) (total t)
-
-    let to_labelled {
-      checking;
-      blocked;
-      jwait;
-      running;
-      usercode;
-      source;
-      built;
-      error;
-      failure;
-      fds;
-    } = [
-
-      ("built", built,
-       "target is built and up-to-date");
-
-      ("source", source,
-       "target is a source file");
-
-      ("error", error,
-       "leaf build error; i.e. non-zero exit or target not created");
-
-      ("fail", failure,
-       "unable to build because one or more (transitive) dependencies has an error");
-
-      ("check", checking,
-       "target and its dependencies are being checked to ensure they are up-to-date");
-
-      ("block", blocked,
-       "the build of this target is blocked on one or more dependencies");
-
-      ("jwait", jwait,
-       "target is ready to run an external command, but is limited by the -j threshold");
-
-      ("run", running,
-       "target is running an external build command (action or scanner)");
-
-      ("user", usercode,
-       "target is running user ML code in the JengaRoot.ml");
-
-      ("fds", fds,
-       "Core_extended.Fd_leak_check.get_num_open_fds ()");
-
-    ]
-
-    let to_string t =
-      let justify =
-        let (>) = Int.(>) in
-        let len n =
-          if n>99999 then 6 else
-          if n>9999 then 5 else
-          if n>999 then 4 else
-            3
-        in
-        let max = len (total t) in
-        fun n ->
-          let i = max - len n in
-          (*assert(not (0>i));*) (* no, not all fields are part of total - i.e. fds *)
-          let spaces = if Int.(i < 1) then "" else String.make i ' ' in
-          spaces
-      in
-      String.concat ~sep:", "
-        (List.map (to_labelled t) ~f:(fun (s,n,_) -> sprintf "%s=%s%d" s (justify n) n))
-
-  end
-
   let snap t =
     let checking = ref 0 in
     let blocked = ref 0 in
@@ -913,7 +789,10 @@ end = struct
     let running = ref 0 in
     let usercode = ref 0 in
     let source = ref 0 in
-    let built = ref 0 in
+    let target = ref 0 in
+    let alias = ref 0 in
+    let scanner = ref 0 in
+    let glob = ref 0 in
     let error = ref 0 in
     let failure = ref 0 in
     iter_unmasked t
@@ -926,41 +805,29 @@ end = struct
           | Status.Running _                        -> running
           | Status.Usercode _                       -> usercode
           | Status.Built What.Source                -> source
-          | Status.Built _                          -> built
+          | Status.Built What.Target                -> target
+          | Status.Built What.Alias                 -> alias
+          | Status.Built What.Scanner               -> scanner
+          | Status.Built What.Glob                  -> glob
           | Status.Error (Reason.Error_in_deps _)   -> failure
           | Status.Error _                          -> error
         in incr x
       );
-    {Counts.
+    {Mon.Progress.
      checking   = !checking;
      blocked    = !blocked;
      jwait      = !jwait;
      running    = !running;
      usercode   = !usercode;
      source     = !source;
-     built      = !built;
+     target     = !target;
+     alias      = !alias;
+     scanner    = !scanner;
+     glob       = !glob;
      error      = !error;
      failure    = !failure;
-
-     fds        = Core_extended.Fd_leak_check.get_num_open_fds ();
     }
 
-  let readme =
-    let labelled = Counts.to_labelled Counts.zero in
-    let justify =
-      let max =
-        List.fold ~init:0 ~f:(fun x y -> if Int.(x > y) then x else y)
-          (List.map labelled ~f:(fun (lab,_,_) -> String.length lab))
-      in
-      fun s ->
-        let i = max - String.length s in
-        assert(Int.(i >= 0));
-        let spaces = String.make i ' ' in
-        spaces
-    in
-    List.map labelled ~f:(fun (lab,_,desc) ->
-      sprintf "- %s %s: %s" lab (justify lab) desc
-    )
 
 end
 
@@ -1382,7 +1249,7 @@ let need_glob : (t -> Glob.t -> (What.t * Proxy_map.t) Builder.t) =
     | `not_a_dir      -> error t (Reason.Glob_error "not a directory")
     | `listing_error _-> error t (Reason.Glob_error "unable to list")
     | `listing listing ->
-      return (What.Something_else,
+      return (What.Glob,
               Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing))
 
 let ensure_directory : (t -> dir:Path.t -> unit Builder.t) =
@@ -1412,7 +1279,7 @@ let run_generator :
     ) *>>= fun rules ->
     match (Ruleset.create rules) with
     | `ok ruleset -> return ruleset
-    | `dups paths -> error t (Reason.Duplicate_rules_for_paths paths)
+    | `dups paths -> error t (Reason.Multiple_rules_for_paths (gen_key,paths))
 
 
 let run_scanner :
@@ -1745,9 +1612,7 @@ let build_scanner : (t -> Dep.t list -> Scanner.t -> (What.t * Proxy_map.t) Buil
     build_deps t deps *>>= fun _proxy_map ->
     run_scanner_if_necessary t deps scanner *>>= fun scanned_deps ->
     build_deps t scanned_deps *>>= fun pm ->
-    return (What.Something_else,
-            pm)
-
+    return (What.Scanner, pm)
 
 
 let check_targets :
@@ -1769,15 +1634,6 @@ let check_targets :
     match bad with
     | _::_ -> return (`missing bad)
     | [] -> return (`ok good)
-
-
-let ensure_target_dirs : (t -> Path.t list -> unit Builder.t) =
-  fun t targets ->
-    build_all_in_sequence targets ~f:(fun target ->
-      let dir = Path.dirname target in
-      ensure_directory t ~dir
-    ) *>>= fun (_:unit list) ->
-    return ()
 
 
 let prevent_action_overlap
@@ -1815,7 +1671,7 @@ let run_target_rule_action_if_necessary
   *)
   fun t tr ~need ->
     let (targets,deps,action) = Target_rule.triple tr in
-    ensure_target_dirs t targets *>>= fun () ->
+    (*ensure_target_dirs t targets *>>= fun () ->*)
     build_deps t deps *>>= fun deps_proxy_map ->
     jenga_root t *>>= fun (env1,root_proxy) ->
     let action_proxy =
@@ -1928,38 +1784,55 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
         | None -> error t Reason.No_definition_for_alias
         | Some deps ->
           build_deps t deps *>>= fun pm ->
-          return (What.Something_else, pm)
+          return (What.Alias, pm)
       end
     | `path demanded ->
       begin
         match (Ruleset.lookup_target ruleset demanded) with
         | Some tr ->
           build_using_target_rule t tr ~demanded *>>= fun pm ->
-          return (What.Something_else, pm)
+          return (What.Target, pm)
         | None ->
-          (* is there a source file?..
-             desensitize in case the path in a directory
-          *)
-          Builder.desensitize (digest_path t demanded) *>>= fun (res,heart) ->
+          digest_path t demanded *>>= fun res ->
           match res with
-          | `missing ->
-            (* resensitize if there is there is nothing at this path *)
-            Builder.sensitize heart *>>= fun () ->
-            error t Reason.No_rule_or_source
+          | `missing ->  error t Reason.No_rule_or_source
+          | `is_a_dir -> error t Reason.Unexpected_directory
           | `file digest ->
-            (* resensitize if this path is a file *)
-            Builder.sensitize heart *>>= fun () ->
             let proxy = Proxy.of_digest digest in
             let pm = Proxy_map.single (Pm_key.of_path demanded) proxy in
             return (What.Source, pm)
-          | `is_a_dir ->
-            (* DONT resensitize if this path is a directory *)
-            (* directory targets: foo/bar -> foo/bar/.DEFAULT *)
-            let goal = Dep.alias (Alias.default ~dir:demanded) in
-            build_dep t goal *>>= fun pm ->
-            return (What.Something_else, pm)
-
       end
+
+
+let is_path_a_directory : (t -> Path.t -> bool Builder.t) =
+  fun t path ->
+    ensure_directory t ~dir:(Path.dirname path) *>>= fun () ->
+    Builder.desensitize (
+      Builder.of_tenacious (Fs.digest_file t.fs ~file:path)
+    ) *>>= fun (res,__heart) ->
+    match res with
+    | `is_a_dir -> return true
+    | _ -> return false
+
+let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
+  (* wrapper for special case:
+     translate goal: dir -> dir/.DEFAULT (when dir is a directory)
+  *)
+  fun t goal ->
+    begin
+      match Goal.case goal with
+      | `alias _ -> return None
+      | `path demanded ->
+        is_path_a_directory t demanded *>>= function
+        | true -> return (Some demanded)
+        | false -> return None
+    end
+    *>>= function
+    | None -> build_goal t goal
+    | Some demanded ->
+      let dep = Dep.alias (Alias.default ~dir:demanded) in
+      build_dep t dep *>>= fun pm ->
+      return (What.Alias, pm)
 
 
 (* now follows a sequence of functions named [build_dep] which shadow each other &
@@ -1974,7 +1847,6 @@ let build_dep : (t -> Dep.t -> (What.t * Proxy_map.t) Builder.t) =
     | `path path                -> build_goal t (Goal.path path)
     | `alias alias              -> build_goal t (Goal.alias alias)
     | `glob glob                -> need_glob t glob
-    | `null                     -> return (What.Something_else, Proxy_map.empty)
 
 
 let build_dep : (t -> Dep.t -> (What.t * Proxy_map.t) Builder.t) =
@@ -2098,7 +1970,7 @@ let show_progress_fraction_reports ~fin progress =
     Clock.after progress_report_period >>= fun () ->
     if (!fin) then Deferred.return () else (
       let counts = Progress.snap progress in
-      let fraction = Progress.Counts.fraction counts in
+      let fraction = Mon.Progress.fraction counts in
       Message.progress ~fraction;
       loop ()
     )
@@ -2110,10 +1982,10 @@ let working_on_report_period = sec 0.3
 let message_effort_and_progress progress =
   let counts = Progress.snap progress in
   (* more detailed message than just progress-fraction *)
-  let num,den = Progress.Counts.fraction counts in
+  let num,den = Mon.Progress.fraction counts in
   Message.message "[ %s ] { %s } -- %d / %d"
     (effort_string())
-    (Progress.Counts.to_string counts)
+    (Mon.Progress.to_string `full counts)
     num den
 
 let show_effort_and_progress_reports ~fin progress =
@@ -2288,11 +2160,11 @@ let build_once :
     let effort_string = effort_string() in
     zero_effort();
 
-    if Progress.Counts.completed counts then (
-      let total = Progress.Counts.total counts in
+    if Mon.Progress.completed counts then (
+      let total = Mon.Progress.total counts in
       Message.build_done ~duration ~u ~total effort_string
     ) else (
-      let fraction = Progress.Counts.fraction counts in
+      let fraction = Mon.Progress.fraction counts in
       Message.build_failed ~duration ~u ~fraction effort_string
     );
     let quiet = Config.quiet config in
