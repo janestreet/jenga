@@ -7,11 +7,10 @@ open Async.Std
    and the core jenga build system.
 *)
 
-module Path : sig
+module Path : sig (* repo-relative path *)
   type t with sexp
   val relative : dir:t -> string -> t
-  val suffix : t -> string -> t
-  val to_rrr_string : t -> string
+  val to_string : t -> string (* repo root-relative string *)
   val to_absolute_string : t -> string (* AVOID USING THIS *)
   val dirname : t -> t
   val basename : t -> string
@@ -59,6 +58,7 @@ module Dep : sig
   val scanner : t list -> Scanner.t -> t
   val alias : Alias.t -> t
   val parse_string : dir:Path.t -> string -> t
+  val absolute : path:string -> t
 end
 
 module Rule : sig

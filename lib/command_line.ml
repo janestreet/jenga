@@ -30,10 +30,25 @@ let verbose =
   +> Spec.flag "verbose" ~aliases:["--verbose"] Spec.no_arg
     ~doc:" Verbose output"
 
+let show_actions_run =
+  Spec.step (fun m x -> m ~show_actions_run:x)
+  +> Spec.flag "show-actions-run" ~aliases:["act"] Spec.no_arg
+    ~doc:" Show actions being run, and why"
+
+let show_generators_run =
+  Spec.step (fun m x -> m ~show_generators_run:x)
+  +> Spec.flag "show-generators-run" ~aliases:["gen"] Spec.no_arg
+    ~doc:" Show generators being run, and why"
+
+let show_scanners_run =
+  Spec.step (fun m x -> m ~show_scanners_run:x)
+  +> Spec.flag "show-scanners-run" ~aliases:["scan"] Spec.no_arg
+    ~doc:" Show scanners being run, and why"
+
 let show_run_reason =
   Spec.step (fun m x -> m ~show_run_reason:x)
   +> Spec.flag "show-run-reason" ~aliases:["rr"] Spec.no_arg
-    ~doc:" Show actions being run, and why"
+    ~doc:" Show actions/scanners/generators being run, and why"
 
 let show_checked =
   Spec.step (fun m x -> m ~show_checked:x)
@@ -97,11 +112,6 @@ let progress =
   +> Spec.flag "progress" ~aliases:["--progress"] Spec.no_arg
     ~doc:" Show periodic progress report"
 
-let show_working_on =
-  Spec.step (fun m x -> m ~show_working_on:x)
-  +> Spec.flag "show-working-on" ~aliases:["working"] Spec.no_arg
-    ~doc:" Show periodic report on the targets being worked upon"
-
 let continuous_graph_dump =
   Spec.step (fun m x -> m ~continuous_graph_dump:x)
   +> Spec.flag "continuous-graph-dump" ~aliases:["graph"] Spec.no_arg
@@ -109,8 +119,9 @@ let continuous_graph_dump =
 
 let external_jenga_root =
   Spec.step (fun m x -> m ~external_jenga_root:x)
-  +> Spec.flag "external-jenga-root" ~aliases:["x"] (Spec.optional Spec.string)
-    ~doc:" Specify path to JengaRoot.ml; The repo_root is taken to be CWD."
+  +> Spec.flag "external-jengaroot" ~aliases:["x"] (Spec.optional Spec.string)
+    ~doc:(sprintf " Specify path to %s; The repo_root is taken to be CWD."
+            Init.jenga_root_basename)
 
 let anon_demands =
   Spec.step (fun m demands -> m ~demands)
@@ -123,6 +134,9 @@ let go_command =
     ++ f_number
     ++ poll_forever
     ++ verbose
+    ++ show_actions_run
+    ++ show_scanners_run
+    ++ show_generators_run
     ++ show_run_reason
     ++ show_checked
     ++ show_considering
@@ -136,7 +150,6 @@ let go_command =
     ++ wflag
     ++ output_postpone
     ++ progress
-    ++ show_working_on
     ++ continuous_graph_dump
     ++ external_jenga_root
     ++ anon_demands
@@ -146,11 +159,16 @@ let go_command =
       "By default building the .DEFAULT target.";
     ])
     (fun ~j_number ~f_number ~poll_forever
-      ~verbose ~show_run_reason ~show_checked ~show_considering ~show_reconsidering
+      ~verbose
+      ~show_actions_run
+      ~show_scanners_run
+      ~show_generators_run
+      ~show_run_reason
+      ~show_checked ~show_considering ~show_reconsidering
       ~quiet ~debug ~sequential_deps ~show_sensitized
       ~delay_for_dev ~report_long_cycle_times
       ~wflag:_ ~output_postpone:_
-      ~progress ~show_working_on ~continuous_graph_dump
+      ~progress ~continuous_graph_dump
       ~external_jenga_root
       ~demands
       () ->
@@ -160,7 +178,9 @@ let go_command =
           f_number;
           poll_forever;
           verbose;
-          show_run_reason;
+          show_actions_run      = show_run_reason || show_actions_run;
+          show_generators_run   = show_run_reason || show_generators_run;
+          show_scanners_run     = show_run_reason || show_scanners_run;
           show_checked;
           show_considering;
           show_reconsidering;
@@ -172,7 +192,6 @@ let go_command =
           report_long_cycle_times =
             Option.map report_long_cycle_times ~f:(fun ms -> Time.Span.create ~ms ());
           progress;
-          show_working_on;
           continuous_graph_dump;
           external_jenga_root;
           demands;

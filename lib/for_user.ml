@@ -57,7 +57,7 @@ let extract_location exn =
 
 let load_for_jenga_with ~reader_load t_of_sexp path =
   File_access.enqueue (fun () ->
-    let filename = Path.to_rrr_string path in
+    let filename = Path.to_string path in
     Monitor.try_with (fun () ->
       reader_load filename t_of_sexp
     ) >>| function

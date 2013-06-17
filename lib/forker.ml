@@ -5,7 +5,7 @@ open Async.Std
 module Request = struct
   type t = {
     putenv : (string * string) list;
-    dir : Path.t;
+    dir : Path.X.t;
     prog : string;
     args : string list;
   }
@@ -22,7 +22,7 @@ end
 let do_the_fork {Request. putenv; dir; prog; args} =
   try_with (fun () ->
     List.iter putenv ~f:(fun (key,data) -> Core.Std.Unix.putenv ~key ~data);
-    let working_dir = Path.to_absolute_string dir in
+    let working_dir = Path.X.to_absolute_string dir in
     Async_shell.run_full_and_error ~working_dir prog args
   ) >>= fun result ->
   match result with

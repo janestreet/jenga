@@ -57,7 +57,7 @@ end
 let unix_lstat path =
   Effort.track lstat_counter (fun () ->
     try_with (fun () ->
-      Unix.lstat (Path.to_absolute_string path)
+      Unix.lstat path
     )
   )
 
@@ -68,7 +68,7 @@ let unix_lstat path =
 module Stats : sig
 
   type t with sexp, bin_io
-  val lstat : Path.t -> t Or_error.t Deferred.t
+  val lstat : Path.X.t -> t Or_error.t Deferred.t
   val equal : t -> t -> bool
   val kind : t -> Kind.t
 
@@ -120,6 +120,7 @@ end = struct
     }
 
   let lstat path =
+    let path = Path.X.to_absolute_string path in
     unix_lstat path >>= function
     | Ok u -> return (Ok (of_unix_stats u))
     | Error exn -> return (Error (Error.of_exn exn))
@@ -150,10 +151,10 @@ let ensure_directory ~dir =
   Stats.lstat dir >>= function
   | Ok stats -> return (if is_dir stats then `ok else `not_a_dir)
   | Error _e ->
-    (*Message.message "mkdir: %s" (Path.to_rrr_string dir);*)
+    (*Message.message "mkdir: %s" (Path.X.to_string dir);*)
     Effort.track mkdir_counter (fun () ->
       try_with (fun () ->
-        Unix.mkdir ~p:() (Path.to_absolute_string dir)
+        Unix.mkdir ~p:() (Path.X.to_absolute_string dir)
       )
     ) >>= fun res ->
     match res with
@@ -181,22 +182,22 @@ end
 
 module Compute_digest : sig
 
-  val of_file : Path.t -> Digest.t Or_error.t Deferred.t
+  val of_file : Path.X.t -> Digest.t Or_error.t Deferred.t
 
 end = struct
 
   let of_file path =
     File_access.enqueue (fun () ->
       Effort.track digest_counter (fun () ->
-        unlogged "DIGEST: %s..." (Path.to_absolute_string path);
+        unlogged "DIGEST: %s..." (Path.X.to_absolute_string path);
         In_thread.run (fun () ->
           try (
-            let ic = Caml.open_in_bin (Path.to_absolute_string path) in
+            let ic = Caml.open_in_bin (Path.X.to_absolute_string path) in
             let res =
               try (
                 let d = External_digest.channel ic (-1) in
                 let res = External_digest.to_hex d in
-                unlogged "DIGEST: %s... %s" (Path.to_absolute_string path) res;
+                unlogged "DIGEST: %s... %s" (Path.X.to_absolute_string path) res;
                 Ok (Digest.of_string res)
               )
               with exn -> Error (Error.of_exn exn)
@@ -220,12 +221,9 @@ module Listing : sig
 
   type t with sexp, bin_io, compare
 
-  val run_ls : dir:Path.t -> t Or_error.t Deferred.t
-
-  val paths_and_kinds : t -> (Path.t * Kind.t) list
-  val paths : t -> Path.t list
-
   val equal : t -> t -> bool
+  val run_ls : dir:Path.t -> t Or_error.t Deferred.t
+  val paths : t -> Path.t list
 
   module Restriction : sig
     type t with sexp, bin_io
@@ -238,8 +236,16 @@ module Listing : sig
 
 end = struct
 
+  module Elem = struct
+    type t = {
+      base : string;
+      kind : Kind.t;
+    } with sexp, bin_io, compare
+  end
+
   type t = {
-    listing : (Path.t * Kind.t) list
+    dir : Path.t;
+    listing : Elem.t list;
   } with sexp, bin_io, compare
 
   let run_ls ~dir =
@@ -261,21 +267,23 @@ end = struct
               try_with (fun () -> Unix.readdir dir_handle) >>= function
               | Ok "." -> loop acc
               | Ok ".." -> loop acc
-              | Ok string ->
-                let path = Path.relative ~dir string in
+              | Ok base ->
                 begin
-                  unix_lstat path >>= function
+                  let path_string = Path.to_absolute_string dir ^ "/" ^ base in
+                  unix_lstat path_string >>= function
                   | Error _e ->
+                    (* File disappeared between readdir & lstat system calls.
+                       Handle as if readdir never told as about it *)
                     loop acc
                   | Ok u ->
                     let kind = u.Unix.Stats.kind in
-                    loop ((path,kind) :: acc)
+                    loop ({Elem.base;kind} :: acc)
                 end
               | Error exn ->
                 match Monitor.extract_exn exn with
                 | End_of_file ->
                   (* no more filenames - normal; we are finished listing *)
-                  return { listing = acc }
+                  return { dir; listing = acc }
                 | exn ->
                   (* some other unexpected error; raise to outer handler *)
                   raise exn
@@ -295,9 +303,10 @@ end = struct
       )
     )
 
-
-  let paths t = List.map ~f:fst t.listing
-  let paths_and_kinds t = t.listing
+  let paths t =
+    List.map t.listing ~f:(fun e ->
+      Path.relative ~dir:t.dir e.Elem.base
+    )
 
   let equal = equal_using_compare compare
 
@@ -320,7 +329,6 @@ end = struct
           sprintf "(%s)" (String.concat ~sep:"," (List.map kinds ~f:Kind.to_string)))
         (Pattern.to_string t.pat)
 
-
   end
 
   let restrict t r =
@@ -330,10 +338,11 @@ end = struct
       | Some kinds -> List.mem kinds
     in
     {
+      dir = t.dir;
       listing =
-        List.filter t.listing ~f:(fun (path,kind) ->
-          match_kind kind
-          && Pattern.matches r.Restriction.pat (Path.basename path)
+        List.filter t.listing ~f:(fun e ->
+          match_kind e.Elem.kind
+          && Pattern.matches r.Restriction.pat e.Elem.base
         )
     }
 
@@ -483,21 +492,21 @@ module Stat_memo : sig
   val create : Watcher.t -> t
   (* Caller must declare what the lstat is expected to be for,
      so that the correct kind of watcher can be set up *)
-  val lstat : t -> what:[`file|`dir] -> Path.t -> Stats.t Or_error.t Tenacious.t
+  val lstat : t -> what:[`file|`dir] -> Path.X.t -> Stats.t Or_error.t Tenacious.t
 
 end = struct
 
   type computation = Stats.t Or_error.t Tenacious.t
   type t = {
     watcher : Watcher.t;
-    file_watch_cache : computation Path.Table.t;
-    dir_watch_cache : computation Path.Table.t;
+    file_watch_cache : computation Path.X.Table.t;
+    dir_watch_cache : computation Path.X.Table.t;
   }
 
   let create watcher = {
     watcher;
-    file_watch_cache = Path.Table.create ();
-    dir_watch_cache = Path.Table.create ();
+    file_watch_cache = Path.X.Table.create ();
+    dir_watch_cache = Path.X.Table.create ();
   }
 
   let lstat t ~what path =
@@ -512,8 +521,8 @@ end = struct
       let tenacious =
         Tenacious.lift (fun () ->
           Watcher.watch_file_or_dir t.watcher ~what
-            ~path:(Path.to_absolute_string path)
-            ~desc:(Path.to_rrr_string path)
+            ~path:(Path.X.to_absolute_string path)
+            ~desc:(Path.X.to_string path)
           >>= function
           | Error exn ->
             return (Error exn, Heart.unbreakable)
@@ -574,17 +583,17 @@ module Digest_persist : sig
   val digest_file :
     t ->
     Stat_memo.t ->
-    file:Path.t ->
+    file:Path.X.t ->
     Digest_result.t Tenacious.t
 
 end = struct
 
   type t = {
-    cache : (Stats.t * Digest.t) Path.Table.t;
+    cache : (Stats.t * Digest.t) Path.X.Table.t;
   } with sexp, bin_io
 
   let create () = {
-    cache = Path.Table.create ();
+    cache = Path.X.Table.create ();
   }
 
   let equal t1 t2 =
@@ -592,7 +601,7 @@ end = struct
       (equal_pair Stats.equal Digest.equal)
 
   let copy t = {
-    cache = Path.Table.copy t.cache;
+    cache = Path.X.Table.copy t.cache;
   }
 
   let digest_file t sm ~file =
@@ -663,7 +672,7 @@ end = struct
 
   let list_dir t sm ~dir =
     let remove() = Hashtbl.remove t.cache dir in
-    Stat_memo.lstat sm ~what:`dir dir *>>= function
+    Stat_memo.lstat sm ~what:`dir (Path.X.of_relative dir) *>>= function
     | Error e -> (remove(); Tenacious.return (`stat_error e))
     | Ok stats ->
       if not (is_dir stats) then Tenacious.return `not_a_dir else
@@ -702,7 +711,7 @@ module Persist : sig
   val digest_file :
     t ->
     Stat_memo.t ->
-    file:Path.t ->
+    file:Path.X.t ->
     Digest_result.t Tenacious.t
 
   val list_dir :
@@ -751,14 +760,14 @@ module Digest_memo : sig
     t ->
     Persist.t ->
     Stat_memo.t ->
-    file:Path.t ->
+    file:Path.X.t ->
     Digest_result.t Tenacious.t
 
 end = struct
 
   type computation = Digest_result.t Tenacious.t
   type t = {
-    cache : computation Path.Table.t;
+    cache : computation Path.X.Table.t;
   }
 
   let digest_file t dp sm ~file =
@@ -770,7 +779,7 @@ end = struct
       tenacious
 
   let create () = {
-    cache = Path.Table.create ();
+    cache = Path.X.Table.create ();
   }
 
 end
@@ -860,7 +869,7 @@ end = struct
 
   let to_string t =
     sprintf "glob: %s/ %s"
-      (Path.to_rrr_string t.dir)
+      (Path.to_string t.dir)
       (Listing.Restriction.to_string t.restriction)
 
   let raw_create ~dir ~kinds ~glob_string =
@@ -966,7 +975,7 @@ module Memo : sig
   val digest_file :
     t ->
     Persist.t ->
-    file:Path.t ->
+    file:Path.X.t ->
     Digest_result.t Tenacious.t
 
   val list_glob :
@@ -1008,7 +1017,7 @@ module Fs : sig
 
   val digest_file :
     t ->
-    file:Path.t ->
+    file:Path.X.t ->
     Digest_result.t Tenacious.t
 
   val list_glob :

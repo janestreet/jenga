@@ -2,3 +2,4 @@
 # OASIS_STOP
 <lib/*.ml{,i}>: syntax_camlp4o
 <**/*_standalone.native>: linkall
+<**/*.native> and (not <**/*_standalone.native>): link_fake_archive

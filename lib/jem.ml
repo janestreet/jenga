@@ -73,29 +73,26 @@ end
 
 let message fmt = ksprintf (fun s -> Printf.printf "\027[2K%s\r%!" s) fmt
 
-let run mode =
+let run ~root_dir ~string_of_mon =
 
-  let root_dir = Init.discover_root() in
-  let last_progress = ref None in
+  let last_mon = ref None in
   let estimator =
     (* The bigger the decay-factor, the more stable the estimate *)
     Finish_time_estimator.create ~decay_factor_per_second:0.95
   in
 
-  let string_of_progress progress =
-    let todo = Mon.Progress.todo progress in
-    Finish_time_estimator.push_todo estimator todo;
-    let finish = Finish_time_estimator.estimated_finish_time_string estimator in
-    Mon.Progress.to_string mode progress ^ finish
+  let string_of_mon mon =
+    string_of_mon mon
+    ^ Finish_time_estimator.estimated_finish_time_string estimator
   in
 
-  let string_of_last_progress () =
-    match !last_progress with
+  let string_of_last_mon () =
+    match !last_mon with
     | None -> "no progress seen!"
-    | Some progress -> string_of_progress progress
+    | Some mon -> string_of_mon mon
   in
 
-  let suck_progress_pipe conn =
+  let suck_mon_pipe conn =
     let stop = ref false in
     let fresh = ref false in
     don't_wait_for (
@@ -106,16 +103,18 @@ let run mode =
           if !fresh then (fresh := false; loop 1)
           else (
             let qmes = String.concat (List.init q ~f:(fun _ -> "?")) in
-            message "%s %s" (string_of_last_progress ()) qmes;
+            message "%s %s" (string_of_last_mon ()) qmes;
             loop (q+1);
           )
       in loop 1
     );
     Rpc.Pipe_rpc.dispatch_exn Rpc_intf.progress_stream conn () >>= fun (reader,_id) ->
-    Pipe.iter_without_pushback reader ~f:(fun progress ->
-      last_progress := Some progress;
+    Pipe.iter_without_pushback reader ~f:(fun mon ->
+      last_mon := Some mon;
       fresh := true;
-      message "%s" (string_of_progress progress);
+      let todo = Mon.Progress.todo mon.Mon.progress in
+      Finish_time_estimator.push_todo estimator todo;
+      message "%s" (string_of_mon mon);
     ) >>= fun () ->
     stop := true;
     return ()
@@ -124,7 +123,7 @@ let run mode =
   let poll_for_connection ~retry =
     Server_lock.server_location ~root_dir >>= function
     | `server_not_running ->
-      message "%s (not running)" (string_of_last_progress ()); (*root_dir*)
+      message "%s (not running)" (string_of_last_mon ()); (*root_dir*)
       retry()
     | `info info ->
       let host = Server_lock.Info.host info in
@@ -139,7 +138,7 @@ let run mode =
             message "with_rpc_connection: %s\n%s" server_name (Exn.to_string exn);
             return false
           | Ok conn ->
-            suck_progress_pipe conn >>= fun () ->
+            suck_mon_pipe conn >>= fun () ->
             (*message "lost connection with: %s" server_name;*)
             return true
         )
@@ -157,28 +156,68 @@ let run mode =
   poll_for_connection ~retry
 
 
-let main mode =
-  Deferred.unit >>> (fun () ->
-    run mode >>> (fun n ->
-      Shutdown.shutdown n
-    )
-  );
-  never_returns (Scheduler.go ~raise_unhandled_exn:true ())
-
-
 module Spec = Command.Spec
 let (+>) = Spec.(+>)
+let (++) = Spec.(++)
 
-let full =
-  Spec.step (fun m x -> m ~full:x)
-  +> Spec.flag "full" Spec.no_arg
-    ~doc:" display breakdown for good & doing counts"
+let todo_breakdown =
+  Spec.step (fun m x -> m ~todo_breakdown:x)
+  +> Spec.flag "todo" Spec.no_arg
+    ~doc:" display breakdown for 'todo' counts"
+
+let good_breakdown =
+  Spec.step (fun m x -> m ~good_breakdown:x)
+  +> Spec.flag "good" Spec.no_arg
+    ~doc:" display breakdown for 'good' counts"
+
+
+let show_run =
+  Spec.step (fun m x -> m ~show_run:x)
+  +> Spec.flag "run" Spec.no_arg
+    ~doc:" display counts for build items run: generator/scanner/action"
+
+let show_work =
+  Spec.step (fun m x -> m ~show_work:x)
+  +> Spec.flag "work" Spec.no_arg
+    ~doc:" display counts for 'work' done: ls/digest/external-jobs/user-code"
+
+let show_intern =
+  Spec.step (fun m x -> m ~show_intern:x)
+  +> Spec.flag "intern" Spec.no_arg
+    ~doc:" display counts for other internal effort"
+
+
+let error fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt
 
 let command_line () =
   Command.run (
-    Command.basic (full)
+    Command.basic (todo_breakdown ++ good_breakdown
+                   ++ show_run ++ show_work ++ show_intern)
       ~summary:"Jenga monitor - monitor jenga running in the current repo."
-      ~readme:Mon.Progress.readme
-      (fun ~full () ->
-        main (if full then `full else `brief))
+      ~readme:Mon.readme
+      (fun ~todo_breakdown ~good_breakdown ~show_run ~show_work ~show_intern () ->
+
+        match Path.Root.discover() with | `cant_find_root ->
+          error "Cant find '%s' in start-dir or any ancestor dir"
+            Init.jenga_root_basename
+        | `ok ->
+          let root_dir = Path.to_absolute_string Path.the_root in
+          Init.in_async ~f:(fun () ->
+
+            let string_of_mon mon =
+              let {Mon.progress;effort;} = mon in
+              let eff_string ~tag ~switch ~limit =
+                if not switch then "" else
+                  sprintf ", %s:[ %s ]" tag (Effort.Snapped.to_string ~limit effort)
+              in
+
+              Mon.Progress.to_string ~todo_breakdown ~good_breakdown progress
+              ^ eff_string ~tag:"run" ~switch:show_run ~limit:Build.run_effort
+              ^ eff_string ~tag:"work" ~switch:show_work ~limit:Build.work_effort
+              ^ eff_string ~tag:"intern" ~switch:show_intern ~limit:Build.intern_effort
+
+            in
+            run ~root_dir ~string_of_mon
+          )
+      )
   )

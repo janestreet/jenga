@@ -7,7 +7,9 @@ type t = {
   f_number : int;
   poll_forever : bool;
   verbose : bool;
-  show_run_reason : bool;
+  show_actions_run : bool;
+  show_generators_run : bool;
+  show_scanners_run : bool;
   show_checked : bool;
   show_considering : bool;
   show_reconsidering : bool;
@@ -18,7 +20,6 @@ type t = {
   delay_for_dev : Time.Span.t option;
   report_long_cycle_times : Time.Span.t option;
   progress : bool;
-  show_working_on : bool;
   continuous_graph_dump : bool;
   external_jenga_root : string option;
   demands : string list;

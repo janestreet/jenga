@@ -5,7 +5,7 @@ open Async.Std
 module Alias : sig
   type t with sexp, bin_io
   include Hashable with type t := t
-  val create : dir: Path.t -> string -> t (* aliases are directory relative *)
+  val create : dir:Path.t -> string -> t (* aliases are directory relative *)
   val split : t -> Path.t * string
   val default : dir:Path.t -> t
   val to_string : t -> string
@@ -71,6 +71,7 @@ module Dep : sig
   | `alias of Alias.t
   | `scan of t list * Scanner.t
   | `glob of Fs.Glob.t
+  | `absolute of Path.Abs.t
   ]
 
   val to_string : t -> string
@@ -85,6 +86,8 @@ module Dep : sig
   val parse_string_as_deps : dir:Path.t -> string -> t list
   val compare : t -> t -> int
   val equal : t -> t ->  bool
+  val absolute : path:string -> t
+
 end
 
 module Target_rule : sig

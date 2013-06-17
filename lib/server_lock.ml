@@ -2,7 +2,6 @@
 open Core.Std
 open Async.Std
 
-
 module Info = struct
 
   type t = {
@@ -16,9 +15,7 @@ module Info = struct
 
 end
 
-
-let nfs_lock = ".nfs_lock" (* Internal knowledge of nfs locks... sad *)
-
+let nfs_lock = ".nfs_lock"
 
 let lock_running_server ~root_dir  ~port =
   let lock_filename = root_dir ^/ Path.lock_basename in
@@ -33,7 +30,7 @@ let lock_running_server ~root_dir  ~port =
   | true ->
     let server_filename = root_dir ^/ Path.server_basename in
     let info = Info.create ~port in
-    Message.message "server info: %s -> %s"
+    Message.trace "server info: %s -> %s"
       (Sexp.to_string (Info.sexp_of_t info))
       server_filename;
     Writer.save_sexp ~fsync:true ~hum:true server_filename (Info.sexp_of_t info)
@@ -43,7 +40,6 @@ let lock_running_server ~root_dir  ~port =
       (try Core.Std.Unix.unlink (server_filename) with _ -> ());
     );
     return ()
-
 
 let server_location ~root_dir =
   let server_filename = root_dir ^/ Path.server_basename in

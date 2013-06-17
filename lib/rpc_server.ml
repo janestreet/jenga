@@ -22,20 +22,18 @@ let make_periodic_pipe_writer span ~aborted ~f =
   );
   return (Ok r)
 
-
 let go ~root_dir progress =
-
   let progress_report_span = sec (0.3) in
-
   let progress_stream =
     Rpc.Pipe_rpc.implement Rpc_intf.progress_stream
       (fun () () ~aborted ->
         make_periodic_pipe_writer progress_report_span ~aborted ~f:(fun () ->
-          Build.Progress.snap progress
+          {Mon.
+           progress = Build.Progress.snap progress;
+           effort = Build.snap_all_effort(); }
         )
       )
   in
-
   let implementations =
     Rpc.Implementations.create ~on_unknown_rpc:`Ignore ~implementations: [
       progress_stream;

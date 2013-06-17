@@ -2,6 +2,12 @@
 open Core.Std
 open Async.Std
 
+val snap_all_effort : unit -> Effort.Snapped.t
+
+val run_effort : Effort.t
+val work_effort : Effort.t
+val intern_effort : Effort.t
+
 module Persist : sig
   type t with sexp, bin_io
   val create : unit -> t
@@ -18,7 +24,7 @@ end
 val build_forever :
   Config.t ->
   Progress.t ->
-  jenga_root_path: Path.LR.t ->
+  jenga_root_path: Path.X.t ->
   top_level_demands : Description.Dep.t list ->
   Fs.t ->
   Persist.t ->
@@ -32,5 +38,3 @@ module Run_now : sig
 end
 
 val persist_saves_done : Effort.Counter.t
-
-

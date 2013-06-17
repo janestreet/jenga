@@ -2,135 +2,7 @@
 open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
-module Inner : sig
-
-  type t with sexp, bin_io
-  include Hashable_binable with type t := t
-
-  val equal : t -> t -> bool
-  val compare : t -> t -> int
-
-  val split : t -> t * string
-  val dirname : t -> t
-  val basename : t -> string
-  val create_from_absolute : string -> t option
-
-  val relative : dir:t -> string -> t
-  val the_root : t
-
-  val to_rrr_string : t -> string
-
-end = struct
-
-  module T = struct
-
-    type t = {
-      rrr : string (* "rrr" = repo-root-relative *)
-    } with bin_io
-
-    let hash t = String.hash t.rrr
-    let equal t1 t2 = String.equal t1.rrr t2.rrr
-    let compare t1 t2 = String.compare t1.rrr t2.rrr
-
-  (* avoid "rrr" in sexp conversion *)
-    let sexp_of_t t = String.sexp_of_t t.rrr
-    let t_of_sexp sexp = { rrr = String.t_of_sexp sexp }
-
-  end
-
-  include T
-  include Hashable.Make_binable(T)
-
-
-  let starts_with_slash s =
-    (match s with "" -> false | _ -> true)
-    && (match (String.get s 0) with | '/' -> true | _-> false)
-
-  let create ~rrr =
-    assert (not (starts_with_slash rrr));
-    { rrr }
-
-  let the_root = create ~rrr:""
-
-  let create_from_absolute_exn =
-    fun s ->
-      let repo_root = Repo_root.get() in
-      let repo_root_slash = repo_root ^ "/" in
-      if String.equal s repo_root then the_root else
-        match String.chop_prefix s ~prefix:repo_root_slash with
-        | Some rrr ->
-          create ~rrr
-        | None ->
-          failwith (
-            sprintf "Path.create_from_absolute_exn: '%s' does not start with repo_root prefix: %s"
-              s repo_root_slash
-          )
-
-  let create_from_absolute s =
-    try (Some (create_from_absolute_exn s)) with _ -> None
-
-  let split t =
-    if equal t the_root then failwith "Path.split, cant split the_root" else
-      match String.rsplit2 t.rrr ~on:'/' with
-      | Some (dir,base) -> { rrr = dir }, base
-      | None -> the_root, t.rrr
-
-  let dirname t = fst (split t)
-  let basename t = snd (split t)
-
-
-
-  let relative_seg ~dir ~seg =
-    assert (match seg with "" -> false | _ -> true);
-    let at_root = T.equal dir the_root in
-    match seg with
-    | "." -> dir
-    | ".." ->
-      if at_root
-      then failwithf "Path.relative, cant .. the_root" ()
-      else dirname dir
-    | _ ->
-      if at_root
-      then create ~rrr:seg
-      else create ~rrr:(dir.rrr ^ "/" ^ seg)
-
-
-  let relative ~dir s =
-    if starts_with_slash s then failwithf "Path.relative, starts with / - %s" s ();
-    let segs = String.split s ~on:'/' in
-    List.fold segs ~init:dir ~f:(fun dir seg -> relative_seg ~dir ~seg)
-
-  let to_rrr_string t =
-    (* Special case for repo_root. Represented as ""; Displayed as "." *)
-    if String.equal t.rrr "" then "." else t.rrr
-
-
-end
-
-include Inner
-
-(* compute relative ".."-based-path-string path to reach [path] from [dir] *)
-let dotdot ~dir path =
-  let segs = String.split (to_rrr_string dir) ~on:'/' in
-  let dots = List.map segs ~f:(fun seg -> assert (not (String.(seg=".."))); "../") in
-  String.concat dots ^ (to_rrr_string path)
-
-let suffix t s =
-  let dir,b = split t in
-  relative ~dir (b ^ s)
-
-let to_absolute_string t =
-  if equal t the_root
-  then Repo_root.get()
-  else Repo_root.get() ^ "/" ^ (to_rrr_string t)
-
-let root_relative s =
-  relative ~dir:the_root s
-
 let special_prefix = ".jenga"
-
-let is_special_jenga_path t = String.is_prefix ~prefix:special_prefix (to_rrr_string t)
-
 let special suf = special_prefix ^ suf
 
 let log_basename = special ".debug"
@@ -140,23 +12,198 @@ let dot_basename = special ".dot"
 let lock_basename = special ".lock"
 let server_basename = special ".server"
 
+let empty_string = function "" -> true | _ -> false
 
-type path = t with sexp
-module LR = struct
-  type t = [`local of path | `remote of string] with sexp
-  let local x = `local x
-  let remote x = `remote x
-  let case t = t
-  let to_absolute_string = function
-    | `local path -> to_absolute_string path
-    | `remote s -> s
-  let to_rrr_string = function
-    | `local path -> to_rrr_string path
-    | `remote s -> s
-  let basename =  function
-    | `local path -> basename path
-    | `remote s -> Filename.basename s
-  let dirname =  function
-    | `local path -> `local (dirname path)
-    | `remote s -> `remote (Filename.dirname s)
+let starts_with_slash s =
+  not (empty_string s)
+  && (match (String.get s 0) with | '/' -> true | _-> false)
+
+module Root = struct
+
+  let r = ref None
+
+  let set ~dir =
+    match !r with
+    | Some _ -> failwith "Path.Root.set - called more than once"
+    | None -> r := Some dir
+
+  let jenga_root_exists_in ~dir =
+    match Sys.file_exists (dir ^/ Init.jenga_root_basename) with
+    | `No | `Unknown -> false
+    | `Yes -> true
+
+  let discover () =
+    let start_dir = Core.Std.Sys.getcwd() in
+    let rec loop dir =
+      if jenga_root_exists_in ~dir
+      then (set ~dir; `ok)
+      else
+        if String.equal dir Filename.root
+        then `cant_find_root
+        else loop (Filename.dirname dir)
+    in
+    loop start_dir
+
+  let get () =
+    match !r with
+    | None -> failwith "Path.Root.get - called before discover/set"
+    | Some v -> v
+
 end
+
+(* The string representations for root-relative and absolute paths are disjoint:
+   Absolute strings start with a /
+   Relative strings dont start with a /, or are empty (the root) *)
+
+module Rel = struct
+
+  module Inner : sig
+
+    type t with sexp, compare, bin_io
+    include Hashable_binable with type t := t
+    val unpack : t -> string
+    val the_root : t
+    val extend : t -> seg:string -> t
+    val split : t -> t * string
+
+  end = struct
+
+    module T = struct
+      type t = string with compare, sexp, bin_io
+      let hash t = String.hash t
+    end
+
+    include T
+    include Hashable.Make_binable(T)
+
+    let create s = assert (match s with "." -> false | _ -> true); s
+
+    let unpack t = t
+
+    let the_root = create ""
+
+    let extend t ~seg =
+      assert (match seg with "." | ".." -> false | _ -> true);
+      assert (not (String.contains seg '/'));
+      let res = match unpack t with | "" -> seg | dir -> dir ^ "/" ^ seg in
+      create res
+
+    let split t =
+      let dir,base = Filename.split (unpack t) in
+      let dir = match dir with | "." -> the_root | _ -> create dir in
+      dir, base
+
+  end
+
+  include Inner
+
+  let equal t1 t2 = String.equal (unpack t1) (unpack t2)
+
+  let is_root t = match (unpack t) with "" -> true | _ -> false
+
+  let dirname t = fst (split t)
+  let basename t = snd (split t)
+
+  let relative_seg ~dir ~seg =
+    match seg with
+    | "" -> dir (* "foo//bar" == "foo/bar" *)
+    | "." -> dir
+    | ".." ->
+      if is_root dir
+      then failwithf "Path.relative, cant .. the_root" ()
+      else dirname dir
+    | _ -> extend dir ~seg
+
+  let relative ~dir s =
+    if starts_with_slash s then failwithf "Path.relative, starts with / - %s" s ();
+    let segs = String.split s ~on:'/' in
+    List.fold segs ~init:dir ~f:(fun dir seg -> relative_seg ~dir ~seg)
+
+  let create s = relative ~dir:the_root s
+
+  let create_from_absolute s =
+    let root = Root.get() in
+    let root_slash = root ^ "/" in
+    if String.equal s root then Some the_root else
+      match String.chop_prefix s ~prefix:root_slash with
+      | Some x -> Some (create x)
+      | None -> None
+
+  let root_relative = create
+
+  (* compute relative ".."-based-path-string path to reach [path] from [dir] *)
+  let dotdot ~dir path =
+    if is_root dir then unpack path else
+    let segs = String.split (unpack dir) ~on:'/' in
+    let dots = List.map segs ~f:(fun seg -> assert (not (String.(seg=".."))); "../") in
+    String.concat dots ^ (unpack path)
+
+  let to_string t =
+    (* Special case for root. Represented as ""; Displayed as "." *)
+    if is_root t then "." else unpack t
+
+  let to_absolute_string t =
+    if is_root t
+    then Root.get()
+    else Root.get() ^ "/" ^ (unpack t)
+
+  let is_special_jenga_path t =
+    String.is_prefix ~prefix:special_prefix (to_string t)
+
+end
+
+module Abs : sig
+
+  type t with sexp, sexp, compare, bin_io
+  val create : string -> t
+  val to_string : t -> string
+
+end = struct
+
+  type t = string with sexp, compare, bin_io
+
+  let create x =
+    if not (starts_with_slash x)
+    then failwithf "Path.Abs.create, doesn't start with / - %s" x ()
+    else x
+
+  let to_string t = t
+
+end
+
+module X = struct
+
+  module T = struct
+    type t = string with sexp, compare, bin_io
+    let hash = String.hash
+  end
+
+  include T
+  include Hashable.Make_binable(T)
+
+  let of_relative x = Rel.to_string x
+  let of_absolute x = Abs.to_string x
+
+  let case t =
+    if starts_with_slash t
+    then `absolute (Abs.create t)
+    else `relative (Rel.create t)
+
+  let split t = Filename.split t
+
+  let dirname t = fst (split t)
+  let basename t = snd (split t)
+
+  let to_string t =
+    match (case t) with
+    | `relative p -> Rel.to_string p
+    | `absolute a -> Abs.to_string a
+
+  let to_absolute_string t =
+    match (case t) with
+    | `relative p -> Rel.to_absolute_string p
+    | `absolute a -> Abs.to_string a
+
+end
+
+include Rel

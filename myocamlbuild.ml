@@ -6,6 +6,10 @@ let dispatch = function
   | Before_options ->
     Options.make_links := false
   | After_rules ->
+    let ocaml_fake_archive_o =
+      (Findlib.query "ocaml_plugin").Findlib.location ^ "/ocaml_fake_archive.o"
+    in
+    flag ["link_fake_archive"; "link"] (A ocaml_fake_archive_o);
     let env = BaseEnvLight.load () in
     let stdlib = BaseEnvLight.var_get "standard_library" env in
     rule "standalone"
@@ -71,7 +75,6 @@ let dispatch = function
                S (List.map (fun cmxs -> S [A "-pa-cmxs"; P cmxs]) cmxs_list)]
         in
         Cmd (S [P ocaml_embed_compiler;
-                A "-exe"; A (env "%.native");
                 camlp4;
                 A "-cc"; A ocamlopt;
                 S (List.map (fun cmi -> A cmi) cmi_list);

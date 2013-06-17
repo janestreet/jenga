@@ -38,7 +38,7 @@ module Counter = struct
       done_normal : int;
       done_exn : int;
       done_monitor_exn : int;
-    }
+    } with bin_io
 
     let to_string t =
       let finished = t.done_normal + t.done_exn + t.done_monitor_exn in
@@ -84,6 +84,7 @@ let track counter f =
 type t = {
   counters : Counter.t list;
 }
+type counter_set = t
 
 let create counters = { counters; }
 
@@ -94,10 +95,18 @@ module Snapped = struct
 
   type t = {
     snapped : Counter.Snapped.t list;
-  }
+  } with bin_io
 
-  let to_string t =
-    String.concat ~sep:", " (List.map t.snapped ~f:Counter.Snapped.to_string)
+  let to_string ?limit t =
+    let restricted =
+      match limit with None -> t.snapped
+      | Some limit ->
+        let set =
+          String.Hash_set.of_list (List.map limit.counters ~f:(fun x -> x.Counter.name))
+        in
+        List.filter t.snapped ~f:(fun x -> Hash_set.mem set x.Counter.Snapped.name)
+    in
+    String.concat ~sep:", " (List.map restricted ~f:Counter.Snapped.to_string)
 
 end
 

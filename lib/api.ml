@@ -1,12 +1,11 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_ let _ = _squelch_unused_module_warning_
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
 open Description
 
 module Path = Path
-
 module Kind = Fs.Kind
 
 module Glob = struct

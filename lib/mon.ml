@@ -85,36 +85,36 @@ module Progress = struct
   } =
     [ (*todo*)
 
-      ("check", checking,
+      ("c", checking,
        "target and its dependencies are being checked to ensure they are up to date");
 
-      ("block", blocked,
+      ("b", blocked,
        "the build of this target is blocked on the build of its dependencies");
 
-      ("jwait", jwait,
+      ("w", jwait,
        "target is ready to run an external command, but is limited by the -j threshold");
 
-      ("run", running,
+      ("j", running,
        "target is running an external build command (action or scanner)");
 
-      ("user", usercode,
-       "target is running user ML code in the JengaRoot.ml");
+      ("u", usercode,
+       sprintf "target is running user code defined in %s" Init.jenga_root_basename);
 
     ], [(* good *)
 
-      ("source", source,
+      ("s", source,
        "target is a source file");
 
-      ("target", target,
+      ("b", target,
        "target file is built and up to date");
 
-      ("alias", alias,
+      ("a", alias,
        "alias is built and up to date");
 
-      ("scanner", scanner,
+      ("s", scanner,
        "scanner is built and up to date");
 
-      ("glob", glob,
+      ("g", glob,
        "glob is checked and up to date");
 
     ], [ (* bad *)
@@ -127,65 +127,54 @@ module Progress = struct
     ]
 
 
-  let full_string ~total xs =
-    let justify =
-      let (>) = Int.(>) in
-      let len n =
-        if n>99999 then 6 else
-          if n>9999 then 5 else
-            if n>999 then 4 else
-              3
-      in
-      let max = len total in
-      fun n ->
-        let i = max - len n in
-        assert(not (0>i));
-        let spaces = if Int.(i < 1) then "" else String.make i ' ' in
-        spaces
-    in
+  let labelled xs =
     String.concat ~sep:", "
-      (List.map xs ~f:(fun (s,n,_) -> sprintf "%s=%s%d" s (justify n) n))
+      (List.map xs ~f:(fun (s,n,_) -> sprintf "%s=%d" s n))
 
-  let to_string mode t =
+  let to_string ~todo_breakdown ~good_breakdown t =
     let (good,total) = fraction t in
-    let full_todo, full_good =
-      match mode with
-      | `brief -> "",""
-      | `full ->
-        let todo,good,__bad = to_labelled_triple t in
-        sprintf "[ %s ] " (full_string ~total todo),
-        sprintf " [ %s ]" (full_string ~total good)
-    in
     let todo = todo t in
     let err = if Int.(t.error = 0) then "" else sprintf " !%d ~%d" t.error t.failure in
-    sprintf "%stodo: %d (%d / %d)%s%s" full_todo todo good total err full_good
+    let s = sprintf "todo: %d (%d / %d)%s" todo good total err in
+    let todo,good,__bad = to_labelled_triple t in
+    s
+    ^ (if not todo_breakdown then "" else sprintf ", todo:[ %s ]" (labelled todo))
+    ^ (if not good_breakdown then "" else sprintf ", good:[ %s ]" (labelled good))
+
+
+end
+
+
+type t = {
+  progress : Progress.t;
+  effort : Effort.Snapped.t;
+} with bin_io
 
 
 
-  let readme_lab labelled_help =
-    let labelled_help = List.map labelled_help ~f:(fun (lab,_,help) -> (lab,help)) in
-    let justify =
-      let max =
-        List.fold ~init:0 ~f:(fun x y -> if Int.(x > y) then x else y)
-          (List.map labelled_help ~f:(fun (lab,_) -> String.length lab))
-      in
-      fun s ->
-        let i = max - String.length s in
-        assert(Int.(i >= 0));
-        let spaces = String.make i ' ' in
-        spaces
+let readme_lab labelled_help =
+  let labelled_help = List.map labelled_help ~f:(fun (lab,_,help) -> (lab,help)) in
+  let justify =
+    let max =
+      List.fold ~init:0 ~f:(fun x y -> if Int.(x > y) then x else y)
+        (List.map labelled_help ~f:(fun (lab,_) -> String.length lab))
     in
-    List.map labelled_help ~f:(fun (lab,help) ->
-      sprintf "- %s %s: %s" lab (justify lab) help
-    )
+    fun s ->
+      let i = max - String.length s in
+      assert(Int.(i >= 0));
+      let spaces = String.make i ' ' in
+      spaces
+  in
+  List.map labelled_help ~f:(fun (lab,help) ->
+    sprintf "- %s %s: %s" lab (justify lab) help
+  )
 
-  let readme () =
-    let todo,good,bad = to_labelled_triple zero in
-    let readme_todo = readme_lab todo in
-    let readme_good = readme_lab good in
-    let readme_bad = readme_lab bad in
-
-    String.concat ~sep:"\n" (List.concat [
+let readme () =
+  let todo,good,bad = Progress.to_labelled_triple Progress.zero in
+  let readme_todo = readme_lab todo in
+  let readme_good = readme_lab good in
+  let readme_bad = readme_lab bad in
+  String.concat ~sep:"\n" (List.concat [
 ["Jem connects to the jenga instance running in the current repo,
 (or waits until one is started), and displays progress reports:
 
@@ -193,15 +182,16 @@ module Progress = struct
 
 Where:
 - todo = total - good - error - failure
-- (good / total) is the omake style fraction"];
+- (good / total) is the omake style fraction
+(The error/failure counts are show only when non-zero)"];
     readme_bad;
 ["
 The line is optionally suffixed by an estimated finish time if the
 build is still proceeding, or an indication that jenga is finished and
 polling for file-system changes. Note: \"finished\" does not necessary
 mean that the build was successful. Trailing \"?\"s indicate jem has not
-heard from jenga for more than half a second. With the -full flag, a detailed
-breakdown for targets in the todo and good state is shown.
+heard from jenga for more than half a second. With the -todo and -good flags,
+a more detailed breakdown for targets in that state is shown.
 
 Todo:"];
     readme_todo;
@@ -209,6 +199,4 @@ Todo:"];
 Good:"];
     readme_good;
 ])
-
-end
 

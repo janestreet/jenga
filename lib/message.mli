@@ -9,7 +9,6 @@ val init_logging : Config.t -> log_filename:string -> unit
 val error : ('a, unit, string, unit) format4 -> 'a
 val message : ('a, unit, string, unit) format4 -> 'a
 val verbose : ('a, unit, string, unit) format4 -> 'a
-val reason : ('a, unit, string, unit) format4 -> 'a
 val trace : ('a, unit, string, unit) format4 -> 'a
 val unlogged : ('a, unit, string, unit) format4 -> 'a
 
@@ -29,8 +28,8 @@ val job_finished :
   stderr : string ->
   unit
 
-val load_jenga_root : Path.LR.t -> unit
-val load_jenga_root_done : Path.LR.t -> Time.Span.t -> unit
+val load_jenga_root : Path.X.t -> unit
+val load_jenga_root_done : Path.X.t -> Time.Span.t -> unit
 val load_sexp_error : Path.t -> loc:(int*int) -> exn -> unit
 
 val build_done : duration:Time.Span.t -> u:int -> total:int -> string -> unit

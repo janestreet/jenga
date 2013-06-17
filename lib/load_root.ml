@@ -23,7 +23,7 @@ let get_env path_lr =
   (*Ocaml_plugin.Shell.set_defaults ~echo:true ~verbose:true ();*)
   P.Ocaml_compiler.with_compiler ~use_cache:plugin_cache () ~f:fun compiler ->
     let loader = P.Ocaml_compiler.loader compiler in
-    let filename = Path.LR.to_absolute_string path_lr in
+    let filename = Path.X.to_absolute_string path_lr in
     Plugin.load_ocaml_src_files loader [filename] >>= function
     | Error e ->
       Message.error "Plugin failed: %s " (Error.to_string_hum e);

@@ -31,8 +31,16 @@ module Progress : sig
   val fraction : t -> (int*int) (* good/total *)
   val completed : t -> bool (* good = total *)
 
-  val to_string : [`full|`brief] -> t -> string
-
-  val readme : unit -> string
+  val to_string : todo_breakdown:bool -> good_breakdown:bool -> t -> string
 
 end
+
+
+type t = {
+  progress : Progress.t;
+  effort : Effort.Snapped.t;
+} with bin_io
+
+
+val readme : unit -> string
+

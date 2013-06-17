@@ -31,7 +31,7 @@ module Alias  = struct
   let to_string t =
     if Path.equal t.dir Path.the_root
     then sprintf ".%s" t.name
-    else sprintf "%s/.%s" (Path.to_rrr_string t.dir) t.name
+    else sprintf "%s/.%s" (Path.to_string t.dir) t.name
 
   let directory t = t.dir
 
@@ -69,7 +69,7 @@ module Goal = struct
   let case t = t
 
   let to_string = function
-    | `path path -> Path.to_rrr_string path
+    | `path path -> Path.to_string path
     | `alias alias -> Alias.to_string alias
 
   let directory = function
@@ -93,7 +93,7 @@ module Xaction = struct
   let concat_args_quoting_spaces xs = String.concat ~sep:" " (List.map xs ~f:quote_arg)
 
   let to_string t = sprintf "(in dir: %s) %s %s"
-    (Path.to_rrr_string t.dir) t.prog (concat_args_quoting_spaces t.args)
+    (Path.to_string t.dir) t.prog (concat_args_quoting_spaces t.args)
 
 end
 
@@ -141,7 +141,8 @@ module Scanner = struct
   let to_string = function
     | `old_internal id -> Scan_id.to_string id
     | `local_deps (dir,action) ->
-      sprintf "local-deps (deps-wrt: %s): %s" (Path.to_rrr_string dir) (Action.to_string action)
+      sprintf "local-deps (deps-wrt: %s): %s"
+        (Path.to_string dir) (Action.to_string action)
 
 end
 
@@ -154,6 +155,7 @@ module Dep = struct
     | `alias of Alias.t
     | `scan of t list * Scanner.t
     | `glob of Glob.t
+    | `absolute of Path.Abs.t
     ]
     with sexp, bin_io, compare
     let hash = Hashtbl.hash
@@ -169,14 +171,17 @@ module Dep = struct
   let scan1 ts id = `scan (ts,`old_internal id)
   let scan ts sexp = `scan (ts,`old_internal (Scan_id.of_sexp sexp))
 
+  let absolute ~path = `absolute (Path.Abs.create path)
+
   let rec to_string t =
     match t with
-    | `path path -> Path.to_rrr_string path
+    | `path path -> Path.to_string path
     | `alias alias -> Alias.to_string alias
     | `scan (deps,scanner) ->
       sprintf "scan(: %s) - %s" (String.concat ~sep:" " (List.map deps ~f:to_string))
         (Scanner.to_string scanner)
     | `glob glob -> Fs.Glob.to_string glob
+    | `absolute a -> Path.Abs.to_string a
 
   let default ~dir = alias (Alias.default ~dir)
 
@@ -196,7 +201,7 @@ module Dep = struct
         | _ -> Path.relative ~dir rel_dir_string, base
     in
     match String.chop_prefix base ~prefix:"." with
-    | None ->  path (Path.relative ~dir base)
+    | None -> path (Path.relative ~dir base)
     | Some after_dot -> alias (Alias.create ~dir after_dot)
 
   let parse_string_as_deps ~dir string =
@@ -242,7 +247,7 @@ module Target_rule = struct
 
   let to_string t =
     sprintf "%s : %s : %s"
-      (String.concat ~sep:" " (List.map t.targets ~f:Path.to_rrr_string))
+      (String.concat ~sep:" " (List.map t.targets ~f:Path.to_string))
       (String.concat ~sep:" " (List.map t.deps ~f:Dep.to_string))
       (Action.to_string t.action)
 
@@ -302,7 +307,7 @@ module Gen_key = struct
   include Hashable.Make_binable(T)
 
   let create ~tag ~dir = { tag; dir; }
-  let to_string t = sprintf "%s:%s" t.tag (Path.to_rrr_string t.dir)
+  let to_string t = sprintf "%s:%s" t.tag (Path.to_string t.dir)
 end
 
 module Rule_generator = struct

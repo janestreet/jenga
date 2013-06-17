@@ -77,7 +77,7 @@ let scheme1 =
         Glob.exec dot1s >>= fun dot1_paths ->
         let names = List.map dot1_paths ~f:name_of_path in
         message "Generate rules: %s, names = %s"
-          (Path.to_rrr_string dir) (String.concat ~sep:" " names);
+          (Path.to_string dir) (String.concat ~sep:" " names);
         let compile_rules =
           List.concat_map names ~f:(fun name ->
             compile_stages ~dir ~name ~n_stages:n_max

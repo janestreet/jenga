@@ -12,7 +12,7 @@ let db_save_span = sec 15.0
 let run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path =
   trace "----------------------------------------------------------------------";
   trace "Root: %s" root_dir;
-  trace "Start: %s" (Path.to_rrr_string start_dir);
+  trace "Start: %s" (Path.to_string start_dir);
   Persist.create_saving_periodically ~root_dir db_save_span
   >>= fun persist ->
   let fs_persist = Persist.fs_persist persist in
@@ -46,20 +46,32 @@ let install_signal_handlers () =
     Shutdown.shutdown 1;
   )
 
+(* for pre-init_logging errors *)
+let error fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt
+
 let main config =
   For_user.install_config_for_user_rules config;
 
   (* The jenga root discovery must run before we call Parallel.init *)
   let root_dir,jenga_root_path =
     match Config.external_jenga_root config with
-    | None ->
-      let dir = Init.discover_root() in
-      dir,Path.LR.local (Path.root_relative Init.jenga_root_basename)
     | Some jenga_root ->
       let dir = Core.Std.Sys.getcwd () in
-      Repo_root.set ~dir;
-      dir, Path.LR.remote jenga_root
+      Path.Root.set ~dir;
+      dir, Path.X.of_absolute (Path.Abs.create jenga_root)
+    | None ->
+      begin
+        match Path.Root.discover() with
+        | `ok ->
+          let dir = Path.to_absolute_string Path.the_root in
+          dir, Path.X.of_relative (Path.root_relative Init.jenga_root_basename)
+        | `cant_find_root ->
+          error "Cant find '%s' in start-dir or any ancestor dir"
+            Init.jenga_root_basename;
+          Pervasives.exit 1
+      end
   in
+
   let log_filename = root_dir ^/ Path.log_basename in
   Message.init_logging config ~log_filename;
 

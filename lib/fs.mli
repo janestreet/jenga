@@ -31,7 +31,6 @@ end
 module Listing : sig (* result of globbing *)
   type t with sexp, bin_io, compare
   val paths : t -> Path.t list
-  val paths_and_kinds : t -> (Path.t * Kind.t) list
 end
 
 module Persist : sig
@@ -67,9 +66,9 @@ module Ensure_directory_result : sig
   type t = [`ok | `failed | `not_a_dir]
 end
 
-val digest_file : t -> file:Path.t -> Digest_result.t Tenacious.t
+val digest_file : t -> file:Path.X.t -> Digest_result.t Tenacious.t
 val list_glob : t -> Glob.t -> Listing_result.t Tenacious.t
-val ensure_directory : t -> dir:Path.t -> Ensure_directory_result.t Tenacious.t
+val ensure_directory : t -> dir:Path.X.t -> Ensure_directory_result.t Tenacious.t
 
 val active_targets : t -> unit Tenacious.t Path.Table.t
 val sync_inotify_delivery : t -> sync_contents:string -> 'a Tenacious.t -> 'a Tenacious.t

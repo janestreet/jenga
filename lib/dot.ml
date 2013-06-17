@@ -97,6 +97,7 @@ module Dump = struct
           | `glob _ -> "parallelogram"
           | `path _ -> "oval"
           | `alias _ -> "octagon"
+          | `absolute _ -> "oval"
       in
 
       let label_item = function
@@ -108,8 +109,9 @@ module Dump = struct
           match Dep.case dep with
           | `scan (_,scanner) -> sprintf "scan: %s" (Scanner.to_string scanner)
           | `glob glob -> sprintf "glob: %s" (Fs.Glob.to_string glob)
-          | `path path -> Path.to_rrr_string path
+          | `path path -> Path.to_string path
           | `alias alias -> sprintf "alias: %s" (Alias.to_string alias)
+          | `absolute a -> Path.Abs.to_string a
       in
 
       let print_item id item =

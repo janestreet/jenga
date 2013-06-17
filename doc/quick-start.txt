@@ -62,7 +62,7 @@ API, and which will be constructed by every jengaRoot.ml
 
 To run jenga...
 
-Find the jenga executable in the bin sudirectory: jenga-standalone.exe
+Find the jenga executable in the bin sudirectory: jenga.exe
 (in the following this is executable is called "jenga")
 
 Run in a directory-tree containing a JengaRoot.ml

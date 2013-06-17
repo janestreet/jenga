@@ -37,7 +37,7 @@ let actions_run = Effort.Counter.create "act"
 let external_jobs_run = Effort.Counter.create "job"
 let user_functions_run = Effort.Counter.create "user"
 
-let the_effort =
+let all_effort =
   Effort.create [
     Fs.lstat_counter;
     Fs.digest_counter;
@@ -46,16 +46,35 @@ let the_effort =
     generators_run;
     scanners_run;
     actions_run;
-    external_jobs_run;
     user_functions_run;
+    external_jobs_run;
     persist_saves_done;
   ]
 
-let effort_string() =
-  Effort.Snapped.to_string (Effort.snap the_effort)
+let snap_all_effort () = Effort.snap all_effort
 
-let zero_effort() =
-  Effort.reset_to_zero the_effort
+(* subsets of effort counters for monitor display *)
+let run_effort =
+  Effort.create [
+    generators_run;
+    scanners_run;
+    actions_run;
+  ]
+
+let work_effort =
+  Effort.create [
+    Fs.digest_counter;
+    Fs.ls_counter;
+    user_functions_run;
+    external_jobs_run;
+  ]
+
+let intern_effort =
+  Effort.create [
+    Fs.lstat_counter;
+    Fs.mkdir_counter;
+    persist_saves_done;
+  ]
 
 (*----------------------------------------------------------------------
  stale targets
@@ -64,7 +83,7 @@ let zero_effort() =
 let remove_stale_artifacts ~gen_key:_ ~stale =
   match stale with [] -> return () | _::_ ->
     Deferred.List.iter stale ~f:(fun path ->
-      let path_string = Path.to_rrr_string path in
+      let path_string = Path.to_string path in
       try_with (fun () -> Sys.remove path_string) >>= function
       | Ok () ->
         Message.message "Removed state build artifact: %s" path_string;
@@ -333,17 +352,17 @@ module Pm_key : sig
   type t with sexp, bin_io, compare
   include Comparable_binable with type t := t
 
+  val equal : t -> t -> bool
+  val of_abs_path : Path.Abs.t -> t
   val of_path : Path.t -> t
   val of_glob : Glob.t -> t
-  val to_path_exn : t -> Path.t (* for targets_proxy_map *)
-  val equal : t -> t -> bool
-
   val to_string : t -> string
+  val to_path_exn : t -> Path.t (* for targets_proxy_map *)
 
 end = struct
 
   module T = struct
-    type t = Path of Path.t | Glob of Glob.t
+    type t = Path of Path.X.t | Glob of Glob.t
     with sexp, bin_io, compare
   end
   include T
@@ -351,15 +370,20 @@ end = struct
 
   let equal = equal_using_compare compare
 
-  let of_path t = Path t
-  let of_glob t = Glob t
-  let to_path_exn = function
-    | Path x -> x
-    | Glob _ -> failwith "Proxy_map.key.to_path_exn"
+  let of_abs_path x = Path (Path.X.of_absolute x)
+  let of_path x = Path (Path.X.of_relative x)
+  let of_glob x = Glob x
 
   let to_string = function
-    | Path path -> Path.to_rrr_string path
+    | Path path -> Path.X.to_string path
     | Glob glob -> Glob.to_string glob
+
+  let to_path_exn = function
+    | Glob _ -> failwith "Proxy_map.key.to_path_exn/Glob"
+    | Path x ->
+      match Path.X.case x with
+      | `absolute _ -> failwith "Proxy_map.key.to_path_exn/Abs"
+      | `relative path -> path
 
 end
 
@@ -574,7 +598,7 @@ end
 
 (*let tr_to_string tr = Target_rule.to_string tr*)
 let tr_to_string tr = (* just show targets or else too verbose *)
-  String.concat ~sep:" " (List.map (Target_rule.targets tr) ~f:Path.to_rrr_string)
+  String.concat ~sep:" " (List.map (Target_rule.targets tr) ~f:Path.to_string)
 
 let item_to_string = function
   | DG.Item.Root -> "ROOT"
@@ -593,6 +617,7 @@ module Reason = struct
   | Glob_error                        of string
   | Jenga_root_problem                of string
   | No_definition_for_alias
+  | No_source_at_abs_path
   | No_rule_or_source
   | Unexpected_directory
   | Non_zero_status
@@ -612,8 +637,9 @@ module Reason = struct
     | Error_in_deps _                   -> "Unable to build dependencies"
     | Digest_error                      -> "unable to digest file"
     | Glob_error s                      -> sprintf "glob error: %s" s
-    | Jenga_root_problem s              -> sprintf "Problem with JengaRoot.ml: %s" s
+    | Jenga_root_problem s              -> sprintf "Problem with %s: %s" (Init.jenga_root_basename) s
     | No_definition_for_alias           -> "No definition found for alias"
+    | No_source_at_abs_path             -> "No source at absolute path"
     | No_rule_or_source                 -> "No rule or source found for target"
     | Unexpected_directory              -> "Unexpected directory found for target"
     | Non_zero_status                   -> "External command has non-zero exit code"
@@ -650,6 +676,7 @@ module Reason = struct
     | Jenga_root_problem _
     | No_definition_for_alias
     | No_rule_or_source
+    | No_source_at_abs_path
     | Unexpected_directory
     | Non_zero_status
     | No_directory_for_target _
@@ -665,7 +692,7 @@ module Reason = struct
 
     | Multiple_rules_for_paths (_,paths)
     | Rule_failed_to_generate_targets paths
-      -> List.map paths ~f:(fun path -> "- " ^ Path.to_rrr_string path)
+      -> List.map paths ~f:(fun path -> "- " ^ Path.to_string path)
 
   let messages dep t =
     Message.error "%s: %s" (Dep.to_string dep) (to_string_one_line t);
@@ -828,7 +855,6 @@ end = struct
      failure    = !failure;
     }
 
-
 end
 
 (*----------------------------------------------------------------------
@@ -853,7 +879,7 @@ module Fork_and_report :  sig
 end = struct
 
   let run config ~stdout_expected ~get_result ~need ~putenv ~dir ~prog ~args =
-    let where = Path.to_rrr_string dir in
+    let where = Path.to_string dir in
     let job_start =
       Message.job_started ~need ~stdout_expected ~where ~prog ~args
     in
@@ -863,7 +889,7 @@ end = struct
       | None -> return ()
       | Some seconds -> Clock.after seconds
       ) >>= fun () ->
-      Forker.run ~putenv ~dir ~prog ~args
+      Forker.run ~putenv ~dir:(Path.X.of_relative dir) ~prog ~args
     ) >>= fun {Forker.Reply. stdout;stderr;outcome} ->
     match Heart.is_broken Heart.is_shutdown with
     | true  ->
@@ -1039,8 +1065,8 @@ module RR = struct
   (*let to_string t = Sexp.to_string (sexp_of_t t)*)
 
   let to_string = function
-  | No_record_of_being_run_before   -> "first"
-  | Jenga_root_changed              -> "JengaRoot"
+  | No_record_of_being_run_before   -> "initial"
+  | Jenga_root_changed              -> "jengaroot"
   | Action_changed_was _            -> "action"
   | Deps_have_changed _             -> "deps"
   | Targets_missing _               -> "missing"
@@ -1131,7 +1157,7 @@ type t = {
   persist : Persist.t; (* persisant cache *)
   memo : Memo.t; (* dynmaic cache *)
   progress : Progress.t; (* track state of each dep being built *)
-  jenga_root_path : Path.LR.t; (* access to the JengaRoot.ml *)
+  jenga_root_path : Path.X.t; (* access to the jengaroot *)
 
   (* recursive calls to build_dep go via here - avoids having big mutual let rec *)
   recurse_build_dep : (t -> Dep.t -> Proxy_map.t Builder.t);
@@ -1226,9 +1252,10 @@ let run_user_code t env1 run_kind f =
 ----------------------------------------------------------------------*)
 
 let digest_path
-    : (t -> Path.t -> [ `file of Digest.t | `missing | `is_a_dir ] Builder.t) =
+    : (t -> Path.X.t -> [ `file of Digest.t | `missing | `is_a_dir ] Builder.t) =
   fun t path ->
-    Builder.of_tenacious (Fs.digest_file t.fs ~file:path) *>>= function
+    Builder.of_tenacious (Fs.digest_file t.fs ~file:path)
+    *>>= function
     | `stat_error _   -> return `missing
     | `is_a_dir       -> return `is_a_dir
     | `undigestable k -> error t (Reason.Undigestable k)
@@ -1237,7 +1264,7 @@ let digest_path
 
 let look_for_source : (t -> Path.t -> Proxy.t option Builder.t) =
   fun t path ->
-    digest_path t path *>>= function
+    digest_path t (Path.X.of_relative path) *>>= function
     | `file digest    -> return (Some (Proxy.of_digest digest))
     | `missing        -> return None
     | `is_a_dir       -> return None
@@ -1254,7 +1281,8 @@ let need_glob : (t -> Glob.t -> (What.t * Proxy_map.t) Builder.t) =
 
 let ensure_directory : (t -> dir:Path.t -> unit Builder.t) =
   fun t ~dir ->
-    Builder.of_tenacious (Fs.ensure_directory t.fs ~dir) *>>= function
+    Builder.of_tenacious (Fs.ensure_directory t.fs ~dir:(Path.X.of_relative dir))
+    *>>= function
     | `ok -> return ()
     | `not_a_dir -> error t (Reason.No_directory_for_target "not a directory")
     | `failed -> error t (Reason.No_directory_for_target "failed to create")
@@ -1267,9 +1295,10 @@ let run_generator :
     (t -> Env1.t -> RR.t -> Gen_key.t -> Rule_generator.t -> Ruleset.t Builder.t) =
   fun t env1 rr gen_key generator ->
     let message() =
-      Message.reason "Generating rules: %s [%s]"
-        (Gen_key.to_string gen_key)
-        (RR.to_string rr);
+      if Config.show_generators_run t.config then
+        Message.message "Generating rules: %s [%s]"
+          (Gen_key.to_string gen_key)
+          (RR.to_string rr);
     in
     run_user_code t env1 Run_kind.Generator (fun () ->
       message();
@@ -1286,7 +1315,8 @@ let run_scanner :
     (t -> RR.t -> Env1.t -> Scanner.t -> Dep.t list Builder.t) =
   fun t rr env1 scanner ->
     let message() =
-      Message.reason "Scanning: %s [%s]" (Scanner.to_string scanner) (RR.to_string rr)
+      if Config.show_scanners_run t.config then
+        Message.message "Scanning: %s [%s]" (Scanner.to_string scanner) (RR.to_string rr)
     in
     match scanner with
     | `old_internal scan_id ->
@@ -1323,9 +1353,10 @@ let run_action :
      unit Builder.t) =
   fun t rr env1 action ~targets ~need ->
     let message() =
-      Message.reason "Building: %s [%s]"
-        (String.concat ~sep:" " (List.map targets ~f:Path.to_rrr_string))
-        (RR.to_string rr)
+      if Config.show_actions_run t.config then
+        Message.message "Building: %s [%s]"
+          (String.concat ~sep:" " (List.map targets ~f:Path.to_string))
+          (RR.to_string rr)
     in
     match Action.case action with
     | `id action_id ->
@@ -1336,8 +1367,8 @@ let run_action :
         )
       )
     | `xaction x ->
-      (* The putenv is determined from the env defined in JengaRoot.ml
-         but we really DONT want every command to be sensitize to JengaRoot.ml
+      (* The putenv is determined from the env defined in jengaroot
+         but we really DONT want every command to be sensitize to jengaroot
          (its a compromise, but a necessary one!)
       *)
       let putenv = Env1.putenv env1 in
@@ -1376,38 +1407,20 @@ let run_action :
   jenga_root
 ----------------------------------------------------------------------*)
 
-let digest_path_lr t path_lr =
-  match Path.LR.case path_lr with
-  | `local path -> digest_path t path *>>= fun x -> return (Some x)
-  | `remote _ ->
-    (* remote paths are not properly supported yet
-       - just here to allow regression tests to use external_jenga_root
-       Not working means
-       - we wont be sensitive to changes in a remote jenga_root
-       - either for polling or restart
-    *)
-    Builder.return None
-
 let jenga_root : (t -> (Env1.t * Root_proxy.t) Builder.t) =
   (* wrap up the call to [Load_root.get_env] into a tenacious builder,
-     which will reload any time the JengaRoot.ml is modified *)
+     which will reload any time the jengaroot is modified *)
   fun t ->
-    (
-      digest_path_lr t t.jenga_root_path *>>= function
-      | None -> return None
-      | Some res -> match res with
-        (*| `directory -> error t (Reason.Jenga_root_problem "is a directory")*)
-        | `missing -> error t (Reason.Jenga_root_problem "missing")
-        | `is_a_dir -> error t (Reason.Jenga_root_problem "is-a-directory")
-        | `file digest -> return (Some digest)
-    )
-    *>>= fun digest_opt ->
-    Builder.of_deferred (fun () -> Load_root.get_env t.jenga_root_path) *>>= function
-    | Error _ -> error t (Reason.Jenga_root_problem "failed to load")
-    | Ok env ->
-      match (Env1.of_env env) with
-      | `dups xs -> error t (Reason.Duplicate_scheme_ids xs)
-      | `ok env1 -> return (env1,Root_proxy.create digest_opt) (* all ok *)
+    digest_path t t.jenga_root_path *>>= function
+    | `missing -> error t (Reason.Jenga_root_problem "missing")
+    | `is_a_dir -> error t (Reason.Jenga_root_problem "is-a-directory")
+    | `file digest ->
+      Builder.of_deferred (fun () -> Load_root.get_env t.jenga_root_path) *>>= function
+      | Error _ -> error t (Reason.Jenga_root_problem "failed to load")
+      | Ok env ->
+        match (Env1.of_env env) with
+        | `dups xs -> error t (Reason.Duplicate_scheme_ids xs)
+        | `ok env1 -> return (env1,Root_proxy.create (Some digest)) (* all ok *)
 
 let jenga_root : (t -> (Env1.t * Root_proxy.t) Builder.t) =
   (* Memoization of jenga_root is simpler that other cases, becasuse:
@@ -1557,7 +1570,7 @@ let run_scanner_if_necessary : (t -> Dep.t list -> Scanner.t -> Dep.t list Build
     let root_proxy =
       match scanner with
       | `old_internal _ -> root_proxy
-      (* external scanners are not dependant on the JengaRoot.ml *)
+      (* external scanners are not dependant on the jengaroot *)
       | `local_deps _ -> Root_proxy.create None
     in
     build_deps t deps *>>= fun proxy_map ->
@@ -1646,13 +1659,13 @@ let prevent_action_overlap
         ~keys:targets
         ~notify_wait:(fun key ->
           Message.trace "waiting for action to complete for: %s"
-            (Path.to_rrr_string key);
+            (Path.to_string key);
         )
         (*~notify_add:(fun target ->
-          Message.message "target: %s, SET active" (Path.to_rrr_string target);
+          Message.message "target: %s, SET active" (Path.to_string target);
         )
         ~notify_rem:(fun target ->
-          Message.message "target: %s, RM active" (Path.to_rrr_string target);
+          Message.message "target: %s, RM active" (Path.to_string target);
         )*)
         (Builder.expose_unit builder)
     ) *>>= fun () ->
@@ -1664,7 +1677,7 @@ let run_target_rule_action_if_necessary
   (* run a rule/action, iff:
      - we have no record of running it before
      - one of its dependencies has changed
-     - the action has changed (for an internal action; JengaRoot.ml has changed)
+     - the action has changed (for an internal action; jengaroot has changed)
      - one of the targets is missinge
      - one of the targets is different from expected
      Record a successful run in the persistent state.
@@ -1793,7 +1806,7 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
           build_using_target_rule t tr ~demanded *>>= fun pm ->
           return (What.Target, pm)
         | None ->
-          digest_path t demanded *>>= fun res ->
+          digest_path t (Path.X.of_relative demanded) *>>= fun res ->
           match res with
           | `missing ->  error t Reason.No_rule_or_source
           | `is_a_dir -> error t Reason.Unexpected_directory
@@ -1808,7 +1821,7 @@ let is_path_a_directory : (t -> Path.t -> bool Builder.t) =
   fun t path ->
     ensure_directory t ~dir:(Path.dirname path) *>>= fun () ->
     Builder.desensitize (
-      Builder.of_tenacious (Fs.digest_file t.fs ~file:path)
+      Builder.of_tenacious (Fs.digest_file t.fs ~file:(Path.X.of_relative path))
     ) *>>= fun (res,__heart) ->
     match res with
     | `is_a_dir -> return true
@@ -1835,6 +1848,22 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
       return (What.Alias, pm)
 
 
+let need_abs_path : (t -> Path.Abs.t -> (What.t * Proxy_map.t) Builder.t) =
+  (* For dependencies on absolute paths (extenal to the repo):
+     make no attempt to build them; (there can be no rule!)
+     just digest & return the proxy.
+  *)
+  fun t abs ->
+    digest_path t (Path.X.of_absolute abs) *>>= fun res ->
+    match res with
+    | `missing ->  error t Reason.No_source_at_abs_path
+    | `is_a_dir -> error t Reason.Unexpected_directory
+    | `file digest ->
+      let proxy = Proxy.of_digest digest in
+      let pm = Proxy_map.single (Pm_key.of_abs_path abs) proxy in
+      return (What.Source, pm)
+
+
 (* now follows a sequence of functions named [build_dep] which shadow each other &
    extend with different behaviour... *)
 
@@ -1847,6 +1876,7 @@ let build_dep : (t -> Dep.t -> (What.t * Proxy_map.t) Builder.t) =
     | `path path                -> build_goal t (Goal.path path)
     | `alias alias              -> build_goal t (Goal.alias alias)
     | `glob glob                -> need_glob t glob
+    | `absolute abs             -> need_abs_path t abs
 
 
 let build_dep : (t -> Dep.t -> (What.t * Proxy_map.t) Builder.t) =
@@ -1917,7 +1947,7 @@ let build_dep : (t -> Dep.t -> Proxy_map.t Builder.t) =
 
 let build_one_root_dep :
     (
-      jenga_root_path: Path.LR.t ->
+      jenga_root_path: Path.X.t ->
       job_throttle: unit Throttle.t ->
       Fs.t ->
       Persist.t ->
@@ -1969,36 +1999,13 @@ let show_progress_fraction_reports ~fin progress =
   let rec loop () =
     Clock.after progress_report_period >>= fun () ->
     if (!fin) then Deferred.return () else (
-      let counts = Progress.snap progress in
-      let fraction = Mon.Progress.fraction counts in
+      let progress = Progress.snap progress in
+      let fraction = Mon.Progress.fraction progress in
       Message.progress ~fraction;
       loop ()
     )
   in
   loop ()
-
-let working_on_report_period = sec 0.3
-
-let message_effort_and_progress progress =
-  let counts = Progress.snap progress in
-  (* more detailed message than just progress-fraction *)
-  let num,den = Mon.Progress.fraction counts in
-  Message.message "[ %s ] { %s } -- %d / %d"
-    (effort_string())
-    (Mon.Progress.to_string `full counts)
-    num den
-
-let show_effort_and_progress_reports ~fin progress =
-  let rec loop () =
-    Clock.after working_on_report_period >>= fun () ->
-    if (!fin) then Deferred.return () else (
-      message_effort_and_progress progress;
-      loop ()
-    )
-  in
-  loop ()
-
-
 
 
 let make_graph_dumper discovered_graph progress =
@@ -2156,9 +2163,7 @@ let build_once :
 
     let counts = Progress.snap progress in
     let duration = Time.diff (Time.now()) start_time in
-
-    let effort_string = effort_string() in
-    zero_effort();
+    let effort_string = Effort.Snapped.to_string (snap_all_effort()) in
 
     if Mon.Progress.completed counts then (
       let total = Mon.Progress.total counts in
@@ -2219,11 +2224,6 @@ let build_forever =
       if Config.progress config then (
         don't_wait_for (
           show_progress_fraction_reports ~fin progress
-        )
-      );
-      if Config.show_working_on config then (
-        don't_wait_for (
-          show_effort_and_progress_reports ~fin progress
         )
       );
 

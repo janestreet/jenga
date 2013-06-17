@@ -15,5 +15,5 @@ end
 val run :
   (* calls to putenv, to be done in parent, before the fork *)
   putenv:(string * string) list ->
-  dir:Path.t -> prog:string -> args:string list ->
+  dir:Path.X.t -> prog:string -> args:string list ->
   Reply.t Deferred.t

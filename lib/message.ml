@@ -38,16 +38,16 @@ module Job_output = struct
 end
 
 module Tag = struct
-  (* Error, Message(info), Verbose, Reason, Trace, Unlogged *)
-  type t = E | M | V | R | T | U with sexp_of
+  (* Error, Message(info), Verbose, Trace, Unlogged *)
+  type t = E | M | V | T | U with sexp_of
   let to_string t = Sexp.to_string (sexp_of_t t)
 end
 
 module Event = struct
   type t =
   | Tagged_message of Tag.t * string
-  | Load_jenga_root of Path.LR.t
-  | Load_jenga_root_done of Path.LR.t * Time.Span.t
+  | Load_jenga_root of Path.X.t
+  | Load_jenga_root_done of Path.X.t * Time.Span.t
   | Load_sexp_error of Path.t * [`loc of int * int] * exn
   | Job_started of Job_start.t
   | Job_completed of Job_start.t * Job_finish.t * Job_output.t
@@ -99,7 +99,6 @@ let tagged_message tag fmt =
 let error fmt   = tagged_message Tag.E fmt
 let message fmt = tagged_message Tag.M fmt
 let verbose fmt = tagged_message Tag.V fmt
-let reason fmt  = tagged_message Tag.R fmt
 let trace fmt   = tagged_message Tag.T fmt
 let unlogged fmt= tagged_message Tag.U fmt
 
@@ -149,9 +148,35 @@ let rebuilding () =
   T.dispatch the_log (Event.Rebuilding)
 
 
-let need_quoting x = String.contains x ' '
-let quote_arg x = if need_quoting x then sprintf "'%s'" x else x
-let concat_args_quoting_spaces xs = String.concat ~sep:" " (List.map xs ~f:quote_arg)
+module Q = struct
+
+  let is_special_char_to_bash = function
+    | '\\' | '\'' | '"' | '`' | '<' | '>' | '|' | ';' | ' ' | '\t' | '\n'
+    | '(' | ')' | '[' | ']' | '?' | '#' | '$' | '^' | '&' | '*' | '='
+      -> true
+    | _
+      -> false
+
+  let escape_special_chars s =
+    String.concat_map s ~f:(fun c ->
+      if is_special_char_to_bash c then sprintf "\\%c" c else Char.to_string c
+    )
+
+  let quote_arg_prevent_bash_interpretation s =
+    (* quote a string (if necessary) to prevent interpretation of any chars which have a
+       special meaning to bash *)
+    if String.exists s ~f:is_special_char_to_bash
+    then
+      if String.contains s '\''
+      (* already contains single-quotes; quote using backslash escaping *)
+      then escape_special_chars s
+      (* no embedded single quotes; just wrap with single quotes *)
+      else sprintf "'%s'" s
+    else
+      (* does not need quoting *)
+      s
+
+end
 
 let output_lines s =
   match s with
@@ -181,7 +206,6 @@ let omake_style_logger config event =
   | Event.Tagged_message (Tag.E,s) -> jput "ERROR: %s" s
   | Event.Tagged_message (Tag.M,s) -> jput "%s" s
   | Event.Tagged_message (Tag.V,s) -> if verbose then jput "%s" s
-  | Event.Tagged_message (Tag.R,s) -> if Config.show_run_reason config then jput "%s" s
   (*put*)
   | Event.Tagged_message (Tag.T,s) -> if Config.debug config then put "TRACE: %s" s
   | Event.Tagged_message (Tag.U,s) -> put "%s" s
@@ -189,21 +213,21 @@ let omake_style_logger config event =
   | Event.Load_jenga_root path ->
     if not quiet then (
       if verbose then (
-        let where = Path.LR.to_rrr_string (Path.LR.dirname path) in
-        let need = Path.LR.basename path in
+        let where = Path.X.to_string (Path.X.dirname path) in
+        let need = Path.X.basename path in
         put "- build %s %s" where need;
       );
-      jput "reading %s" (Path.LR.to_rrr_string path)
+      jput "reading %s" (Path.X.to_string path)
     )
   | Event.Load_jenga_root_done (path,duration) ->
     jput "finished reading %s (%s)"
-      (Path.LR.to_rrr_string path)
+      (Path.X.to_string path)
       (Time.Span.to_string duration)
 
   | Event.Load_sexp_error (path,`loc (line,col),exn) ->
     if not quiet then (
       if verbose then (
-        let where = Path.to_rrr_string (Path.dirname path) in
+        let where = Path.to_string (Path.dirname path) in
         let need = Path.basename path in
         put "- build %s %s" where need;
       );
@@ -241,7 +265,13 @@ let omake_style_logger config event =
         (* if verbose, we already showed this line when the job started *)
           put "- build %s %s" where need;
         );
-        put "+ %s %s" prog (concat_args_quoting_spaces args);
+        (* print out the command in a format suitable for cut&pasting into bash
+           (except for the leading "+")
+        *)
+        put "+ %s %s" prog (
+          String.concat ~sep:" "
+            (List.map args ~f:Q.quote_arg_prevent_bash_interpretation)
+        );
         let status_string =
           match outcome with
           | `success -> "code 0"
