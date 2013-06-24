@@ -79,34 +79,29 @@ Library jenga_lib
                       ocaml_plugin,
                       threads
 
-Executable jenga_main
+Library jenga_archive
+  Path:               bin
+  Install:            false
+  BuildDepends:       jenga,type_conv,sexplib
+  Modules:            Jenga_archive_dummy
+  CSources:           jenga_archive.c
+
+Executable jenga
   Install:            false
   Path:               bin
   MainIs:             jenga.ml
   CompiledObject:     best
   BuildDepends:       jenga,
+                      jenga_archive,
                       threads
 
-Executable jenga
-  Path:               bin
-  MainIs:             jenga_standalone.ml
-  CompiledObject:     best
-  BuildDepends:       jenga,
-                      threads
-
-Executable jenga_offline_main
+Executable jenga_offline
   Install:            false
   Path:               bin
   MainIs:             jenga_offline.ml
   CompiledObject:     best
   BuildDepends:       jenga,
-                      threads
-
-Executable jenga_offline
-  Path:               bin
-  MainIs:             jenga_offline_standalone.ml
-  CompiledObject:     best
-  BuildDepends:       jenga,
+                      jenga_archive,
                       threads
 
 Executable "jem"
@@ -114,4 +109,5 @@ Executable "jem"
   MainIs:             jem.ml
   CompiledObject:     best
   BuildDepends:       jenga,
+                      ocaml_plugin.fake,
                       threads

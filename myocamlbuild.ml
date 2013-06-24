@@ -6,15 +6,11 @@ let dispatch = function
   | Before_options ->
     Options.make_links := false
   | After_rules ->
-    let ocaml_fake_archive_o =
-      (Findlib.query "ocaml_plugin").Findlib.location ^ "/ocaml_fake_archive.o"
-    in
-    flag ["link_fake_archive"; "link"] (A ocaml_fake_archive_o);
     let env = BaseEnvLight.load () in
     let stdlib = BaseEnvLight.var_get "standard_library" env in
     rule "standalone"
-      ~deps:["%.native"]
-      ~prod:"%_standalone.native"
+      ~deps:["lib/jenga_lib.cmi"]
+      ~prod:"bin/jenga_archive.c"
       (fun env build ->
         let ocaml_embed_compiler = Command.search_in_path "ocaml-embed-compiler" in
         let ocamlopt = Command.search_in_path "ocamlopt.opt" in
@@ -29,7 +25,7 @@ let dispatch = function
                 StringSet.add (String.sub tag 4 (idx - 4)) packages
               else
                 packages)
-            (tags_of_pathname (env "%_standalone.native"))
+            (tags_of_pathname "bin/jenga_archive.c")
             StringSet.empty
         in
 
@@ -38,8 +34,9 @@ let dispatch = function
           Findlib.query "type_conv" (* Hack since the findlib interface in myocamlbuild is
                                        too limited and does not allow to pass predicates
                                        to findlib. *)
-          :: Findlib.topological_closure
-            (List.map Findlib.query (StringSet.elements packages))
+          :: List.filter (fun pkg -> pkg.Findlib.name <> "type_conv")
+            (Findlib.topological_closure
+               (List.map Findlib.query (StringSet.elements packages)))
         in
         (* Directories to search for .cmi and .cmxs (for camlp4o): *)
         let directories =
@@ -78,7 +75,7 @@ let dispatch = function
                 camlp4;
                 A "-cc"; A ocamlopt;
                 S (List.map (fun cmi -> A cmi) cmi_list);
-                A "-o"; A (env "%_standalone.native")]))
+                A "-o"; A "bin/jenga_archive.c"]))
 
   | _ ->
     ()
