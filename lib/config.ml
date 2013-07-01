@@ -15,6 +15,7 @@ type t = {
   show_reconsidering : bool;
   quiet : bool;
   debug : bool;
+  time : bool;
   sequential_deps : bool;
   show_sensitized : bool;
   delay_for_dev : Time.Span.t option;

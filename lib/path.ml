@@ -11,6 +11,7 @@ let db_basename = special ".db"
 let dot_basename = special ".dot"
 let lock_basename = special ".lock"
 let server_basename = special ".server"
+let plugin_cache_basename = special ".plugin-cache"
 
 let empty_string = function "" -> true | _ -> false
 

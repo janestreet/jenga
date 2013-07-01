@@ -76,6 +76,11 @@ let debug =
   +> Spec.flag "debug" ~aliases:["D"] Spec.no_arg
     ~doc:" show debug"
 
+let time =
+  Spec.step (fun m x -> m ~time:x)
+  +> Spec.flag "time" Spec.no_arg
+    ~doc:" prefix all messages with the time (since the build started)"
+
 let sequential_deps =
   Spec.step (fun m x -> m ~sequential_deps:x)
   +> Spec.flag "sequential-deps" Spec.no_arg
@@ -143,6 +148,7 @@ let go_command =
     ++ show_reconsidering
     ++ quiet
     ++ debug
+    ++ time
     ++ sequential_deps
     ++ show_sensitized
     ++ delay_for_dev
@@ -165,7 +171,8 @@ let go_command =
       ~show_generators_run
       ~show_run_reason
       ~show_checked ~show_considering ~show_reconsidering
-      ~quiet ~debug ~sequential_deps ~show_sensitized
+      ~quiet ~debug ~time
+      ~sequential_deps ~show_sensitized
       ~delay_for_dev ~report_long_cycle_times
       ~wflag:_ ~output_postpone:_
       ~progress ~continuous_graph_dump
@@ -186,6 +193,7 @@ let go_command =
           show_reconsidering;
           quiet;
           debug;
+          time;
           sequential_deps;
           show_sensitized;
           delay_for_dev = Option.map delay_for_dev ~f:(fun x -> sec (float x));

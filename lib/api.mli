@@ -87,6 +87,8 @@ module Env : sig
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?action : (Sexp.t -> unit Deferred.t) ->
     ?scan : (Sexp.t -> Dep.t list Deferred.t) ->
+    ?build_begin : (unit -> unit Deferred.t) ->
+    ?build_end : (unit -> unit Deferred.t) ->
     (string * Rule_scheme.t option) list ->
     t
 end

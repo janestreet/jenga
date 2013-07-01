@@ -12,6 +12,7 @@ val log_basename : string
 val dot_basename : string
 val lock_basename : string
 val server_basename : string
+val plugin_cache_basename : string
 
 (* [Path.Rel.t] == [Path.t]
    Type for repo root-relative paths. Used throughout jenga.

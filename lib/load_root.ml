@@ -15,7 +15,8 @@ end)
 let get_env path_lr =
   let plugin_cache =
     P.Plugin_cache.Config.create
-      ~dir:"/tmp/jenga-plugin-cache"
+      ~dir:(Path.to_absolute_string (Path.root_relative Path.plugin_cache_basename))
+      ~try_old_cache_with_new_exec:true
       ()
   in
   Message.load_jenga_root path_lr;

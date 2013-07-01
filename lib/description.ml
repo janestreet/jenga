@@ -348,6 +348,8 @@ module Env = struct
     action : Sexp.t -> unit Deferred.t;
     scan : Sexp.t -> Dep.t list Deferred.t;
     schemes : (Pattern.t * Rule_scheme.t option) list;
+    build_begin : (unit -> unit Deferred.t);
+    build_end : (unit -> unit Deferred.t);
   }
 
   let k_assert_false = fun _ -> assert false
@@ -355,6 +357,8 @@ module Env = struct
   let create
       ?(putenv=[]) ?command_lookup_path
       ?(action=k_assert_false) ?(scan=k_assert_false)
+      ?(build_begin=(fun () -> Deferred.return ()))
+      ?(build_end=(fun () -> Deferred.return ()))
       schemes =
     {
       putenv;
@@ -365,6 +369,8 @@ module Env = struct
         List.map schemes ~f:(fun (string,scheme) ->
           Pattern.create_from_glob_string string, scheme
         );
+      build_begin;
+      build_end;
     }
 
 end

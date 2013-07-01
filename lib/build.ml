@@ -86,7 +86,7 @@ let remove_stale_artifacts ~gen_key:_ ~stale =
       let path_string = Path.to_string path in
       try_with (fun () -> Sys.remove path_string) >>= function
       | Ok () ->
-        Message.message "Removed state build artifact: %s" path_string;
+        Message.message "Removed stale build artifact: %s" path_string;
         return ()
       | Error _ ->
         try_with (fun () -> Sys.file_exists path_string) >>= function
@@ -140,6 +140,8 @@ module Env1 : sig
   val run_generator_scheme : t -> Gen_key.t -> (Rule_generator.t,exn) Result.t
   val run_scanner : t -> Scan_id.t -> Dep.t list Deferred.t
   val run_internal_action : t -> Action_id.t -> unit Deferred.t
+  val build_begin : t -> unit Deferred.t
+  val build_end : t -> unit Deferred.t
 
 end = struct
 
@@ -149,10 +151,17 @@ end = struct
     run_generator_scheme : Gen_key.t -> (Rule_generator.t,exn) Result.t;
     run_scanner : Scan_id.t -> Dep.t list Deferred.t;
     run_internal_action : Action_id.t -> unit Deferred.t;
+    build_begin : unit -> unit Deferred.t;
+    build_end : unit -> unit Deferred.t;
   } with fields
 
+  let build_begin t = t.build_begin ()
+  let build_end t = t.build_end ()
+
   let of_env env =
-    let {Env. putenv; command_lookup_path; action; scan; schemes} = env in
+    let {Env. putenv; command_lookup_path; action; scan;
+         build_begin; build_end;
+         schemes} = env in
 
     (* Each time we construct the Env1 form the Env, we reset the command lookup path.
 
@@ -255,6 +264,8 @@ end = struct
         run_generator_scheme;
         run_scanner;
         run_internal_action;
+        build_begin;
+        build_end;
       }
 
 end
@@ -1989,6 +2000,47 @@ let build_one_root_dep :
     tenacious
 
 
+let get_env_option :
+    (
+      jenga_root_path: Path.X.t ->
+      job_throttle: unit Throttle.t ->
+      Fs.t ->
+      Persist.t ->
+      Memo.t ->
+      DG.t ->
+      Config.t ->
+      Progress.t ->
+      Env1.t option Tenacious.t
+    ) =
+  fun ~jenga_root_path ~job_throttle fs persist memo discovered_graph config progress ->
+    let me = Dep.absolute ~path:"/dummy-build-begin" in
+    let node = DG.create_root discovered_graph in
+    let t = {
+      config;
+      fs;
+      job_throttle;
+      persist;
+      memo;
+      progress;
+      jenga_root_path;
+      recurse_build_dep = build_dep;
+      me;
+      discovered_graph;
+      node;
+    } in
+    let builder =
+      jenga_root t *>>= fun (env1,__root_proxy) ->
+      Builder.return env1
+    in
+    let tenacious =
+      Tenacious.bind (Builder.expose builder) (function
+      | Error _ -> Tenacious.return None
+      | Ok env1 -> Tenacious.return (Some env1)
+      )
+    in
+    tenacious
+
+
 (*----------------------------------------------------------------------
   asyncronous writers/dumpers
 ----------------------------------------------------------------------*)
@@ -2182,6 +2234,20 @@ let build_once :
   entry point -- build_forever
 ----------------------------------------------------------------------*)
 
+let run_user_function_from_env_opt env_opt tag ~f =
+  match env_opt with
+  | None -> Deferred.return ()
+  | Some env1 ->
+    Monitor.try_with (fun () ->
+      f env1
+    ) >>= function
+    | Ok () -> Deferred.return ()
+    | Error exn ->
+      let exn = Monitor.extract_exn exn in
+      Message.error "%s: threw exception:\n%s" tag (Exn.to_string exn);
+      Deferred.return ()
+
+
 let build_forever =
   (* co-ordinate the build-forever process *)
 
@@ -2194,6 +2260,14 @@ let build_forever =
     let job_throttle =
       let max_concurrent_jobs = Config.j_number config in
       Throttle.create ~continue_on_error:true ~max_concurrent_jobs
+    in
+
+    let get_env_opt () =
+      get_env_option
+        ~jenga_root_path
+        ~job_throttle
+        fs persist memo discovered_graph
+        config progress
     in
 
     (* construct the top-level tenacious builder only once *)
@@ -2233,8 +2307,16 @@ let build_forever =
         else Deferred.unit
       );
 
+      Tenacious.exec (get_env_opt()) >>= fun (env_opt,__heart) ->
+
+      (* call user build_begin function *)
+      run_user_function_from_env_opt env_opt "build_begin" ~f:Env1.build_begin >>= fun () ->
+
       (* do the build once *)
       build_once config discovered_graph progress top_tenacious >>= fun heart ->
+
+      (* call user build_end function *)
+      run_user_function_from_env_opt env_opt "build_end" ~f:Env1.build_end >>= fun () ->
 
       fin := true;
       when_polling() >>= fun () ->

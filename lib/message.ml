@@ -144,7 +144,12 @@ let sensitized_on ~desc =
 let file_changed ~desc =
   T.dispatch the_log (Event.File_changed desc)
 
+
+let base_time = ref (Time.now())
+
 let rebuilding () =
+  (* reset base_time spans since build-started reported by -time *)
+  base_time := Time.now();
   T.dispatch the_log (Event.Rebuilding)
 
 
@@ -190,16 +195,39 @@ let output_lines s =
     in
     String.split s ~on:'\n'
 
+
+let fixed_span_for_message_prefix span =
+  (* fixed width (upto 100min) format for span for -time flag -- mm:ss.xxx *)
+  let parts = Time.Span.to_parts span in
+  let module P = Time.Span.Parts in
+  sprintf "%02d:%02d.%03d" (60 * parts.P.hr + parts.P.min) parts.P.sec parts.P.ms
+
+
+let pretty_span span =
+  let parts = Time.Span.to_parts span in
+  let module P = Time.Span.Parts in
+  let mins = 60 * parts.P.hr + parts.P.min in
+  if Int.(mins > 0) then              sprintf "%dm %02ds" mins parts.P.sec
+  else if Int.(parts.P.sec > 0) then  sprintf     "%d.%03ds"   parts.P.sec parts.P.ms
+  else                                sprintf        "%dms"                parts.P.ms
+
+
 let omake_style_logger config event =
 
   let quiet = Config.quiet config in   (* quiet trumps verbose *)
   let verbose = Config.verbose config in
 
+  let elapsed =
+    if not (Config.time config) then "" else
+      let duration = Time.diff (Time.now()) (!base_time) in
+      sprintf "%s " (fixed_span_for_message_prefix duration)
+  in
+
   let put fmt =
-    ksprintf (fun s -> Printf.printf "%s\n%!" s) fmt
+    ksprintf (fun s -> Printf.printf "%s%s\n%!" elapsed s) fmt
   in
   let jput fmt =
-    ksprintf (fun s -> Printf.printf "%s: %s\n%!" build_system_message_tag s) fmt
+    ksprintf (fun s -> Printf.printf "%s%s: %s\n%!" elapsed build_system_message_tag s) fmt
   in
   match event with
   (* jput -- with leading triple stars *)
@@ -222,7 +250,7 @@ let omake_style_logger config event =
   | Event.Load_jenga_root_done (path,duration) ->
     jput "finished reading %s (%s)"
       (Path.X.to_string path)
-      (Time.Span.to_string duration)
+      (pretty_span duration)
 
   | Event.Load_sexp_error (path,`loc (line,col),exn) ->
     if not quiet then (
@@ -260,7 +288,7 @@ let omake_style_logger config event =
       in
       let show_something = job_failed  || has_stderr_or_unexpected_stdout || verbose in
       if show_something then (
-        let duration_string = Time.Span.to_string duration in
+        let duration_string = pretty_span duration in
         if not verbose then (
         (* if verbose, we already showed this line when the job started *)
           put "- build %s %s" where need;
@@ -284,11 +312,11 @@ let omake_style_logger config event =
     )
   | Event.Build_done (duration,`u u,total,s) ->
     jput "%d/%d targets are up to date" total total;
-    jput "done (#%d, %s, %s) -- HURRAH" u (Time.Span.to_string duration) s
+    jput "done (#%d, %s, %s) -- HURRAH" u (pretty_span duration) s
 
   | Event.Build_failed (duration, `u u,(num,den),s) -> (
     jput "%d/%d targets are up to date" num den;
-    jput "failed (#%d, %s, %s)" u (Time.Span.to_string duration) s;
+    jput "failed (#%d, %s, %s)" u (pretty_span duration) s;
   )
 
   | Event.Progress (num,den) -> (

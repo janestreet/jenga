@@ -143,12 +143,16 @@ module Env : sig
     action : Sexp.t -> unit Deferred.t;
     scan : Sexp.t -> Dep.t list Deferred.t;
     schemes : (Pattern.t * Rule_scheme.t option) list;
+    build_begin : (unit -> unit Deferred.t);
+    build_end : (unit -> unit Deferred.t);
   }
   val create :
     ?putenv : (string * string) list ->
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?action : (Sexp.t -> unit Deferred.t) ->
     ?scan : (Sexp.t -> Dep.t list Deferred.t) ->
+    ?build_begin : (unit -> unit Deferred.t) ->
+    ?build_end : (unit -> unit Deferred.t) ->
     (string * Rule_scheme.t option) list ->
     t
 end
