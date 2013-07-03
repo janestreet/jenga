@@ -65,6 +65,7 @@ Library jenga_lib
                       pcre,
                       sexplib,
                       sexplib.syntax,
+                      str,
                       threads
   XMETARequires:      sexplib,
                       fieldslib,
@@ -77,6 +78,7 @@ Library jenga_lib
                       parallel,
                       pcre,
                       ocaml_plugin,
+                      str,
                       threads
 
 Library jenga_archive
