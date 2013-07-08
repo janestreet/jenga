@@ -248,11 +248,14 @@ end = struct
     in
 
     (* scanner / internal-action wrapping *)
+    (* Avoid pointless sexp->string->sexp conversion spotted by Dmitry... *)
     let run_scanner id =
-      scan (Sexp.of_string (Scan_id.to_string id))
+      (*scan (Sexp.of_string (Scan_id.to_string id))*)
+      scan (Scan_id.to_sexp id)
     in
     let run_internal_action id =
-      action (Sexp.of_string (Action_id.to_string id))
+      (*action (Sexp.of_string (Action_id.to_string id))*)
+      action (Action_id.to_sexp id)
     in
 
     let dups = !dups in
