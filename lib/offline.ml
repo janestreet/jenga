@@ -10,10 +10,10 @@ let cat_sexp =
     ~summary:"cat .jenga.db in sexp format (big!)"
     (fun () ->
       match Path.Root.discover() with | `cant_find_root ->
-        message "Cant find '%s' in start-dir or any ancestor dir" Init.jenga_root_basename
+        message "Cant find '%s' in start-dir or any ancestor dir" Misc.jenga_root_basename
       | `ok ->
         let root_dir = Path.to_absolute_string Path.the_root in
-        Init.in_async ~f:(fun () ->
+        Misc.in_async ~f:(fun () ->
           message "cat_sexp...";
           let db_filename = root_dir ^/ Path.db_basename in
           message "cat_sexp, loading...";

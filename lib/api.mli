@@ -80,9 +80,16 @@ module Rule_scheme : sig
   val create : tag:string -> (dir:Path.t -> Rule_generator.t) -> t
 end
 
+module Version : sig
+  type t =
+  | Pre_versioning
+  | V_2013_07_09
+end
+
 module Env : sig
   type t = Description.Env.t
   val create :
+    ?version:Version.t ->
     ?putenv:(string * string) list ->
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?action : (Sexp.t -> unit Deferred.t) ->

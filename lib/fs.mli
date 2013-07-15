@@ -36,8 +36,6 @@ end
 module Persist : sig
   type t with sexp, bin_io
   val create : unit -> t
-  val equal : t -> t -> bool
-  val copy : t -> t
 end
 
 type t (* handle to the file-system *)

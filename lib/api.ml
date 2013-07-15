@@ -32,6 +32,7 @@ module Rule = Rule
 module Rule_scheme = Rule_scheme
 module Rule_generator = Rule_generator
 module Env = Env
+module Version = Version
 
 let verbose() = Config.verbose (For_user.config ())
 
@@ -97,7 +98,7 @@ let parse_rules_from_simple_makefile path =
       let implicit_default_rule = Rule.default ~dir (List.map targets ~f:Dep.path) in
       return (implicit_default_rule :: rules)
 
-include Build.Run_now
+include Job.Run_now
 
 
 let enqueue_file_access = File_access.enqueue

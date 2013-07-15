@@ -343,6 +343,7 @@ end
 module Env = struct
 
   type t = {
+    version:Version.t;
     putenv:(string * string) list;
     command_lookup_path : [`Replace of string list | `Extend of string list] option;
     action : Sexp.t -> unit Deferred.t;
@@ -355,12 +356,14 @@ module Env = struct
   let k_assert_false = fun _ -> assert false
 
   let create
+      ?(version=Version.Pre_versioning)
       ?(putenv=[]) ?command_lookup_path
       ?(action=k_assert_false) ?(scan=k_assert_false)
       ?(build_begin=(fun () -> Deferred.return ()))
       ?(build_end=(fun () -> Deferred.return ()))
       schemes =
     {
+      version;
       putenv;
       command_lookup_path;
       action;

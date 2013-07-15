@@ -138,6 +138,7 @@ end
 
 module Env : sig
   type t = {
+    version : Version.t;
     putenv : (string * string) list;
     command_lookup_path : [`Replace of string list | `Extend of string list] option;
     action : Sexp.t -> unit Deferred.t;
@@ -147,6 +148,7 @@ module Env : sig
     build_end : (unit -> unit Deferred.t);
   }
   val create :
+    ?version : Version.t ->
     ?putenv : (string * string) list ->
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?action : (Sexp.t -> unit Deferred.t) ->

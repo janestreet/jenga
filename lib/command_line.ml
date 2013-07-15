@@ -81,6 +81,11 @@ let time =
   +> Spec.flag "time" Spec.no_arg
     ~doc:" prefix all messages with the time (since the build started)"
 
+let report_mem =
+  Spec.step (fun m x -> m ~report_mem:x)
+  +> Spec.flag "report-mem" Spec.no_arg
+    ~doc:" report heap mem usage when polling; causes one major GC to be forced"
+
 let sequential_deps =
   Spec.step (fun m x -> m ~sequential_deps:x)
   +> Spec.flag "sequential-deps" Spec.no_arg
@@ -126,7 +131,7 @@ let external_jenga_root =
   Spec.step (fun m x -> m ~external_jenga_root:x)
   +> Spec.flag "external-jengaroot" ~aliases:["x"] (Spec.optional Spec.string)
     ~doc:(sprintf " Specify path to %s; The repo_root is taken to be CWD."
-            Init.jenga_root_basename)
+            Misc.jenga_root_basename)
 
 let anon_demands =
   Spec.step (fun m demands -> m ~demands)
@@ -149,6 +154,7 @@ let go_command =
     ++ quiet
     ++ debug
     ++ time
+    ++ report_mem
     ++ sequential_deps
     ++ show_sensitized
     ++ delay_for_dev
@@ -171,7 +177,7 @@ let go_command =
       ~show_generators_run
       ~show_run_reason
       ~show_checked ~show_considering ~show_reconsidering
-      ~quiet ~debug ~time
+      ~quiet ~debug ~time ~report_mem
       ~sequential_deps ~show_sensitized
       ~delay_for_dev ~report_long_cycle_times
       ~wflag:_ ~output_postpone:_
@@ -194,6 +200,7 @@ let go_command =
           quiet;
           debug;
           time;
+          report_mem;
           sequential_deps;
           show_sensitized;
           delay_for_dev = Option.map delay_for_dev ~f:(fun x -> sec (float x));

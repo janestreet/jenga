@@ -11,8 +11,6 @@ val intern_effort : Effort.t
 module Persist : sig
   type t with sexp, bin_io
   val create : unit -> t
-  val equal : t -> t -> bool
-  val copy : t -> t
 end
 
 module Progress : sig
@@ -31,10 +29,5 @@ val build_forever :
   when_polling:(unit -> unit Deferred.t) ->
   when_rebuilding:(unit -> unit Deferred.t) ->
   unit Deferred.t
-
-module Run_now : sig
-  val run_action_now : Description.Action.t -> unit Deferred.t
-  val run_action_now_stdout : Description.Action.t -> string Deferred.t
-end
 
 val persist_saves_done : Effort.Counter.t

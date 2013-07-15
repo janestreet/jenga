@@ -26,9 +26,6 @@ module State : sig
   val fs_persist : t -> Fs.Persist.t
   val build_persist : t -> Build.Persist.t
 
-  val equal : t -> t -> bool
-  val copy : t -> t
-
   val load_db : db_filename:string -> t Deferred.t
   val save_db : t -> db_filename:string -> unit Deferred.t
 
@@ -44,15 +41,6 @@ end = struct
   let empty () = {
     fs_persist = Fs.Persist.create ();
     build_persist = Build.Persist.create ();
-  }
-
-  let equal t1 t2 =
-    Fs.Persist.equal t1.fs_persist t2.fs_persist
-    && Build.Persist.equal t1.build_persist t2.build_persist
-
-  let copy t = {
-    fs_persist = Fs.Persist.copy t.fs_persist;
-    build_persist = Build.Persist.copy t.build_persist;
   }
 
   (* load/save bin_prot.. *)
@@ -84,6 +72,7 @@ end = struct
     Effort.track Build.persist_saves_done (fun () ->
       Writer.with_file_atomic db_filename ~f:(fun w ->
         Writer.write_bin_prot w bin_writer_t t;
+        Misc.set_persist_is_saved();
         return ()
       )
     )
@@ -91,15 +80,7 @@ end = struct
 end
 
 type t = {
-  (* [state_mem] is the state read & modified by the build process. *)
   state_mem : State.t;
-
-  (* [state_disk] is a copy of the state, which tracks its value when last synced to disk.
-     To perform a save, [state_mem] is copied (in one async-atomic operation) to
-     [state_disk], which can then be written to disk asyncronously over multiple
-     async-cycles without blocking updates to [state_mem]. *)
-  mutable state_disk : State.t;
-
   db_filename : string;
   mutable save_status : [ `saving of unit Deferred.t | `not_saving ];
   mutable periodic_saving_enabled : bool;
@@ -119,7 +100,6 @@ let create ~root_dir =
 
   let t = {
     state_mem = state;
-    state_disk = State.copy state;
     db_filename;
     save_status = `not_saving;
     periodic_saving_enabled = true;
@@ -128,16 +108,14 @@ let create ~root_dir =
   return t
 
 let save_if_changed t =
-  match (State.equal t.state_disk t.state_mem) with
-  | true ->
+  match Misc.persist_is_modified() with
+  | false ->
     message "SAVE_DB: unchanged so not saving";
     Deferred.unit
-  | false ->
+  | true ->
     message "SAVE_DB: %s..." (db_filename t);
     time_async (fun () ->
-      (* copy the in-mem state & save.. *)
-      t.state_disk <- State.copy t.state_mem;
-      State.save_db t.state_disk ~db_filename:(db_filename t)
+      State.save_db t.state_mem ~db_filename:(db_filename t)
     ) >>= fun ((),duration) ->
     message "SAVE_DB: %s... done (%s)" (db_filename t) (Time.Span.to_string duration);
     return ()

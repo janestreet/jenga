@@ -64,10 +64,10 @@ let main config =
         match Path.Root.discover() with
         | `ok ->
           let dir = Path.to_absolute_string Path.the_root in
-          dir, Path.X.of_relative (Path.root_relative Init.jenga_root_basename)
+          dir, Path.X.of_relative (Path.root_relative Misc.jenga_root_basename)
         | `cant_find_root ->
           error "Cant find '%s' in start-dir or any ancestor dir"
-            Init.jenga_root_basename;
+            Misc.jenga_root_basename;
           Pervasives.exit 1
       end
   in

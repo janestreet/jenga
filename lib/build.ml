@@ -3,9 +3,17 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
+let monitor_ht_size tag create () =
+  let ht = create () in
+  Mon.Mem.install ("B."^tag) (fun () -> Hashtbl.length ht);
+  ht
+
+let monitor_hs_size tag create () =
+  let hs = create () in
+  Mon.Mem.install ("B."^tag) (fun () -> Hash_set.length hs);
+  hs
+
 let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
-let equal_pair f g = fun (a1,b1) (a2,b2) -> f a1 a2 && g b1 b2
-let equal_list f = fun xs ys -> List.equal xs ys ~equal:f
 
 let (<>) = Int.(<>)
 
@@ -34,7 +42,6 @@ let scanners_run = Effort.Counter.create "scan"
 let actions_run = Effort.Counter.create "act"
 
 (* How did we do it? - job (external process) / user code (internal-ml-function) *)
-let external_jobs_run = Effort.Counter.create "job"
 let user_functions_run = Effort.Counter.create "user"
 
 let all_effort =
@@ -47,7 +54,7 @@ let all_effort =
     scanners_run;
     actions_run;
     user_functions_run;
-    external_jobs_run;
+    Job.external_jobs_run;
     persist_saves_done;
   ]
 
@@ -66,7 +73,7 @@ let work_effort =
     Fs.digest_counter;
     Fs.ls_counter;
     user_functions_run;
-    external_jobs_run;
+    Job.external_jobs_run;
   ]
 
 let intern_effort =
@@ -135,6 +142,7 @@ module Env1 : sig
 
   type t
   val of_env : Env.t ->  [ `ok of t | `dups of scheme_id list ]
+  val rel_path_semantics : t -> Forker.Rel_path_semantics.t
   val putenv : t -> (string * string) list
   val lookup_gen_key : t -> Goal.t -> Gen_key.t option
   val run_generator_scheme : t -> Gen_key.t -> (Rule_generator.t,exn) Result.t
@@ -146,6 +154,7 @@ module Env1 : sig
 end = struct
 
   type t = {
+    version : Version.t;
     putenv : (string * string) list;
     lookup_gen_key : Goal.t -> Gen_key.t option;
     run_generator_scheme : Gen_key.t -> (Rule_generator.t,exn) Result.t;
@@ -155,11 +164,18 @@ end = struct
     build_end : unit -> unit Deferred.t;
   } with fields
 
+  let rel_path_semantics t =
+    match t.version with
+    | Version.Pre_versioning
+      -> Forker.Rel_path_semantics.Old_wrt_repo_root
+    | Version.V_2013_07_09
+      -> Forker.Rel_path_semantics.New_wrt_working_dir
+
   let build_begin t = t.build_begin ()
   let build_end t = t.build_end ()
 
   let of_env env =
-    let {Env. putenv; command_lookup_path; action; scan;
+    let {Env. version; putenv; command_lookup_path; action; scan;
          build_begin; build_end;
          schemes} = env in
 
@@ -222,7 +238,7 @@ end = struct
     (* stage 2 *)
     let dups = ref [] in
     let push_dups tag = (dups := tag :: !dups) in
-    let h_schemes = String.Table.create () in
+    let h_schemes = monitor_ht_size "schemes" String.Table.create () in
     let () =
       List.iter schemes ~f:(fun (_pat,scheme_opt) ->
         match scheme_opt with
@@ -262,6 +278,7 @@ end = struct
     match dups with | _::_ -> `dups dups
     | [] ->
       `ok {
+        version;
         putenv;
         lookup_gen_key;
         run_generator_scheme;
@@ -524,7 +541,6 @@ module Rooted_proxy : sig
 
   type t with sexp, bin_io, compare
   val create : Root_proxy.t -> Proxy_map.t -> t
-  val equal : t -> t -> bool
   val diff : insensitive:bool ->
     t -> t -> [`root_changed | `proxy_map_changed of Pm_key.t list] option
 
@@ -536,8 +552,6 @@ end = struct
   } with sexp, bin_io, compare
 
   let create rp pm = { rp; pm; }
-
-  let equal = equal_using_compare compare
 
   let diff ~insensitive t1 t2 =
     if not (insensitive || Root_proxy.equal t1.rp t2.rp) then Some `root_changed
@@ -596,8 +610,6 @@ module Rule_proxy = struct
     action : Action_proxy.t
   } with sexp, bin_io, compare
 
-  let equal = equal_using_compare compare
-
 end
 
 (*----------------------------------------------------------------------
@@ -651,7 +663,7 @@ module Reason = struct
     | Error_in_deps _                   -> "Unable to build dependencies"
     | Digest_error                      -> "unable to digest file"
     | Glob_error s                      -> sprintf "glob error: %s" s
-    | Jenga_root_problem s              -> sprintf "Problem with %s: %s" (Init.jenga_root_basename) s
+    | Jenga_root_problem s              -> sprintf "Problem with %s: %s" (Misc.jenga_root_basename) s
     | No_definition_for_alias           -> "No definition found for alias"
     | No_source_at_abs_path             -> "No source at absolute path"
     | No_rule_or_source                 -> "No rule or source found for target"
@@ -761,8 +773,8 @@ end = struct
 
   let create fs = {
     fs;
-    status = Dep.Table.create();
-    mask = Dep.Hash_set.create () ;
+    status = monitor_ht_size "Progress.status" Dep.Table.create();
+    mask = monitor_hs_size "Progress.mask" Dep.Hash_set.create () ;
   }
 
   let set_status t = Hashtbl.set t.status
@@ -868,92 +880,6 @@ end = struct
      error      = !error;
      failure    = !failure;
     }
-
-end
-
-(*----------------------------------------------------------------------
-Fork_and_report
-----------------------------------------------------------------------*)
-
-exception Shutdown
-
-module Fork_and_report :  sig
-
-  val run :
-    Config.t ->
-    stdout_expected : bool ->
-    get_result: (stdout:string -> 'a) ->
-    need:string ->
-    putenv : (string * string) list ->
-    dir:Path.t ->
-    prog:string ->
-    args:string list ->
-    ('a, [ `non_zero_status | `other_error of exn ]) Result.t Deferred.t
-
-end = struct
-
-  let run config ~stdout_expected ~get_result ~need ~putenv ~dir ~prog ~args =
-    let where = Path.to_string dir in
-    let job_start =
-      Message.job_started ~need ~stdout_expected ~where ~prog ~args
-    in
-    let start_time = Time.now() in
-    Effort.track external_jobs_run (fun () ->
-      (match Config.delay_for_dev config with
-      | None -> return ()
-      | Some seconds -> Clock.after seconds
-      ) >>= fun () ->
-      Forker.run ~putenv ~dir:(Path.X.of_relative dir) ~prog ~args
-    ) >>= fun {Forker.Reply. stdout;stderr;outcome} ->
-    match Heart.is_broken Heart.is_shutdown with
-    | true  ->
-      return (Error (`other_error Shutdown))
-    | false ->
-      let duration = Time.diff (Time.now()) start_time in
-      Message.job_finished job_start ~outcome ~duration ~stdout ~stderr;
-      match outcome with
-      | `success -> return (Ok (get_result ~stdout))
-      | `error _ -> return (Error `non_zero_status)
-
-end
-
-(*----------------------------------------------------------------------
- Run_external_job
-----------------------------------------------------------------------*)
-
-module Run_external_job : sig
-
-  val shell :
-    Config.t ->
-    need:string ->
-    putenv : (string * string) list ->
-    dir:Path.t ->
-    prog:string ->
-    args:string list ->
-    (unit, [ `non_zero_status | `other_error of exn ]) Result.t Deferred.t
-
-  val shell_stdout :
-    Config.t ->
-    need:string ->
-    putenv : (string * string) list ->
-    dir:Path.t ->
-    prog:string ->
-    args:string list ->
-    (string, [ `non_zero_status | `other_error of exn ]) Result.t Deferred.t
-
-end = struct
-
-  let shell =
-    (* ignore stdout for commands run for effect *)
-    Fork_and_report.run
-      ~stdout_expected:false
-      ~get_result:(fun ~stdout:_ -> ())
-
-  let shell_stdout =
-    (* grab stdout for commands run as scanner *)
-    Fork_and_report.run
-      ~stdout_expected:true
-      ~get_result:(fun ~stdout -> stdout)
 
 end
 
@@ -1105,27 +1031,10 @@ module Persist = struct
   } with sexp, bin_io
 
   let create () = {
-    scanned = Scanner.Table.create();
-    generated = Gen_key.Table.create();
-    actioned = Path.Table.create();
+    scanned = monitor_ht_size "P.scanned" Scanner.Table.create();
+    generated = monitor_ht_size "P.generated" Gen_key.Table.create();
+    actioned = monitor_ht_size "P.actioned" Path.Table.create();
   }
-
-  let equal t1 t2 =
-    Hashtbl.equal t1.scanned t2.scanned
-      (equal_pair Rooted_proxy.equal (equal_list Dep.equal))
-    &&
-    Hashtbl.equal t1.generated t2.generated
-      (equal_pair Rooted_proxy.equal (equal_list Rule.equal))
-    &&
-    Hashtbl.equal t1.actioned t2.actioned
-      Rule_proxy.equal
-
-  let copy t = {
-    scanned = Scanner.Table.copy t.scanned;
-    generated = Gen_key.Table.copy t.generated;
-    actioned = Path.Table.copy t.actioned;
-  }
-
 
 end
 
@@ -1150,10 +1059,10 @@ module Memo = struct
   }
 
   let create () = {
-    generating = Gen_key.Table.create();
-    scanning = Scanner.Table.create();
-    building = Dep.Table.create();
-    ruling = Target_rule.Table.create();
+    generating = monitor_ht_size "M.generating" Gen_key.Table.create();
+    scanning = monitor_ht_size "M.scanning" Scanner.Table.create();
+    building = monitor_ht_size "M.building" Dep.Table.create();
+    ruling = monitor_ht_size "M.ruling" Target_rule.Table.create();
     root = ref None;
   }
 
@@ -1211,7 +1120,7 @@ let enqueue_external_job t run_kind f =
   Throttle.enqueue t.job_throttle (fun () ->
     if Heart.is_broken Heart.is_shutdown
     then (
-      Deferred.return (Error (`other_error Shutdown));
+      Deferred.return (Error (`other_error Job.Shutdown));
     )
     else (
       set_status t (Status.Running run_kind);
@@ -1346,19 +1255,21 @@ let run_scanner :
         error t (Reason.Scanning_with_internal_action_not_supported action_id)
       | `xaction x ->
         let need = "scanner" in
+        let rel_path_semantics = Env1.rel_path_semantics env1 in
         let putenv = Env1.putenv env1 in
         let {Xaction.dir;prog;args} = x in
         Builder.of_deferred (fun () ->
           enqueue_external_job t Run_kind.Scanner (fun () ->
             message();
             Effort.track scanners_run (fun () ->
-              Run_external_job.shell_stdout t.config ~need ~putenv ~dir ~prog ~args
+              Job.Run_external_job.shell_stdout t.config ~need
+                ~rel_path_semantics ~putenv ~dir ~prog ~args
             )
           )
         ) *>>= function
         | Ok stdout                  -> return (Dep.parse_string_as_deps ~dir:dir1 stdout)
         | Error `non_zero_status     -> error t Reason.Non_zero_status
-        | Error (`other_error Shutdown) -> error t Reason.Shutdown
+        | Error (`other_error Job.Shutdown) -> error t Reason.Shutdown
         | Error (`other_error exn)   -> error t (Reason.Running_job_raised exn)
 
 
@@ -1385,19 +1296,21 @@ let run_action :
          but we really DONT want every command to be sensitize to jengaroot
          (its a compromise, but a necessary one!)
       *)
+      let rel_path_semantics = Env1.rel_path_semantics env1 in
       let putenv = Env1.putenv env1 in
       let {Xaction.dir;prog;args} = x in
       Builder.of_deferred (fun () ->
         enqueue_external_job t Run_kind.Action (fun () ->
           message();
           Effort.track actions_run (fun () ->
-            Run_external_job.shell t.config ~need ~putenv ~dir ~prog ~args
+            Job.Run_external_job.shell t.config ~need
+              ~rel_path_semantics ~putenv ~dir ~prog ~args
           )
         )
       ) *>>= function
       | Ok ()                      -> return ()
       | Error `non_zero_status     -> error t Reason.Non_zero_status
-      | Error (`other_error Shutdown) -> error t Reason.Shutdown
+      | Error (`other_error Job.Shutdown) -> error t Reason.Shutdown
       | Error (`other_error exn)   -> error t (Reason.Running_job_raised exn)
 
 
@@ -1540,7 +1453,7 @@ let generate_ruleset_if_necessary : (t -> Gen_key.t -> Ruleset.t Builder.t) =
         end *>>= fun () ->
         let rules = Ruleset.rules ruleset in
         set_status t Status.Checking;
-        Hashtbl.set (generated t) ~key:gen_key ~data:(rooted_proxy,rules);
+        Hashtbl.set (Misc.mod_persist (generated t)) ~key:gen_key ~data:(rooted_proxy,rules);
         return ruleset
       in
       match (Hashtbl.find (generated t) gen_key) with
@@ -1592,7 +1505,7 @@ let run_scanner_if_necessary : (t -> Dep.t list -> Scanner.t -> Dep.t list Build
     let run_and_cache rr =
       run_scanner t rr env1 scanner *>>= fun scanned_deps ->
       set_status t Status.Checking;
-      Hashtbl.set (scanned t) ~key:scanner ~data:(rooted_proxy,scanned_deps);
+      Hashtbl.set (Misc.mod_persist (scanned t)) ~key:scanner ~data:(rooted_proxy,scanned_deps);
       return scanned_deps
     in
     match (Hashtbl.find (scanned t) scanner) with
@@ -1725,7 +1638,7 @@ let run_target_rule_action_if_necessary
             action = action_proxy;
           }
           in
-          Hashtbl.set (actioned t) ~key:head_target ~data:rule_proxy;
+          Hashtbl.set (Misc.mod_persist (actioned t)) ~key:head_target ~data:rule_proxy;
           (* We remove data associated with the [other_targets]. Its not essential for
              correctness, but it avoid cruft from building up in the persistent state *)
           List.iter other_targets ~f:(fun other -> Hashtbl.remove (actioned t) other);
@@ -1897,7 +1810,7 @@ let build_dep : (t -> Dep.t -> (What.t * Proxy_map.t) Builder.t) =
   (* Wrapper to check invariant that we never traverse the same dep more than once
      i.e. that the dynamic memoization is working!
   *)
-  let seen = Dep.Hash_set.create () in
+  let seen = monitor_hs_size "build_dep.seen" Dep.Hash_set.create () in
   fun t dep ->
     let again = Hash_set.mem seen dep in
     if again then (
@@ -2184,7 +2097,7 @@ let break_a_cycle_if_found dg =
 
 let cycle_watch_period = sec 10.0
 
-let watch_for_cycles ~fin dg =
+let __watch_for_cycles ~fin dg =
   let rec loop () =
     Clock.after cycle_watch_period >>= fun () ->
     if (!fin) then Deferred.return () else (
@@ -2293,10 +2206,12 @@ let build_forever =
       (* start up various asyncronous writers/dumpers *)
       let fin = ref false in
 
+(*
       (* async cycle detection; but NO deadlock breaking *)
       don't_wait_for (
         watch_for_cycles ~fin discovered_graph
       );
+*)
 
       if Config.progress config then (
         don't_wait_for (
@@ -2349,31 +2264,3 @@ let build_forever =
     in
     build_and_poll () >>= fun () ->
     Deferred.return ()
-
-(*----------------------------------------------------------------------
- Run_now
-----------------------------------------------------------------------*)
-
-module Run_now = struct
-
-  exception Run_now_of_internal_action_not_supported of Action_id.t
-  exception Non_zero_status_from_action_run_now of Action.t
-
-  let lift_for_run_now ~shell action =
-    match Action.case action with
-    | `id id -> raise (Run_now_of_internal_action_not_supported id)
-    | `xaction x ->
-      let config = For_user.config() in
-      let need = "run_now" in
-      let putenv = [] in
-      let {Xaction.dir;prog;args} = x in
-      shell config ~need ~putenv ~dir ~prog ~args >>= function
-      | Error `non_zero_status     -> raise (Non_zero_status_from_action_run_now action)
-      | Error (`other_error exn)   -> raise exn
-      | Ok x                       -> Deferred.return x
-
-  let run_action_now        = lift_for_run_now ~shell:Run_external_job.shell
-  let run_action_now_stdout = lift_for_run_now ~shell:Run_external_job.shell_stdout
-
-
-end

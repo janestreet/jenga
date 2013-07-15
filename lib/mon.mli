@@ -36,9 +36,17 @@ module Progress : sig
 end
 
 
+module Mem : sig
+  type t
+  val snap : unit -> t
+  val to_string : t -> string
+  val install : string -> (unit -> int) -> unit (* cant ever uninstall *)
+end
+
 type t = {
   progress : Progress.t;
   effort : Effort.Snapped.t;
+  mem : Mem.t;
 } with bin_io
 
 

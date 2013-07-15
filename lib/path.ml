@@ -29,7 +29,7 @@ module Root = struct
     | None -> r := Some dir
 
   let jenga_root_exists_in ~dir =
-    match Sys.file_exists (dir ^/ Init.jenga_root_basename) with
+    match Sys.file_exists (dir ^/ Misc.jenga_root_basename) with
     | `No | `Unknown -> false
     | `Yes -> true
 

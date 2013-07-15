@@ -30,7 +30,9 @@ let go ~root_dir progress =
         make_periodic_pipe_writer progress_report_span ~aborted ~f:(fun () ->
           {Mon.
            progress = Build.Progress.snap progress;
-           effort = Build.snap_all_effort(); }
+           effort = Build.snap_all_effort();
+           mem = Mon.Mem.snap();
+          }
         )
       )
   in
