@@ -17,4 +17,5 @@ module State : sig
   type t
   val load_db : db_filename:string -> t Deferred.t
   val sexp_of_t : t -> Sexp.t
+  val build_persist : t -> Build.Persist.t
 end

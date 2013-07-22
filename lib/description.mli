@@ -39,6 +39,7 @@ module Xaction : sig
   type t = {dir : Path.t; prog : string; args : string list;} with sexp, bin_io, compare
   val shell : dir:Path.t -> prog:string -> args:string list -> t
   val to_string : t -> string
+  val to_script : t -> string
 end
 
 module Action : sig

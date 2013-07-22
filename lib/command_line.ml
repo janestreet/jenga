@@ -122,11 +122,6 @@ let progress =
   +> Spec.flag "progress" ~aliases:["--progress"] Spec.no_arg
     ~doc:" Show periodic progress report"
 
-let continuous_graph_dump =
-  Spec.step (fun m x -> m ~continuous_graph_dump:x)
-  +> Spec.flag "continuous-graph-dump" ~aliases:["graph"] Spec.no_arg
-    ~doc:" Continuous dump build graph to .jenga.graph for dev/demo"
-
 let external_jenga_root =
   Spec.step (fun m x -> m ~external_jenga_root:x)
   +> Spec.flag "external-jengaroot" ~aliases:["x"] (Spec.optional Spec.string)
@@ -162,7 +157,6 @@ let go_command =
     ++ wflag
     ++ output_postpone
     ++ progress
-    ++ continuous_graph_dump
     ++ external_jenga_root
     ++ anon_demands
   )
@@ -181,7 +175,7 @@ let go_command =
       ~sequential_deps ~show_sensitized
       ~delay_for_dev ~report_long_cycle_times
       ~wflag:_ ~output_postpone:_
-      ~progress ~continuous_graph_dump
+      ~progress
       ~external_jenga_root
       ~demands
       () ->
@@ -207,7 +201,6 @@ let go_command =
           report_long_cycle_times =
             Option.map report_long_cycle_times ~f:(fun ms -> Time.Span.create ~ms ());
           progress;
-          continuous_graph_dump;
           external_jenga_root;
           demands;
         }

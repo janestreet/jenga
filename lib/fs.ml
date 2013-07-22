@@ -184,16 +184,17 @@ end = struct
 
 end
 
-module Compute_digest : sig
+module type Compute_digest_sig = sig
 
   val of_file : Path.X.t -> Digest.t Or_error.t Deferred.t
 
-end = struct
+end
+
+module Ocaml__Compute_digest : Compute_digest_sig = struct
 
   let of_file path =
     File_access.enqueue (fun () ->
       Effort.track digest_counter (fun () ->
-        unlogged "DIGEST: %s..." (Path.X.to_absolute_string path);
         In_thread.run (fun () ->
           try (
             let ic = Caml.open_in_bin (Path.X.to_absolute_string path) in
@@ -201,7 +202,6 @@ end = struct
               try (
                 let d = External_digest.channel ic (-1) in
                 let res = External_digest.to_hex d in
-                unlogged "DIGEST: %s... %s" (Path.X.to_absolute_string path) res;
                 Ok (Digest.of_string res)
               )
               with exn -> Error (Error.of_exn exn)
@@ -215,6 +215,46 @@ end = struct
     )
 
 end
+
+module External__Compute_digest : Compute_digest_sig = struct
+
+  let rel_path_semantics = Forker.Rel_path_semantics.New_wrt_working_dir
+  let putenv = []
+  let prog = "/usr/bin/md5sum"
+  let dir = Path.the_root
+
+  let of_file path =
+    Effort.track digest_counter (fun () ->
+      let args = [Path.X.to_absolute_string path] in
+      let request = Forker.Request.create ~rel_path_semantics ~putenv ~dir ~prog ~args in
+      Forker.run request >>= fun {Forker.Reply. stdout;stderr=_;outcome} ->
+      match outcome with
+      | `error s -> return (Error (Error.of_string s))
+      | `success ->
+        match (String.lsplit2 stdout ~on:' ') with
+        | None -> return (Error (Error.of_string
+                                   (sprintf "unexpected output from md5sum: %s" stdout)))
+        | Some (res,_) -> return (Ok (Digest.of_string res))
+    )
+
+end
+
+let use_ocaml =
+  match Core.Std.Sys.getenv "JENGA_USE_OCAML_DIGEST" with
+  | None -> false (* default no - use external *)
+  | Some _ -> true
+
+let m =
+  match use_ocaml with
+  | true -> (module Ocaml__Compute_digest : Compute_digest_sig)
+  | false -> (module External__Compute_digest : Compute_digest_sig)
+
+let () =
+  if use_ocaml then (
+    Printf.eprintf "using internal ocaml digest instead of external call to md5sum\n%!"
+  )
+
+module Compute_digest = (val m : Compute_digest_sig)
 
 
 (*----------------------------------------------------------------------
@@ -480,7 +520,13 @@ end = struct
         return (Error (Error.of_exn exn))
       | Ok () ->
         let glass = Heart.Glass.create ~desc in
-        Hashtbl.add_exn glass_cache ~key:path ~data:glass;
+        (*Hashtbl.add_exn*)
+        begin
+          match (Hashtbl.add glass_cache ~key:path ~data:glass) with
+          | `Ok -> ()
+          | `Duplicate ->
+            Message.error "Unexpected existing entry in watcher cache: %s" path
+        end;
         return (Ok (Heart.of_glass glass))
 
 

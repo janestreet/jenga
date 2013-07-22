@@ -47,7 +47,7 @@ end = struct
 
   exception Unable_to_load_persist_db
 
-  let max_len = 400 * 1024 * 1024 (* default 100Mb is too small *)
+  let max_len = 800 * 1024 * 1024 (* default 100Mb is too small *)
 
   let load_db ~db_filename =
     Sys.file_exists db_filename >>= function

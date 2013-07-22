@@ -26,10 +26,6 @@ module Reply = struct
   }
 end
 
-(*----------------------------------------------------------------------
- select implementation to fork process
-----------------------------------------------------------------------*)
-
 module type Fork_process_sig = sig
   val run : Request.t -> Reply.t Deferred.t
 end
@@ -40,40 +36,7 @@ let starts_with_slash s =
   && (match (String.get s 0) with | '/' -> true | _-> false)
 let is_rel_path_sting s = String.contains s '/' && not (starts_with_slash s)
 
-module Old : Fork_process_sig = struct
-
-  let run {Request. rel_path_semantics; putenv; dir; prog; args} =
-    List.iter putenv ~f:(fun (key,data) -> Core.Std.Unix.putenv ~key ~data);
-    let working_dir = Path.to_absolute_string dir in
-    let prog =
-      match (is_rel_path_sting prog) with false -> prog | true ->
-        match rel_path_semantics with
-        | Rel_path_semantics.Old_wrt_repo_root -> prog (* semantics of Async_shell *)
-        | Rel_path_semantics.New_wrt_working_dir -> working_dir ^/ prog
-    in
-    try_with (fun () ->
-      Async_shell.run_full_and_error ~working_dir prog args
-    ) >>= fun result ->
-    match result with
-    | Ok (stdout,stderr) ->
-      return { Reply. stdout; stderr; outcome = `success }
-    | Error exn ->
-      let exn = Monitor.extract_exn exn in
-      let module SP = Async_shell.Process in
-      match exn with
-      | Async_shell.Process.Failed res ->
-        let stdout = res.SP.stdout in
-        let stderr = res.SP.stderr in
-        let outcome = `error (SP.status_to_string res.SP.status) in
-        return { Reply. stdout; stderr; outcome }
-      | _ ->
-        let stdout = "" in
-        let stderr = "" in
-        let outcome = `error (Exn.to_string exn) in
-        return { Reply. stdout; stderr; outcome }
-end
-
-module New : Fork_process_sig = struct
+module Fork_process : Fork_process_sig = struct
 
   let run {Request. rel_path_semantics; putenv; dir; prog; args} =
     List.iter putenv ~f:(fun (key,data) -> Core.Std.Unix.putenv ~key ~data);
@@ -107,29 +70,12 @@ module New : Fork_process_sig = struct
 
 end
 
-let use_old =
-  match Core.Std.Sys.getenv "JENGA_USE_ASYNC_SHELL" with
-  | None -> false
-  | Some _ -> true
-
-let m =
-  match use_old with
-  | true -> (module Old : Fork_process_sig)
-  | false -> (module New : Fork_process_sig)
-
-let () =
-  if use_old then (
-    Printf.eprintf "using (old) Async_shell instead of Async.process\n%!";
-  )
-
-module Fork_process = (val m : Fork_process_sig)
-
-
-(*----------------------------------------------------------------------
- main code
-----------------------------------------------------------------------*)
-
 let spawned_forker_function hub =
+  let fork_throttle =
+    (* We need 3 fds per forked process, so conservatively we
+       throttle the number of forked processed to be < 1024/3 *)
+    Throttle.create ~continue_on_error:true ~max_concurrent_jobs:300
+  in
   let pipe_reader = Parallel.Std.Hub.listen_simple hub in
   don't_wait_for (
     let rec loop () =
@@ -137,7 +83,9 @@ let spawned_forker_function hub =
       | `Eof -> failwith "Forker.spawned_forker_function:Eof"
       | `Ok (client,(uid,request)) ->
         don't_wait_for (
-          Fork_process.run request >>= fun reply ->
+          Throttle.enqueue fork_throttle (fun () ->
+            Fork_process.run request
+          ) >>= fun reply ->
           Parallel.Std.Hub.send hub client (uid,reply);
           return ()
         );

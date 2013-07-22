@@ -7,7 +7,7 @@ module Build_state = Build.Persist
 
 let trace fmt = ksprintf (fun string -> Message.trace "Run: %s" string) fmt
 
-let db_save_span = sec 15.0
+let db_save_span = sec 60.0
 
 let run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path =
   trace "----------------------------------------------------------------------";

@@ -95,6 +95,9 @@ module Xaction = struct
   let to_string t = sprintf "(in dir: %s) %s %s"
     (Path.to_string t.dir) t.prog (concat_args_quoting_spaces t.args)
 
+  let to_script t = sprintf "(cd %s; %s %s)"
+    (Path.to_string t.dir) t.prog (concat_args_quoting_spaces t.args)
+
 end
 
 

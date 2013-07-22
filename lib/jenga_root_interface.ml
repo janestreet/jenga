@@ -1,4 +1,3 @@
-
 open Core.Std
 open Async.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
@@ -8,4 +7,5 @@ module type S = sig
 end
 
 let univ_constr =
-  (Univ.Constr.create "Jenga_root_interface.S" sexp_of_opaque : (module S) Univ.Constr.t)
+  let open Ocaml_plugin.Std in
+  (Ocaml_dynloader.Univ_constr.create () : (module S) Ocaml_dynloader.Univ_constr.t)

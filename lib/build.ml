@@ -389,6 +389,7 @@ module Pm_key : sig
   val of_glob : Glob.t -> t
   val to_string : t -> string
   val to_path_exn : t -> Path.t (* for targets_proxy_map *)
+  val to_path_opt : t -> Path.t option (* for cat-build-script *)
 
 end = struct
 
@@ -415,6 +416,13 @@ end = struct
       match Path.X.case x with
       | `absolute _ -> failwith "Proxy_map.key.to_path_exn/Abs"
       | `relative path -> path
+
+  let to_path_opt = function
+    | Glob _ -> None
+    | Path x ->
+      match Path.X.case x with
+      | `absolute _ -> None
+      | `relative path -> Some path
 
 end
 
@@ -457,6 +465,8 @@ module Proxy_map : sig (* need to be keyed on Path/Glob *)
   val merge : t list -> [ `ok of t | `err of inconsistency]
 
   val diff : t -> t -> Pm_key.t list option
+
+  val to_path_keys : t -> Path.t list
 
 end = struct
 
@@ -516,6 +526,9 @@ end = struct
             | `Unequal _ -> Some k
           )
       )
+
+  let to_path_keys t =
+    List.filter_map (Map.keys t) ~f:Pm_key.to_path_opt
 
 end
 
@@ -608,7 +621,7 @@ module Rule_proxy = struct
     targets : Proxy_map.t;
     deps : Proxy_map.t;
     action : Action_proxy.t
-  } with sexp, bin_io, compare
+  } with sexp, bin_io, compare, fields
 
 end
 
@@ -760,7 +773,6 @@ module Progress : sig
   val set_status : t -> key:Dep.t -> data:Status.t -> unit
   val mask_unreachable : t -> DG.t -> unit
   val message_errors : t -> unit
-  val dg_status : t  -> Dep.t -> Dot.Status.t
   val snap : t -> Mon.Progress.t
 
 end = struct
@@ -792,31 +804,11 @@ end = struct
     );
     t.mask <- mask_candidates
 
-  let find_unmasked t dep =
-    if not (Hash_set.mem t.mask dep)
-    then Hashtbl.find t.status dep
-    else None
-
   let iter_unmasked t ~f =
     Hashtbl.iter (t.status) ~f:(fun ~key ~data ->
       if not (Hash_set.mem t.mask key) then
         f ~key ~data
     )
-
-  let dg_status t dep =
-    match (find_unmasked t dep) with
-    | None -> Dot.Status.Unknown
-    | Some status ->
-      let cat x =  Dot.Status.Cat x in
-      match status with
-      | Status.Checking                       -> cat Dot.Catagory.Waiting
-      | Status.Blocked                        -> cat Dot.Catagory.Waiting
-      | Status.Jwait _                        -> cat Dot.Catagory.Waiting
-      | Status.Running _                      -> cat Dot.Catagory.Working
-      | Status.Usercode _                     -> cat Dot.Catagory.Working
-      | Status.Built _                        -> cat Dot.Catagory.Good
-      | Status.Error (Reason.Error_in_deps _) -> cat Dot.Catagory.Child_error
-      | Status.Error _                        -> cat Dot.Catagory.Error
 
   let message_errors t =
     iter_unmasked t ~f:(fun ~key:dep ~data:status ->
@@ -1035,6 +1027,68 @@ module Persist = struct
     generated = monitor_ht_size "P.generated" Gen_key.Table.create();
     actioned = monitor_ht_size "P.actioned" Path.Table.create();
   }
+
+  let cat_build_script t paths =
+    (* construct mapping from a target to the head target of the rule.
+       We need the head_target to key into t.actioned.
+    *)
+    let head_target =
+      let table = Path.Table.create () in
+      List.iter (Hashtbl.data t.actioned) ~f:(fun rule_proxy ->
+        let targets = Proxy_map.to_path_keys (Rule_proxy.targets rule_proxy) in
+        match targets with
+        | [] -> assert false
+        | head::rest ->
+          List.iter rest ~f:(fun path ->
+            Hashtbl.add_exn table ~key:path ~data:head
+          );
+      );
+      fun path ->
+        match (Hashtbl.find table path) with
+        | Some head -> head
+        | None -> path
+    in
+    (* collect action and target dirs *)
+    let sources = Path.Hash_set.create () in
+    let target_dirs = Path.Hash_set.create () in
+    let actions = ref [] in
+    let seen = Path.Hash_set.create () in
+    let rec walk_path path =
+      let path = head_target path in
+      if (Hash_set.mem seen path) then () else (
+        Hash_set.add seen path;
+        match (Hashtbl.find t.actioned path) with
+        | None -> Hash_set.add sources path
+        | Some rule_proxy ->
+          let targets = Proxy_map.to_path_keys (Rule_proxy.targets rule_proxy) in
+          List.iter targets ~f:(fun path -> Hash_set.add target_dirs (Path.dirname path));
+          let deps = Proxy_map.to_path_keys (Rule_proxy.deps rule_proxy) in
+          List.iter deps ~f:walk_path;
+          let action = Action_proxy.to_action (Rule_proxy.action rule_proxy) in
+          actions := action :: !actions
+      )
+    in
+    (* walk the tree from the roots demanded *)
+    List.iter paths ~f:walk_path;
+    (* no point ensuring dir for any dir which has source in it *)
+    List.iter (Hash_set.to_list sources) ~f:(fun path ->
+      Hash_set.remove target_dirs (Path.dirname path)
+    );
+    (* generate output *)
+    let write_line fmt = ksprintf (fun s -> Printf.printf "%s\n%!" s) fmt in
+    List.iter (Hash_set.to_list sources) ~f:(fun source ->
+      write_line "#SOURCE: %s" (Path.to_string source);
+    );
+    List.iter (Hash_set.to_list target_dirs) ~f:(fun dir ->
+      write_line "mkdir -p %s" (Path.to_string dir)
+    );
+    List.iter (List.rev (!actions)) ~f:(fun action ->
+      match Description.Action.case action with
+      | `id x -> write_line "#INTERNAL:%s"(Description.Action_id.to_string x)
+      | `xaction xaction -> write_line "%s" (Description.Xaction.to_script xaction);
+    );
+    ()
+
 
 end
 
@@ -1929,7 +1983,11 @@ let get_env_option :
       Env1.t option Tenacious.t
     ) =
   fun ~jenga_root_path ~job_throttle fs persist memo discovered_graph config progress ->
-    let me = Dep.absolute ~path:"/dummy-build-begin" in
+    let me =
+      match Path.X.case jenga_root_path with
+      | `relative x -> Dep.path x
+      | `absolute x -> Dep.absolute ~path:(Path.Abs.to_string x)
+    in
     let node = DG.create_root discovered_graph in
     let t = {
       config;
@@ -1970,30 +2028,6 @@ let show_progress_fraction_reports ~fin progress =
       let progress = Progress.snap progress in
       let fraction = Mon.Progress.fraction progress in
       Message.progress ~fraction;
-      loop ()
-    )
-  in
-  loop ()
-
-
-let make_graph_dumper discovered_graph progress =
-  let status_of_dep dep = Progress.dg_status progress dep in
-  `dump (fun () ->
-    Message.message "dumping graph...";
-    Dot.dump_graph discovered_graph ~status_of_dep >>= function
-    | Error e ->
-      Message.message "dumping graph - error: %s" (Error.to_string_hum e);
-      Deferred.unit
-    | Ok () ->
-      Message.message "dumping graph...done";
-      Deferred.unit
-  )
-
-let periodically_while_not_fin ~span ~fin ~f =
-  let rec loop () =
-    Clock.after span >>= fun () ->
-    if (!fin) then Deferred.return () else (
-      f () >>= fun () ->
       loop ()
     )
   in
@@ -2199,8 +2233,6 @@ let build_forever =
       )
     in
 
-    let `dump dump_graph = make_graph_dumper discovered_graph progress in
-
     let rec build_and_poll ()  = (* never finishes if polling *)
 
       (* start up various asyncronous writers/dumpers *)
@@ -2219,12 +2251,6 @@ let build_forever =
         )
       );
 
-      don't_wait_for (
-        if Config.continuous_graph_dump config
-        then periodically_while_not_fin ~span:(sec 1.5) ~fin ~f:dump_graph
-        else Deferred.unit
-      );
-
       Tenacious.exec (get_env_opt()) >>= fun (env_opt,__heart) ->
 
       (* call user build_begin function *)
@@ -2238,11 +2264,6 @@ let build_forever =
 
       fin := true;
       when_polling() >>= fun () ->
-      begin
-        if Config.continuous_graph_dump config
-        then dump_graph ()
-        else Deferred.return ()
-      end >>= fun () ->
 
       match Config.poll_forever config with
       | false -> Deferred.return ()

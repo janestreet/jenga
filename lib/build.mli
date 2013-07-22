@@ -11,6 +11,7 @@ val intern_effort : Effort.t
 module Persist : sig
   type t with sexp, bin_io
   val create : unit -> t
+  val cat_build_script : t -> Path.t list -> unit
 end
 
 module Progress : sig

@@ -22,7 +22,6 @@ type t = {
   delay_for_dev : Time.Span.t option;
   report_long_cycle_times : Time.Span.t option;
   progress : bool;
-  continuous_graph_dump : bool;
   external_jenga_root : string option;
   demands : string list;
 } with fields
