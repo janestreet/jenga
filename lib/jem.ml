@@ -186,22 +186,15 @@ let show_intern =
   +> Spec.flag "intern" Spec.no_arg
     ~doc:" display counts for other internal effort"
 
-let show_mem =
-  Spec.step (fun m x -> m ~show_mem:x)
-  +> Spec.flag "mem" Spec.no_arg
-    ~doc:" display memory stats"
-
-
 let error fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt
 
 let command_line () =
   Command.run (
     Command.basic (todo_breakdown ++ good_breakdown
-                   ++ show_run ++ show_work ++ show_intern ++ show_mem)
+                   ++ show_run ++ show_work ++ show_intern)
       ~summary:"Jenga monitor - monitor jenga running in the current repo."
       ~readme:Mon.readme
-      (fun ~todo_breakdown ~good_breakdown ~show_run ~show_work ~show_intern
-        ~show_mem () ->
+      (fun ~todo_breakdown ~good_breakdown ~show_run ~show_work ~show_intern () ->
 
         match Path.Root.discover() with | `cant_find_root ->
           error "Cant find '%s' in start-dir or any ancestor dir"
@@ -211,7 +204,7 @@ let command_line () =
           Misc.in_async ~f:(fun () ->
 
             let string_of_mon mon =
-              let {Mon.progress;effort;mem} = mon in
+              let {Mon.progress;effort} = mon in
               let eff_string ~tag ~switch ~limit =
                 if not switch then "" else
                   sprintf ", %s:[ %s ]" tag (Effort.Snapped.to_string ~limit effort)
@@ -221,7 +214,6 @@ let command_line () =
               ^ eff_string ~tag:"run" ~switch:show_run ~limit:Build.run_effort
               ^ eff_string ~tag:"work" ~switch:show_work ~limit:Build.work_effort
               ^ eff_string ~tag:"intern" ~switch:show_intern ~limit:Build.intern_effort
-              ^ (if show_mem then sprintf ", mem:[ %s ]" (Mon.Mem.to_string mem) else "")
             in
             run ~root_dir ~string_of_mon
           )

@@ -145,35 +145,9 @@ module Progress = struct
 end
 
 
-module Mem = struct
-
-  let snappers = ref []
-
-  let install tag f = snappers := !snappers @ [(tag,f)]
-
-  type t = {
-    snapped : (string * int) list;
-  } with bin_io
-
-  let snap () = {
-    snapped = List.map !snappers ~f:(fun (tag,f) -> (tag,f()));
-  }
-
-  let to_string t =
-    String.concat ~sep:", "
-      (List.map t.snapped ~f:(fun (tag,n) -> sprintf "%s = %d" tag n))
-
-  let () =
-    install "hw" (fun () -> Misc.heap_words())
-
-end
-
-
-
 type t = {
   progress : Progress.t;
   effort : Effort.Snapped.t;
-  mem : Mem.t;
 } with bin_io
 
 

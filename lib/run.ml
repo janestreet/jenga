@@ -86,6 +86,9 @@ let main config =
 
   Core.Std.Sys.chdir root_dir;
 
+  Message.message "root=%s, j=%d, f=%d"
+    root_dir (Config.j_number config) (Config.f_number config);
+
   (* Must do the chdir before Parallel.init is called, so that we have the same cwd when
      using parallel forkers or not *)
   Parallel.Std.Parallel.init();

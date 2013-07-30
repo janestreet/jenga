@@ -7,18 +7,38 @@ let (+>) = Spec.(+>)
 let (++) = Spec.(++)
 let (%:) = Spec.(%:)
 
+let cpus =
+  let err fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt in
+  let path = "/proc/cpuinfo" in
+  let lines =
+    try
+      let module IC = Core.Std.In_channel in
+      IC.with_file path ~f:IC.input_lines
+    with
+    | _ -> err "cant read: %s" path; []
+  in
+  match List.filter lines ~f:(String.is_prefix ~prefix:"processor")  with
+  | [] -> err "no processor lines seen in: %s" path; 1
+  | lines -> List.length lines
+
+let j_formula = "max (#cpus-1) 1"
+let j_default = Int.max (cpus-1) 1
+
+let f_formula = "(#cpus-1)/4 + 1"
+let f_default = (cpus - 1) / 4 + 1
+
 (* user *)
 let j_number =
-  let default = 1 in
   Spec.step (fun m x -> m ~j_number:x)
-  +> Spec.flag "j" (Spec.optional_with_default default Spec.int)
-    ~doc:(sprintf "<jobs> maximum number of parallel jobs (default: %d)" default)
+  +> Spec.flag "j" (Spec.optional_with_default j_default Spec.int)
+    ~doc:(sprintf "<jobs> maximum num jobs, def: %d = %s)"
+            j_default j_formula)
 
 let f_number =
-  let default = 1 in
   Spec.step (fun m x -> m ~f_number:x)
-  +> Spec.flag "f" (Spec.optional_with_default default Spec.int)
-    ~doc:(sprintf "<forkers> #additional procs for forking (default: %d)" default)
+  +> Spec.flag "f" (Spec.optional_with_default f_default Spec.int)
+    ~doc:(sprintf "<forkers> num forker procs, def: %d = %s"
+            f_default f_formula)
 
 let poll_forever =
   Spec.step (fun m x -> m ~poll_forever:x)
@@ -29,6 +49,11 @@ let verbose =
   Spec.step (fun m x -> m ~verbose:x)
   +> Spec.flag "verbose" ~aliases:["--verbose"] Spec.no_arg
     ~doc:" Verbose output"
+
+let run_reason_verbose =
+  Spec.step (fun m x -> m ~run_reason_verbose:x)
+  +> Spec.flag "rr-verbose" Spec.no_arg
+    ~doc:" Verbose run-reason output"
 
 let show_actions_run =
   Spec.step (fun m x -> m ~show_actions_run:x)
@@ -139,6 +164,7 @@ let go_command =
     ++ f_number
     ++ poll_forever
     ++ verbose
+    ++ run_reason_verbose
     ++ show_actions_run
     ++ show_scanners_run
     ++ show_generators_run
@@ -166,6 +192,7 @@ let go_command =
     ])
     (fun ~j_number ~f_number ~poll_forever
       ~verbose
+      ~run_reason_verbose
       ~show_actions_run
       ~show_scanners_run
       ~show_generators_run
@@ -185,6 +212,7 @@ let go_command =
           f_number;
           poll_forever;
           verbose;
+          run_reason_verbose;
           show_actions_run      = show_run_reason || show_actions_run;
           show_generators_run   = show_run_reason || show_generators_run;
           show_scanners_run     = show_run_reason || show_scanners_run;

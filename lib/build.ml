@@ -3,16 +3,6 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
-let monitor_ht_size tag create () =
-  let ht = create () in
-  Mon.Mem.install ("B."^tag) (fun () -> Hashtbl.length ht);
-  ht
-
-let monitor_hs_size tag create () =
-  let hs = create () in
-  Mon.Mem.install ("B."^tag) (fun () -> Hash_set.length hs);
-  hs
-
 let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
 
 let (<>) = Int.(<>)
@@ -238,7 +228,7 @@ end = struct
     (* stage 2 *)
     let dups = ref [] in
     let push_dups tag = (dups := tag :: !dups) in
-    let h_schemes = monitor_ht_size "schemes" String.Table.create () in
+    let h_schemes = String.Table.create () in
     let () =
       List.iter schemes ~f:(fun (_pat,scheme_opt) ->
         match scheme_opt with
@@ -521,9 +511,9 @@ end = struct
           (Map.symmetric_diff t1 t2 ~data_equal:Proxy.equal)
           ~f:(fun (k,comp) ->
             match comp with
-            | `Left _
-            | `Right _ -> None
-            | `Unequal _ -> Some k
+            | `Left _ -> None
+            | `Right _ -> Some k (* additional *)
+            | `Unequal _ -> Some k (* changed *)
           )
       )
 
@@ -785,8 +775,8 @@ end = struct
 
   let create fs = {
     fs;
-    status = monitor_ht_size "Progress.status" Dep.Table.create();
-    mask = monitor_hs_size "Progress.mask" Dep.Hash_set.create () ;
+    status = Dep.Table.create();
+    mask = Dep.Hash_set.create () ;
   }
 
   let set_status t = Hashtbl.set t.status
@@ -996,11 +986,16 @@ module RR = struct
 
   (*let to_string t = Sexp.to_string (sexp_of_t t)*)
 
-  let to_string = function
+  let to_string config = function
   | No_record_of_being_run_before   -> "initial"
   | Jenga_root_changed              -> "jengaroot"
   | Action_changed_was _            -> "action"
-  | Deps_have_changed _             -> "deps"
+  | Deps_have_changed keys ->
+    if Config.run_reason_verbose config then
+      sprintf "deps: %s" (String.concat ~sep:" " (List.map keys ~f:Pm_key.to_string))
+    else
+      "deps"
+
   | Targets_missing _               -> "missing"
   | Targets_not_as_expected _       -> "unexpected"
 
@@ -1023,9 +1018,9 @@ module Persist = struct
   } with sexp, bin_io
 
   let create () = {
-    scanned = monitor_ht_size "P.scanned" Scanner.Table.create();
-    generated = monitor_ht_size "P.generated" Gen_key.Table.create();
-    actioned = monitor_ht_size "P.actioned" Path.Table.create();
+    scanned = Scanner.Table.create();
+    generated = Gen_key.Table.create();
+    actioned = Path.Table.create();
   }
 
   let cat_build_script t paths =
@@ -1113,10 +1108,10 @@ module Memo = struct
   }
 
   let create () = {
-    generating = monitor_ht_size "M.generating" Gen_key.Table.create();
-    scanning = monitor_ht_size "M.scanning" Scanner.Table.create();
-    building = monitor_ht_size "M.building" Dep.Table.create();
-    ruling = monitor_ht_size "M.ruling" Target_rule.Table.create();
+    generating = Gen_key.Table.create();
+    scanning = Scanner.Table.create();
+    building = Dep.Table.create();
+    ruling = Target_rule.Table.create();
     root = ref None;
   }
 
@@ -1275,7 +1270,7 @@ let run_generator :
       if Config.show_generators_run t.config then
         Message.message "Generating rules: %s [%s]"
           (Gen_key.to_string gen_key)
-          (RR.to_string rr);
+          (RR.to_string t.config rr);
     in
     run_user_code t env1 Run_kind.Generator (fun () ->
       message();
@@ -1293,7 +1288,7 @@ let run_scanner :
   fun t rr env1 scanner ->
     let message() =
       if Config.show_scanners_run t.config then
-        Message.message "Scanning: %s [%s]" (Scanner.to_string scanner) (RR.to_string rr)
+        Message.message "Scanning: %s [%s]" (Scanner.to_string scanner) (RR.to_string t.config rr)
     in
     match scanner with
     | `old_internal scan_id ->
@@ -1335,7 +1330,7 @@ let run_action :
       if Config.show_actions_run t.config then
         Message.message "Building: %s [%s]"
           (String.concat ~sep:" " (List.map targets ~f:Path.to_string))
-          (RR.to_string rr)
+          (RR.to_string t.config rr)
     in
     match Action.case action with
     | `id action_id ->
@@ -1864,7 +1859,7 @@ let build_dep : (t -> Dep.t -> (What.t * Proxy_map.t) Builder.t) =
   (* Wrapper to check invariant that we never traverse the same dep more than once
      i.e. that the dynamic memoization is working!
   *)
-  let seen = monitor_hs_size "build_dep.seen" Dep.Hash_set.create () in
+  let seen = Dep.Hash_set.create () in
   fun t dep ->
     let again = Hash_set.mem seen dep in
     if again then (

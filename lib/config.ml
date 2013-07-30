@@ -7,6 +7,7 @@ type t = {
   f_number : int;
   poll_forever : bool;
   verbose : bool;
+  run_reason_verbose : bool;
   show_actions_run : bool;
   show_generators_run : bool;
   show_scanners_run : bool;

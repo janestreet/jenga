@@ -3,11 +3,6 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
-let monitor_ht_size tag create () =
-  let ht = create () in
-  Mon.Mem.install ("F."^tag) (fun () -> Hashtbl.length ht);
-  ht
-
 let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
 
 let lstat_counter = Effort.Counter.create "stat"
@@ -488,8 +483,8 @@ end = struct
   let create ~ignore ~expect =
     (* Have to pass a path at creation - what a pain, dont have one yet! *)
     Inotify.create ~recursive:false ~watch_new_dirs:false "/" >>= fun (notifier,_) ->
-    let file_glass = monitor_ht_size "fg" String.Table.create () in
-    let dir_glass = monitor_ht_size "dg" String.Table.create () in
+    let file_glass = String.Table.create () in
+    let dir_glass = String.Table.create () in
     let t = {ignore; expect; notifier; file_glass; dir_glass} in
     suck_notifier_pipe t (Inotify.pipe notifier);
     return t
@@ -555,8 +550,8 @@ end = struct
 
   let create watcher = {
     watcher;
-    file_watch_cache = monitor_ht_size "fwc" Path.X.Table.create ();
-    dir_watch_cache = monitor_ht_size "dwc" Path.X.Table.create ();
+    file_watch_cache = Path.X.Table.create ();
+    dir_watch_cache = Path.X.Table.create ();
   }
 
   let lstat t ~what path =
@@ -641,7 +636,7 @@ end = struct
   } with sexp, bin_io
 
   let create () = {
-    cache = monitor_ht_size "dp" Path.X.Table.create ();
+    cache = Path.X.Table.create ();
   }
 
   let digest_file t sm ~file =
@@ -697,7 +692,7 @@ end = struct
   } with sexp, bin_io
 
   let create () = {
-    cache = monitor_ht_size "lp" Path.Table.create ();
+    cache = Path.Table.create ();
   }
 
   let list_dir t sm ~dir =
@@ -805,7 +800,7 @@ end = struct
       tenacious
 
   let create () = {
-    cache = monitor_ht_size "dm" Path.X.Table.create ();
+    cache = Path.X.Table.create ();
   }
 
 end
@@ -842,7 +837,7 @@ end = struct
       tenacious
 
   let create () = {
-    cache = monitor_ht_size "lm" Path.Table.create ();
+    cache = Path.Table.create ();
   }
 
 end
@@ -905,7 +900,7 @@ end = struct
     t
 
   (* cache glob construction *)
-  let the_cache : (Key.t, t) Hashtbl.t = monitor_ht_size "gc" Key.Table.create()
+  let the_cache : (Key.t, t) Hashtbl.t = Key.Table.create()
 
   let create ~dir ~kinds ~glob_string =
     let key = {Key. dir; kinds; glob_string} in
@@ -984,7 +979,7 @@ end = struct
       tenacious
 
   let create () = {
-    cache = monitor_ht_size "gm" Glob.Table.create ();
+    cache = Glob.Table.create ();
   }
 
 end
@@ -1066,7 +1061,7 @@ end = struct
 
   let create persist =
 
-    let active_targets = monitor_ht_size "at" Path.Table.create () in
+    let active_targets = Path.Table.create () in
 
     let ignore ~path =
       match (Path.create_from_absolute path) with

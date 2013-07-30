@@ -31,7 +31,6 @@ let go ~root_dir progress =
           {Mon.
            progress = Build.Progress.snap progress;
            effort = Build.snap_all_effort();
-           mem = Mon.Mem.snap();
           }
         )
       )
