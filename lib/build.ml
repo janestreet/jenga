@@ -2098,9 +2098,9 @@ let look_for_a_cycle : (DG.t -> (DG.Node.t * DG.Node.t list) option) =
     )
 
 
-let break_a_cycle_if_found dg =
+let print_a_cycle_if_found dg =
   match (look_for_a_cycle dg) with
-  | None -> ()
+  | None -> false
   | Some (the_nub,full_path) ->
     let cycle_path =
       let rec loop acc = function
@@ -2121,17 +2121,27 @@ let break_a_cycle_if_found dg =
               (DG.id_string node)
               (item_to_string item))))
     in
-    ()
+    true
 
 
 let cycle_watch_period = sec 10.0
 
-let __watch_for_cycles ~fin dg =
+let watch_for_cycles ~cycle_found ~fin dg =
   let rec loop () =
     Clock.after cycle_watch_period >>= fun () ->
     if (!fin) then Deferred.return () else (
-      break_a_cycle_if_found dg;
-      loop ()
+      match (print_a_cycle_if_found dg) with
+      | false -> loop ()
+      | true ->
+        let () =
+          (* Write message in format suitable for omake-server *)
+          let pr fmt = ksprintf (fun s -> Printf.printf "%s\n%!" s) fmt in
+          pr "*** OMakeroot error:";
+          pr "   dependency cycle; jenga.exe quitting\n";
+          pr "*** omake error:";
+        in
+        Ivar.fill cycle_found ();
+        Deferred.return ()
     )
   in
   loop ()
@@ -2228,17 +2238,17 @@ let build_forever =
       )
     in
 
+    let cycle_found = Ivar.create () in
+
     let rec build_and_poll ()  = (* never finishes if polling *)
 
       (* start up various asyncronous writers/dumpers *)
       let fin = ref false in
 
-(*
       (* async cycle detection; but NO deadlock breaking *)
       don't_wait_for (
-        watch_for_cycles ~fin discovered_graph
+        watch_for_cycles ~cycle_found ~fin discovered_graph
       );
-*)
 
       if Config.progress config then (
         don't_wait_for (
@@ -2278,5 +2288,7 @@ let build_forever =
         build_and_poll ()
 
     in
-    build_and_poll () >>= fun () ->
-    Deferred.return ()
+    Deferred.any [
+      Ivar.read cycle_found;
+      build_and_poll ();
+    ]

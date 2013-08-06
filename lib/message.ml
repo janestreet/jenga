@@ -260,23 +260,20 @@ let omake_style_logger config event =
 
   | Event.Load_sexp_error (path,`loc (line,col),exn) ->
     if not quiet then (
+      let where = Path.to_string (Path.dirname path) in
+      let file = Path.basename path in
+      (* hack on .cmx suffix for benefit of omake-server *)
+      let need = file ^ ".cmx" in
       if verbose then (
-        let where = Path.to_string (Path.dirname path) in
-        let need = Path.basename path in
         put "- build %s %s" where need;
       );
-    (* write location like ocaml compiler.. *)
-      let file = Path.basename path in
       put "File \"%s\", line %d, characters %d-%d:" file line col col;
-      put "Error: sexp_conversion failed\n%s\n" (Exn.to_string exn)
-    )
-  | Event.Job_started {Job_start.where; need; stdout_expected=_; prog=_; args=_; uid=_} ->
-    if not quiet then (
-      (* if verbose, show the "- build" line when the job starts *)
+      put "Error: sexp_conversion failed\n%s" (Exn.to_string exn);
       if verbose then (
-        put "- build %s %s" where need;
-      )
+        put "- exit %s %s" where need;
+      );
     )
+  | Event.Job_started _ -> () (* used to print the "- build" line here *)
   | Event.Job_completed (
     {Job_start. where; need; stdout_expected; prog; args; uid=_},
     {Job_finish. outcome; duration},
@@ -295,10 +292,7 @@ let omake_style_logger config event =
       let show_something = job_failed  || has_stderr_or_unexpected_stdout || verbose in
       if show_something then (
         let duration_string = pretty_span duration in
-        if not verbose then (
-        (* if verbose, we already showed this line when the job started *)
-          put "- build %s %s" where need;
-        );
+        put "- build %s %s" where need;
         (* print out the command in a format suitable for cut&pasting into bash
            (except for the leading "+")
         *)

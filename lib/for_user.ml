@@ -21,38 +21,41 @@ let fs() =
   | Some fs -> fs
   | None -> assert false
 
-
-let extract_locatopm_from_parse_error sexp =
-  let open Sexp in
-  match sexp with
-  | List (Atom "Reader.load_sexp(s) error"::_) -> Some (1,5) (* TODO *)
-  | _ -> None
-
+exception Extract_fail_on_step of int
 let extract_location exn =
-  (* for some reason,
-     I am unable to match directly against the form of the exn *)
-  let sexp = Exn.sexp_of_t exn in
   let open Sexp in
-  match (extract_locatopm_from_parse_error sexp) with
-  | Some loc -> loc
-  | None ->
-  match sexp with
-  | List [
-    Atom "Sexplib.Conv.Of_sexp_error";
-    List [Atom "Sexplib.Sexp.Annotated.Conv_exn"; Atom loc_string ; _ ];
-    _;
-  ] ->
-    (* base/sexplib/lib/Jenga.conf:4:3
-       --> File "Jenga.conf", line 4, characters 3-3: *)
-    begin
-      match String.rsplit2 loc_string ~on:':' with | None -> (1,4)
+  let sexp = Exn.sexp_of_t exn in
+  (*Message.message "extract_location: %s" (Sexp.to_string sexp);*)
+  let fail n = raise (Extract_fail_on_step n) in
+  try
+    let sexp = match sexp with | List [_;x] -> x | _ -> fail 1 in
+    let sexp = match sexp with | List [_;x] -> x | _ -> fail 2 in
+    let sexp = match sexp with | List [x] -> x | _ -> fail 3 in
+    let sexp =
+      match sexp with
+      | List [Atom "Sexplib.Conv.Of_sexp_error"; x; _] -> x
+      | _ -> fail 4
+    in
+    let sexp =
+      match sexp with
+        List [Atom "Sexplib.Sexp.Annotated.Conv_exn"; x ; _ ] -> x
+      | _ -> fail 5
+    in
+    let loc_string = match sexp with Atom x -> x | _ -> fail 6 in
+    let line,col =
+      match String.rsplit2 loc_string ~on:':' with | None -> fail 7
       | Some (file_line,col) ->
-        match String.rsplit2 file_line ~on:':' with | None -> (1,3)
+        match String.rsplit2 file_line ~on:':' with | None -> fail 8
         | Some (_,line) ->
           try (Int.of_string line, Int.of_string col) with
-          | _ -> (1,2)
-    end
-  | _ -> (1,1) (* make up dummy line,col if fail to extract *)
+          | _ -> fail 9
+    in
+    line,col
+  with
+  | Extract_fail_on_step n ->
+    Message.error "jbuild sexp location extract error on step %d" n;
+    (* dummy location; use col to indicate the extraction failure step number *)
+    (1,n)
 
 
 let load_for_jenga_with ~reader_load t_of_sexp path =
@@ -66,7 +69,7 @@ let load_for_jenga_with ~reader_load t_of_sexp path =
       let exn = Monitor.extract_exn exn in
       let loc = extract_location exn in
       Message.load_sexp_error path ~loc exn;
-      raise exn
+      failwith "load_sexp_for_jenga"
   )
 
 let load_sexp_for_jenga t_of_sexp = (* one *)
