@@ -103,8 +103,13 @@ end
 
 module Action = struct
 
-  type t = X of Xaction.t | I of Action_id.t
-  with sexp, bin_io, compare
+  module T = struct
+    type t = X of Xaction.t | I of Action_id.t
+    with sexp, bin_io, compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make_binable(T)
 
   let case = function
     | X x -> `xaction x
@@ -218,41 +223,50 @@ module Dep = struct
 
 end
 
+module Depends = struct
+
+  type _ t =
+  | Return : 'a -> 'a t
+  | Bind : 'a t * ('a -> 'b t) -> 'b t
+  | All : 'a t list -> 'a list t
+  | Need : Dep.t list -> unit t
+  | Stdout : Action.t t -> string t
+
+  let return x = Return x
+  let bind t f = Bind (t,f)
+  let all ts = All ts
+  let need d = Need d
+  let stdout t = Stdout t
+
+end
+
+
 module Target_rule = struct
 
-  module T = struct
+  type t = {
+    targets : Path.t list;
+    action_depends : Action.t Depends.t
+  }
+  with fields
 
-    type t = {
-      targets : Path.t list;
-      deps : Dep.t list;
-      action : Action.t;
-    }
-    with sexp, bin_io, compare, fields
-
-    let hash = Hashtbl.hash
-  end
-  include T
-  include Hashable.Make(T)
-
-
-  let create ~targets ~deps ~action =
-    (* Sort targets/deps on construction.
+  let create_new ~targets action_depends =
+    (* Sort targets on construction.
        This allows for better target-rule keyed caching, regarding as equivalent rules
        which differ only in the order of their targets/deps.
     *)
+    let targets = List.sort ~cmp:Path.compare targets in
     {
-      targets = List.sort ~cmp:Path.compare targets;
-      deps = List.sort ~cmp:Dep.compare deps;
-      action;
+      targets;
+      action_depends;
     }
 
-  let triple t = t.targets, t.deps, t.action
-
-  let to_string t =
-    sprintf "%s : %s : %s"
-      (String.concat ~sep:" " (List.map t.targets ~f:Path.to_string))
-      (String.concat ~sep:" " (List.map t.deps ~f:Dep.to_string))
-      (Action.to_string t.action)
+  (* old interface *)
+  let create ~targets ~deps ~action =
+    create_new ~targets (
+      Depends.bind (Depends.need deps) (fun () ->
+        Depends.return action
+      )
+    )
 
   let head_and_rest_targets t =
     match t.targets with
@@ -262,6 +276,8 @@ module Target_rule = struct
     | [] -> assert false
     | x::xs -> x,xs
 
+  let head_target t = fst (head_and_rest_targets t)
+
 end
 
 module Rule  = struct
@@ -270,7 +286,6 @@ module Rule  = struct
   | `target of Target_rule.t
   | `alias of Alias.t * Dep.t list
   ]
-  with sexp, bin_io, compare
 
   let create ~targets ~deps ~action = `target (Target_rule.create ~targets ~deps ~action)
   let alias alias deps = `alias (alias, deps)
@@ -286,14 +301,7 @@ module Rule  = struct
 
   let case t = t
 
-  let to_string = function
-    | `target tr -> Target_rule.to_string tr
-    | `alias (a,deps) ->
-      sprintf "%s = %s"
-        (Alias.to_string a)
-        (String.concat ~sep:" " (List.map deps ~f:Dep.to_string))
-
-  let equal t1 t2 = compare t1 t2 = 0
+  let create_new ~targets x = `target (Target_rule.create_new ~targets x)
 
 end
 

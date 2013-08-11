@@ -12,7 +12,7 @@ module Item = struct
   | Root
   | Scanner of Description.Scanner.t
   | Dep of Dep.t
-  | Target_rule of Target_rule.t
+  | Targets of Path.t list
   | Gen_key of Gen_key.t
 
 end

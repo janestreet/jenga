@@ -22,6 +22,8 @@ val plugin_cache_basename : string
 module Rel : sig type t end
 type t = Rel.t with sexp, compare, bin_io
 include Hashable_binable with type t := t
+include Comparable_binable with type t := t
+
 val the_root : t
 val root_relative : string -> t
 val create_from_absolute : string -> t option

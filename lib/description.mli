@@ -44,6 +44,7 @@ end
 
 module Action : sig
   type t with sexp, bin_io, compare
+  include Hashable_binable with type t := t
   val case : t -> [ `xaction of Xaction.t | `id of Action_id.t ]
   val xaction : Xaction.t -> t
   val internal1 : Action_id.t -> t
@@ -91,18 +92,30 @@ module Dep : sig
 
 end
 
+module Depends : sig
+  type _ t =
+  | Return : 'a -> 'a t
+  | Bind : 'a t * ('a -> 'b t) -> 'b t
+  | All : 'a t list -> 'a list t
+  | Need : Dep.t list -> unit t
+  | Stdout : Action.t t -> string t
+  val return : 'a -> 'a t
+  val bind : 'a t -> ('a -> 'b t) -> 'b t
+  val all : 'a t list -> 'a list t
+  val need : Dep.t list -> unit t
+  val stdout : Action.t t -> string t
+end
+
 module Target_rule : sig
-  type t with sexp, bin_io
-  include Hashable with type t := t
+  type t
   val create : targets:Path.t list -> deps:Dep.t list -> action:Action.t -> t
-  val triple : t -> Path.t list * Dep.t list * Action.t
   val targets : t -> Path.t list
-  val head_and_rest_targets : t -> Path.t * Path.t list
-  val to_string : t -> string
+  val head_target : t -> Path.t
+  val action_depends : t -> Action.t Depends.t
 end
 
 module Rule : sig
-  type t with sexp, bin_io
+  type t
   val create : targets:Path.t list -> deps:Dep.t list -> action:Action.t -> t
   val alias : Alias.t -> Dep.t list -> t
   val default : dir:Path.t -> Dep.t list -> t
@@ -112,8 +125,7 @@ module Rule : sig
   | `target of Target_rule.t
   | `alias of Alias.t * Dep.t list
   ]
-  val to_string : t -> string
-  val equal : t -> t ->  bool
+  val create_new : targets:Path.t list -> Action.t Depends.t -> t
 end
 
 module Gen_key : sig

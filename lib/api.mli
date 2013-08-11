@@ -61,13 +61,22 @@ module Dep : sig
   val absolute : path:string -> t
 end
 
+module Depends : sig
+  type 'a t
+  val return : 'a -> 'a t
+  val bind : 'a t -> ('a -> 'b t) -> 'b t
+  val all : 'a t list -> 'a list t
+  val need : Dep.t list -> unit t
+  val stdout : Action.t t -> string t
+end
+
 module Rule : sig
   type t
   val create : targets:Path.t list -> deps:Dep.t list -> action:Action.t -> t
   val alias : Alias.t -> Dep.t list -> t
   val default : dir:Path.t -> Dep.t list -> t
   val targets : t -> Path.t list
-  val to_string : t -> string
+  val create_new : targets:Path.t list -> Action.t Depends.t -> t
 end
 
 module Rule_generator : sig

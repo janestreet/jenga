@@ -62,6 +62,7 @@ module Rel = struct
 
     type t with sexp, compare, bin_io
     include Hashable_binable with type t := t
+    include Comparable_binable with type t := t
     val unpack : t -> string
     val the_root : t
     val extend : t -> seg:string -> t
@@ -76,6 +77,7 @@ module Rel = struct
 
     include T
     include Hashable.Make_binable(T)
+    include Comparable.Make_binable(T)
 
     let create s = assert (match s with "." -> false | _ -> true); s
 

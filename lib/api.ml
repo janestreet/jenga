@@ -28,6 +28,7 @@ module Scanner = Scanner
 module Dep = Dep
 module Xaction = Xaction
 module Action = Action
+module Depends = Depends
 module Rule = Rule
 module Rule_scheme = Rule_scheme
 module Rule_generator = Rule_generator
@@ -98,7 +99,31 @@ let parse_rules_from_simple_makefile path =
       let implicit_default_rule = Rule.default ~dir (List.map targets ~f:Dep.path) in
       return (implicit_default_rule :: rules)
 
-include Job.Run_now
+
+
+exception Run_now_of_internal_action_not_supported of Action_id.t
+exception Non_zero_status_from_action_run_now of Action.t
+
+
+let run_action_now_output ~output action =
+  match Action.case action with
+  | `id id -> raise (Run_now_of_internal_action_not_supported id)
+  | `xaction xaction ->
+    let config = For_user.config() in
+    let need = "run_now" in
+    let rel_path_semantics = Forker.Rel_path_semantics.New_wrt_working_dir in
+    let putenv = [] in
+    Job.run ~config ~need ~rel_path_semantics ~putenv ~xaction ~output >>= function
+    | Error `non_zero_status     -> raise (Non_zero_status_from_action_run_now action)
+    | Error (`other_error exn)   -> raise exn
+    | Ok x                       -> Deferred.return x
+
+
+let run_action_now =
+  run_action_now_output ~output:Job.Output.ignore
+
+let run_action_now_stdout =
+  run_action_now_output ~output:Job.Output.stdout
 
 
 let enqueue_file_access = File_access.enqueue

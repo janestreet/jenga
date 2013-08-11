@@ -6,31 +6,27 @@ exception Shutdown
 
 val external_jobs_run : Effort.Counter.t
 
-module Run_external_job : sig
+module Output : sig
 
-  val shell :
-    Config.t ->
-    need:string ->
-    rel_path_semantics:Forker.Rel_path_semantics.t ->
-    putenv : (string * string) list ->
-    dir:Path.t ->
-    prog:string ->
-    args:string list ->
-    (unit, [ `non_zero_status | `other_error of exn ]) Result.t Deferred.t
+  (* Policy for treating the command output *)
+  type 'a t
 
-  val shell_stdout :
-    Config.t ->
-    need:string ->
-    rel_path_semantics:Forker.Rel_path_semantics.t ->
-    putenv : (string * string) list ->
-    dir:Path.t ->
-    prog:string ->
-    args:string list ->
-    (string, [ `non_zero_status | `other_error of exn ]) Result.t Deferred.t
+  (* no stdout expected; command being run for effect *)
+  val ignore : unit t
+
+  (* stdout expected & wanted *)
+  val stdout : string t
+
+  (* given an ouput policy of a specific type, cause no output *)
+  val none : 'a t -> 'a
 
 end
 
-module Run_now : sig
-  val run_action_now : Description.Action.t -> unit Deferred.t
-  val run_action_now_stdout : Description.Action.t -> string Deferred.t
-end
+val run :
+  config:Config.t ->
+  need:string ->
+  rel_path_semantics:Forker.Rel_path_semantics.t ->
+  putenv : (string * string) list ->
+  xaction : Description.Xaction.t ->
+  output : 'a Output.t ->
+  ('a, [ `non_zero_status | `other_error of exn ]) Result.t Deferred.t

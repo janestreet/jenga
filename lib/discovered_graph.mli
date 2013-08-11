@@ -11,7 +11,7 @@ module Item : sig
   | Root
   | Scanner of Description.Scanner.t
   | Dep of Description.Dep.t
-  | Target_rule of Description.Target_rule.t
+  | Targets of Path.t list
   | Gen_key of Description.Gen_key.t
 
 end
