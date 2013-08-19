@@ -22,8 +22,8 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path =
   For_user.install_fs_for_user_rules fs;
   let top_level_demands =
     match Config.demands config with
-    | [] -> [ Description.Dep.default ~dir:start_dir ]
-    | demands -> List.map demands ~f:(Description.Dep.parse_string ~dir:start_dir)
+    | [] -> [ Description.Dep1.default ~dir:start_dir ]
+    | demands -> List.map demands ~f:(Description.Dep1.parse_string ~dir:start_dir)
   in
   let when_polling () =
     Persist.disable_periodic_saving_and_save_now persist

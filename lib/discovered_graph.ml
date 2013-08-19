@@ -10,8 +10,7 @@ module Item = struct
 
   type t =
   | Root
-  | Scanner of Description.Scanner.t
-  | Dep of Dep.t
+  | Dep of Dep1.t
   | Targets of Path.t list
   | Gen_key of Gen_key.t
 

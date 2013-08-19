@@ -3,8 +3,6 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
-let (=) = Int.(=)
-
 module Digest = Fs.Digest
 module Glob = Fs.Glob
 
@@ -128,40 +126,13 @@ module Action = struct
 
 end
 
-module Scanner = struct
-
-  module T = struct
-
-    type t = [
-    | `old_internal of Scan_id.t
-    | `local_deps of Path.t * Action.t
-    ] with sexp, bin_io, compare
-
-    let hash = Hashtbl.hash
-
-  end
-  include T
-  include Hashable.Make_binable(T)
-
-  let old_internal sexp = `old_internal (Scan_id.of_sexp sexp)
-  let local_deps ~dir action = `local_deps (dir,action)
-
-  let to_string = function
-    | `old_internal id -> Scan_id.to_string id
-    | `local_deps (dir,action) ->
-      sprintf "local-deps (deps-wrt: %s): %s"
-        (Path.to_string dir) (Action.to_string action)
-
-end
-
-module Dep = struct
+module Dep1 = struct
 
   module T = struct
 
     type t = [
     | `path of Path.t
     | `alias of Alias.t
-    | `scan of t list * Scanner.t
     | `glob of Glob.t
     | `absolute of Path.Abs.t
     ]
@@ -172,22 +143,16 @@ module Dep = struct
   include Hashable.Make(T)
 
   let case t = t
+
   let path path = `path path
   let alias alias = `alias alias
   let glob glob = `glob glob
-  let scanner ts scanner = `scan (ts,scanner)
-  let scan1 ts id = `scan (ts,`old_internal id)
-  let scan ts sexp = `scan (ts,`old_internal (Scan_id.of_sexp sexp))
-
   let absolute ~path = `absolute (Path.Abs.create path)
 
-  let rec to_string t =
+  let to_string t =
     match t with
     | `path path -> Path.to_string path
     | `alias alias -> Alias.to_string alias
-    | `scan (deps,scanner) ->
-      sprintf "scan(: %s) - %s" (String.concat ~sep:" " (List.map deps ~f:to_string))
-        (Scanner.to_string scanner)
     | `glob glob -> Fs.Glob.to_string glob
     | `absolute a -> Path.Abs.to_string a
 
@@ -219,8 +184,6 @@ module Dep = struct
     let deps = List.map words ~f:(parse_string ~dir) in
     deps
 
-  let equal t1 t2 = compare t1 t2 = 0
-
 end
 
 module Depends = struct
@@ -229,17 +192,41 @@ module Depends = struct
   | Return : 'a -> 'a t
   | Bind : 'a t * ('a -> 'b t) -> 'b t
   | All : 'a t list -> 'a list t
-  | Need : Dep.t list -> unit t
+  | Need : Dep1.t list -> unit t
   | Stdout : Action.t t -> string t
+  | Glob : Glob.t -> Path.t list t
+  | Scan_id : Scan_id.t t -> unit t
+  | Scan_local_deps : (Path.t * Action.t) t -> unit t
 
   let return x = Return x
   let bind t f = Bind (t,f)
   let all ts = All ts
   let need d = Need d
   let stdout t = Stdout t
+  let glob t = Glob t
+
+  let scan_id t = Scan_id t
+  let scan_local_deps t = Scan_local_deps t
+
+  (* non primitive.. *)
+
+  let ( *>>= ) = bind
+
+  let all_unit ts = all ts *>>= fun (_:unit list) -> return ()
+
+  let bash ~dir command_string =
+    Action.shell ~dir ~prog:"bash" ~args:["-c"; command_string]
+
+  let cat_file_action file =
+    bash ~dir:(Path.dirname file) (sprintf "cat %s" (Path.basename file))
+
+  let file_contents file = (* could/should be a primitive *)
+    stdout (
+      need [Dep1.path file] *>>= fun () ->
+      return (cat_file_action file)
+  )
 
 end
-
 
 module Target_rule = struct
 
@@ -260,14 +247,6 @@ module Target_rule = struct
       action_depends;
     }
 
-  (* old interface *)
-  let create ~targets ~deps ~action =
-    create_new ~targets (
-      Depends.bind (Depends.need deps) (fun () ->
-        Depends.return action
-      )
-    )
-
   let head_and_rest_targets t =
     match t.targets with
     (* It is possible to construct a rule with an empty list of targets, but once rules
@@ -282,26 +261,13 @@ end
 
 module Rule  = struct
 
-  type t = [
-  | `target of Target_rule.t
-  | `alias of Alias.t * Dep.t list
-  ]
-
-  let create ~targets ~deps ~action = `target (Target_rule.create ~targets ~deps ~action)
-  let alias alias deps = `alias (alias, deps)
-  let default ~dir deps = `alias (Alias.default ~dir, deps)
+  type t =
+  | Target of Target_rule.t
+  | Alias of Alias.t * unit Depends.t
 
   let targets = function
-    | `target tr -> Target_rule.targets tr
-    | `alias _ -> []
-
-  let defines_alias_for a1 = function
-    | `target _ -> false
-    | `alias (a2,_) -> Alias.compare a1 a2 = 0
-
-  let case t = t
-
-  let create_new ~targets x = `target (Target_rule.create_new ~targets x)
+    | Target tr -> Target_rule.targets tr
+    | Alias _ -> []
 
 end
 
@@ -324,17 +290,15 @@ end
 module Rule_generator = struct
 
   type t = {
-    deps:Dep.t list;
+    depends:unit Depends.t;
     gen:(unit -> Rule.t list Deferred.t);
   }
 
-  let create ~deps ~gen = { deps; gen; }
+  let create_new depends ~gen = { depends; gen; }
 
-  let deps t = t.deps
+  let depends t = t.depends
 
-  let gen t =
-    t.gen() >>= fun rules ->
-    return rules
+  let gen t = t.gen()
 
 end
 
@@ -358,7 +322,7 @@ module Env = struct
     putenv:(string * string) list;
     command_lookup_path : [`Replace of string list | `Extend of string list] option;
     action : Sexp.t -> unit Deferred.t;
-    scan : Sexp.t -> Dep.t list Deferred.t;
+    scan : Sexp.t -> unit Depends.t Deferred.t;
     schemes : (Pattern.t * Rule_scheme.t option) list;
     build_begin : (unit -> unit Deferred.t);
     build_end : (unit -> unit Deferred.t);
@@ -368,8 +332,10 @@ module Env = struct
 
   let create
       ?(version=Version.Pre_versioning)
-      ?(putenv=[]) ?command_lookup_path
-      ?(action=k_assert_false) ?(scan=k_assert_false)
+      ?(putenv=[])
+      ?command_lookup_path
+      ?(action=k_assert_false)
+      ?(scan=k_assert_false)
       ?(build_begin=(fun () -> Deferred.return ()))
       ?(build_end=(fun () -> Deferred.return ()))
       schemes =

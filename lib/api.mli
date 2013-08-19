@@ -46,7 +46,6 @@ end
 
 module Scanner : sig
   type t
-  val old_internal : Sexp.t -> t
   val local_deps : dir:Path.t -> Action.t -> t
 end
 
@@ -54,7 +53,7 @@ module Dep : sig
   type t
   val path : Path.t -> t
   val glob : Glob.t -> t
-  val scan : t list -> Sexp.t -> t (* TODO: remove, in favour of more general scanner *)
+  val scan : t list -> Sexp.t -> t
   val scanner : t list -> Scanner.t -> t
   val alias : Alias.t -> t
   val parse_string : dir:Path.t -> string -> t
@@ -68,6 +67,8 @@ module Depends : sig
   val all : 'a t list -> 'a list t
   val need : Dep.t list -> unit t
   val stdout : Action.t t -> string t
+  val glob : Glob.t -> Path.t list t
+  val file_contents : Path.t -> string t
 end
 
 module Rule : sig
@@ -121,4 +122,4 @@ val enqueue_file_access : (unit -> 'a Deferred.t) -> 'a Deferred.t
 (* these all wrap with enqueue_file_access *)
 val load_sexp_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a Deferred.t
 val load_sexps_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a list Deferred.t
-val parse_rules_from_simple_makefile : Path.t -> Rule.t list Deferred.t
+(*val parse_rules_from_simple_makefile : Path.t -> Rule.t list Deferred.t*)

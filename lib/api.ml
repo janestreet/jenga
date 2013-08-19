@@ -3,8 +3,6 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
-open Description
-
 module Path = Path
 module Kind = Fs.Kind
 
@@ -23,16 +21,119 @@ module Glob = struct
 
 end
 
-module Alias = Alias
-module Scanner = Scanner
-module Dep = Dep
-module Xaction = Xaction
-module Action = Action
-module Depends = Depends
-module Rule = Rule
-module Rule_scheme = Rule_scheme
-module Rule_generator = Rule_generator
-module Env = Env
+module Alias = Description.Alias
+module Action = Description.Action
+module Xaction = Description.Xaction
+
+module Scanner = struct
+  module Local_deps = struct
+    type t =  {
+      dir : Path.t;
+      action : Action.t;
+    }
+  end
+  type t = Local_deps.t
+  let local_deps ~dir action = { Local_deps. dir; action}
+end
+
+module Dep = struct
+
+  module Depends = Description.Depends
+  module Dep1 = Description.Dep1
+
+  type t = unit Depends.t
+
+  let lift dep = Depends.need [dep]
+
+  let need ts = Depends.all_unit ts
+
+  let path x = lift (Dep1.path x)
+  let glob x = lift (Dep1.glob x)
+  let alias x = lift (Dep1.alias x)
+  let parse_string ~dir x = lift (Dep1.parse_string ~dir x)
+  let absolute ~path = lift (Dep1.absolute ~path)
+
+  let return = Depends.return
+  let ( *>>= ) = Depends.bind
+
+  let scan ts sexp =
+    Depends.scan_id (
+      need ts *>>= fun () ->
+      return (Description.Scan_id.of_sexp sexp)
+    )
+
+  let scanner ts scanner =
+    let {Scanner.Local_deps. dir; action} = scanner in
+    Depends.scan_local_deps (
+      need ts *>>= fun () ->
+      return (dir,action)
+    )
+
+end
+
+module Depends = struct
+
+  module Depends = Description.Depends
+  include Depends
+  let need deps = Dep.need deps
+
+end
+
+module Rule = struct
+
+  module Rule = Description.Rule
+  type t = Rule.t
+
+  let create_new ~targets action_depends =
+    Rule.Target (Description.Target_rule.create_new ~targets action_depends)
+
+  let create ~targets ~deps ~action =
+    create_new ~targets (
+      Depends.bind (Depends.need deps) (fun () ->
+        Depends.return action
+      )
+    )
+
+  let alias a deps =
+    Rule.Alias (a, Depends.need deps)
+
+  let default ~dir deps =
+    alias (Alias.default ~dir) deps
+
+  let targets = Rule.targets
+
+end
+
+module Rule_scheme = Description.Rule_scheme
+
+module Rule_generator = struct
+
+  type t = Description.Rule_generator.t
+
+  let create ~deps ~gen =
+    Description.Rule_generator.create_new
+      (Depends.need deps)
+      ~gen
+
+end
+
+module Env = struct
+
+  type t = Description.Env.t
+
+  let create
+      ?version ?putenv ?command_lookup_path ?action ?scan ?build_begin ?build_end schemes
+      =
+    let scan =
+      match scan with
+      | None -> None
+      | Some f -> Some (fun sexp -> f sexp >>| Depends.need)
+    in
+    Description.Env.create
+      ?version ?putenv ?command_lookup_path ?action ?scan ?build_begin ?build_end schemes
+
+end
+
 module Version = Version
 
 let verbose() = Config.verbose (For_user.config ())
@@ -40,68 +141,7 @@ let verbose() = Config.verbose (For_user.config ())
 let load_sexp_for_jenga = For_user.load_sexp_for_jenga
 let load_sexps_for_jenga = For_user.load_sexps_for_jenga
 
-module Raw_sexp_makefile_rule = struct
-
-  type t = string list with sexp
-
-  let load_many path =
-    For_user.load_sexps_for_jenga t_of_sexp path
-
-  let split_list_at_colons =
-    let rec loop acc xs  =
-      let front,xs = List.split_while xs ~f:(fun s -> not (String.equal ":" s)) in
-      let acc = front :: acc in
-      match xs with
-      | [] -> List.rev acc
-      | colon::xs -> assert (String.equal colon ":"); loop acc xs
-    in
-    loop []
-
-  let convert_to_rule ~dir xs =
-    let path_of_string string = Path.relative ~dir string in
-    let dep_of_string string = Dep.parse_string ~dir string in
-    let xss = split_list_at_colons xs in
-    let err s = failwith s in
-    match xss with
-    | [] | [_] ->
-      err "a rule must contain 1 or 2 colons, found none"
-    | _::_::_::_::_ ->
-      err (sprintf "a rule must contain 1 or 2 colons, found %d"
-             (List.length xss - 1))
-    | [[alias];deps] ->
-      Rule.alias (Alias.create ~dir alias) (List.map deps ~f:dep_of_string)
-    | [_;_] ->
-      err "an alias definition must contain exactly 1 target"
-    | [_;_;[]]  ->
-      err "a rule action must have at least 1 word"
-    | [targets;deps;(prog::args)] ->
-      Rule.create
-        ~targets:   (List.map targets ~f:path_of_string)
-        ~deps:      (List.map deps ~f:dep_of_string)
-        ~action:    (Action.shell ~dir ~prog ~args)
-
-end
-
-let parse_rules_from_simple_makefile path =
-  let dir = Path.dirname path in
-  Raw_sexp_makefile_rule.load_many path >>= fun xs ->
-  let rules = List.map xs ~f:(Raw_sexp_makefile_rule.convert_to_rule ~dir) in
-  let default_explicitly_defined =
-    List.exists rules ~f:(Rule.defines_alias_for (Alias.default ~dir))
-  in
-  if default_explicitly_defined
-  then return rules
-  else
-    match rules with
-    | [] -> return rules
-    | rule1::_ ->
-      let targets = Rule.targets rule1 in
-      let implicit_default_rule = Rule.default ~dir (List.map targets ~f:Dep.path) in
-      return (implicit_default_rule :: rules)
-
-
-
-exception Run_now_of_internal_action_not_supported of Action_id.t
+exception Run_now_of_internal_action_not_supported of Description.Action_id.t
 exception Non_zero_status_from_action_run_now of Action.t
 
 
@@ -124,6 +164,5 @@ let run_action_now =
 
 let run_action_now_stdout =
   run_action_now_output ~output:Job.Output.stdout
-
 
 let enqueue_file_access = File_access.enqueue

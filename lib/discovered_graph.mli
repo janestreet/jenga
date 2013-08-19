@@ -9,8 +9,7 @@ module Item : sig
 
   type t =
   | Root
-  | Scanner of Description.Scanner.t
-  | Dep of Description.Dep.t
+  | Dep of Description.Dep1.t
   | Targets of Path.t list
   | Gen_key of Description.Gen_key.t
 
