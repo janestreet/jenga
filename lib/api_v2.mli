@@ -1,11 +1,13 @@
 
-open Core.Std
-open Async.Std
+(* Jenga API version 2 - Monadic Style *)
 
 (* This signature provides the interface between the `user-code' which
    describes the build rules etc for a specific instatnce of jenga,
    and the core jenga build system.
 *)
+
+open Core.Std
+open Async.Std
 
 module Path : sig (* repo-relative path *)
   type t with sexp
@@ -16,11 +18,9 @@ module Path : sig (* repo-relative path *)
   val basename : t -> string
   val the_root : t
   val root_relative : string -> t
-
   (* [dotdot ~dir path]
      compute relative ".."-based-path-string to reach [path] from [dir] *)
   val dotdot : dir:t -> t -> string
-
 end
 
 module Kind : sig
@@ -30,7 +30,6 @@ end
 module Glob : sig
   type t with sexp
   val create : dir:Path.t -> ?kinds: Kind.t list -> string -> t
-  val exec : t -> Path.t list Deferred.t
 end
 
 module Alias : sig
@@ -40,26 +39,9 @@ end
 
 module Action : sig
   type t
-  val internal : Sexp.t -> t
   val shell : dir:Path.t -> prog:string -> args:string list -> t
   val bash : dir:Path.t -> string -> t
   val write_string : string -> target:Path.t -> t
-end
-
-module Scanner : sig
-  type t
-  val local_deps : dir:Path.t -> Action.t -> t
-end
-
-module Dep : sig (* old pre-monadic interface *)
-  type t
-  val path : Path.t -> t
-  val absolute : path:string -> t
-  val glob : Glob.t -> t
-  val alias : Alias.t -> t
-  val scan : t list -> Sexp.t -> t
-  val scanner : t list -> Scanner.t -> t
-  val parse_string : dir:Path.t -> string -> t
 end
 
 module Depends : sig (* The jenga monad *)
@@ -79,59 +61,41 @@ module Depends : sig (* The jenga monad *)
   val contents : Path.t -> string t
   val contents_absolute : path:string -> string t
   val subdirs : dir:Path.t -> Path.t list t
-  val read_sexp : Path.t -> Sexp.t t
-  val read_sexps : Path.t -> Sexp.t list t
 end
 
 module Rule : sig
   type t
-  val create : targets:Path.t list -> deps:Dep.t list -> action:Action.t -> t
-  val create_new : targets:Path.t list -> Action.t Depends.t -> t
-  val alias : Alias.t -> Dep.t list -> t
-  val alias_new : Alias.t -> unit Depends.t -> t
-  val default : dir:Path.t -> Dep.t list -> t
+  val create : targets:Path.t list -> Action.t Depends.t -> t
+  val alias : Alias.t -> unit Depends.t -> t
+  val default : dir:Path.t -> unit Depends.t -> t
   val targets : t -> Path.t list
 end
 
-module Rule_generator : sig
+module Generator : sig
   type t
-  val create : deps:Dep.t list -> gen:(unit -> Rule.t list Deferred.t) -> t
-  val create_new : Rule.t list Depends.t -> t
+  val create : Rule.t list Depends.t -> t
 end
 
-module Rule_scheme : sig
+module Scheme : sig
   type t
-  val create : tag:string -> (dir:Path.t -> Rule_generator.t) -> t
-end
-
-module Version : sig
-  type t =
-  | Pre_versioning
-  | V_2013_07_09
+  val create : tag:string -> (dir:Path.t -> Generator.t) -> t
 end
 
 module Env : sig
   type t = Description.Env.t
   val create :
-    ?version:Version.t ->
     ?putenv:(string * string) list ->
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
-    ?action : (Sexp.t -> unit Deferred.t) ->
-    ?scan : (Sexp.t -> Dep.t list Deferred.t) ->
     ?build_begin : (unit -> unit Deferred.t) ->
     ?build_end : (unit -> unit Deferred.t) ->
-    (string * Rule_scheme.t option) list ->
-    t
+    (string * Scheme.t option) list ->
+    (* odd return type (instead of "t") - matches expected type of setup *)
+    (unit -> t Deferred.t)
+
 end
 
 val verbose : unit -> bool
 
-val run_action_now : Action.t -> unit Deferred.t
-val run_action_now_stdout : Action.t -> string Deferred.t
-
-val enqueue_file_access : (unit -> 'a Deferred.t) -> 'a Deferred.t
-
-(* these all wrap with enqueue_file_access *)
-val load_sexp_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a Deferred.t
-val load_sexps_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a list Deferred.t
-(*val parse_rules_from_simple_makefile : Path.t -> Rule.t list Deferred.t*)
+(* should these stay? *)
+val load_sexp_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a Depends.t
+val load_sexps_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a list Depends.t

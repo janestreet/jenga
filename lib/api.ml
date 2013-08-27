@@ -22,8 +22,25 @@ module Glob = struct
 end
 
 module Alias = Description.Alias
-module Action = Description.Action
-module Xaction = Description.Xaction
+
+let installed_internal_action_lookup : (Sexp.t -> unit Deferred.t) ref =
+  ref (fun _ -> failwith "internal_action_lookup not installed")
+
+module Action = struct
+
+  include Description.Action
+
+  let internal sexp =
+    internal
+      ~tag:sexp
+      ~func:(fun () -> (!installed_internal_action_lookup) sexp)
+
+end
+
+
+module Depends = Description.Depends
+let ( *>>= ) = Depends.bind
+let ( *>>| ) = Depends.map
 
 module Scanner = struct
   module Local_deps = struct
@@ -36,71 +53,58 @@ module Scanner = struct
   let local_deps ~dir action = { Local_deps. dir; action}
 end
 
+
 module Dep = struct
 
-  module Depends = Description.Depends
   module Dep1 = Description.Dep1
 
   type t = unit Depends.t
 
-  let lift dep = Depends.need [dep]
+  let installed_scanner_lookup : (Sexp.t -> t list Deferred.t) ref =
+    ref (fun _ -> failwith "scanner_lookup not installed")
 
-  let need ts = Depends.all_unit ts
-
-  let path x = lift (Dep1.path x)
-  let glob x = lift (Dep1.glob x)
-  let alias x = lift (Dep1.alias x)
-  let parse_string ~dir x = lift (Dep1.parse_string ~dir x)
-  let absolute ~path = lift (Dep1.absolute ~path)
-
-  let return = Depends.return
-  let ( *>>= ) = Depends.bind
+  let path x = Depends.path x
+  let glob x = Depends.glob x *>>| fun (_:Path.t list) -> ()
+  let alias x = Depends.alias x
+  let absolute ~path = Depends.absolute ~path
+  let parse_string ~dir x = Depends.dep1s [Dep1.parse_string ~dir x]
 
   let scan ts sexp =
-    Depends.scan_id (
-      need ts *>>= fun () ->
-      return (Description.Scan_id.of_sexp sexp)
-    )
+    Depends.all_unit ts *>>= fun () ->
+    Depends.deferred (fun () -> (!installed_scanner_lookup) sexp) *>>= fun ts ->
+    Depends.all_unit ts
 
   let scanner ts scanner =
     let {Scanner.Local_deps. dir; action} = scanner in
-    Depends.scan_local_deps (
-      need ts *>>= fun () ->
-      return (dir,action)
-    )
-
-end
-
-module Depends = struct
-
-  module Depends = Description.Depends
-  include Depends
-  let need deps = Dep.need deps
+    Depends.action_stdout (
+      Depends.all_unit ts *>>| fun () -> action
+    ) *>>= fun string ->
+    Depends.dep1s (Dep1.parse_string_as_deps ~dir string)
 
 end
 
 module Rule = struct
 
-  module Rule = Description.Rule
-  type t = Rule.t
-
-  let create_new ~targets action_depends =
-    Rule.Target (Description.Target_rule.create_new ~targets action_depends)
+  type t = Description.Rule.t
 
   let create ~targets ~deps ~action =
-    create_new ~targets (
-      Depends.bind (Depends.need deps) (fun () ->
-        Depends.return action
-      )
+    Description.Rule.Target (
+      Description.Target_rule.create ~targets (
+        Depends.all_unit deps *>>| fun () -> action)
     )
 
+  let create_new ~targets action_depends =
+    Description.Rule.Target (Description.Target_rule.create ~targets action_depends)
+
   let alias a deps =
-    Rule.Alias (a, Depends.need deps)
+    Description.Rule.Alias (a, Depends.all_unit deps)
+
+  let alias_new a dep = Description.Rule.Alias (a, dep)
 
   let default ~dir deps =
     alias (Alias.default ~dir) deps
 
-  let targets = Rule.targets
+  let targets = Description.Rule.targets
 
 end
 
@@ -111,9 +115,12 @@ module Rule_generator = struct
   type t = Description.Rule_generator.t
 
   let create ~deps ~gen =
-    Description.Rule_generator.create_new
-      (Depends.need deps)
-      ~gen
+    Description.Rule_generator.create (
+      Depends.all_unit deps *>>= fun () ->
+      Depends.deferred gen
+    )
+
+  let create_new = Description.Rule_generator.create
 
 end
 
@@ -124,13 +131,22 @@ module Env = struct
   let create
       ?version ?putenv ?command_lookup_path ?action ?scan ?build_begin ?build_end schemes
       =
-    let scan =
+
+    let () =
       match scan with
-      | None -> None
-      | Some f -> Some (fun sexp -> f sexp >>| Depends.need)
+      | None -> ()
+      | Some scan -> Dep.installed_scanner_lookup := scan
     in
+
+    let () =
+      match action with
+      | None -> ()
+      | Some action -> installed_internal_action_lookup := action
+    in
+
     Description.Env.create
-      ?version ?putenv ?command_lookup_path ?action ?scan ?build_begin ?build_end schemes
+      ?version ?putenv ?command_lookup_path
+      ?build_begin ?build_end schemes
 
 end
 
@@ -141,13 +157,13 @@ let verbose() = Config.verbose (For_user.config ())
 let load_sexp_for_jenga = For_user.load_sexp_for_jenga
 let load_sexps_for_jenga = For_user.load_sexps_for_jenga
 
-exception Run_now_of_internal_action_not_supported of Description.Action_id.t
+exception Run_now_of_internal_action_not_supported
 exception Non_zero_status_from_action_run_now of Action.t
 
 
 let run_action_now_output ~output action =
   match Action.case action with
-  | `id id -> raise (Run_now_of_internal_action_not_supported id)
+  | `iaction _ -> raise Run_now_of_internal_action_not_supported
   | `xaction xaction ->
     let config = For_user.config() in
     let need = "run_now" in

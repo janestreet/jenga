@@ -13,65 +13,24 @@ module Digest = Fs.Digest
 module Glob = Fs.Glob
 module DG = Discovered_graph
 
-
-
-let insensitive_scanners_and_internal_actions =
-  match Core.Std.Sys.getenv "JENGA_INSENSITIVE_SCANNERS_AND_INTERNAL_ACTIONS" with
-  | None -> false
-  | Some _ -> true
-
 (*----------------------------------------------------------------------
   effort
 ----------------------------------------------------------------------*)
 
 let persist_saves_done = Effort.Counter.create "db-save" (* for use in persist.ml *)
 
-(* What did we do? - gen/scan/act *)
-let generators_run = Effort.Counter.create "gen"
-let scanners_run = Effort.Counter.create "scan"
-let actions_run = Effort.Counter.create "act"
-
-(* How did we do it? - job (external process) / user code (internal-ml-function) *)
-let user_functions_run = Effort.Counter.create "user"
-
+(* jem -work *)
 let all_effort =
   Effort.create [
     Fs.lstat_counter;
     Fs.digest_counter;
+    (*Fs.mkdir_counter;*)
     Fs.ls_counter;
-    Fs.mkdir_counter;
-    generators_run;
-    scanners_run;
-    actions_run;
-    user_functions_run;
     Job.external_jobs_run;
     persist_saves_done;
   ]
 
 let snap_all_effort () = Effort.snap all_effort
-
-(* subsets of effort counters for monitor display *)
-let run_effort =
-  Effort.create [
-    generators_run;
-    scanners_run;
-    actions_run;
-  ]
-
-let work_effort =
-  Effort.create [
-    Fs.digest_counter;
-    Fs.ls_counter;
-    user_functions_run;
-    Job.external_jobs_run;
-  ]
-
-let intern_effort =
-  Effort.create [
-    Fs.lstat_counter;
-    Fs.mkdir_counter;
-    persist_saves_done;
-  ]
 
 (*----------------------------------------------------------------------
  stale targets
@@ -136,8 +95,6 @@ module Env1 : sig
   val putenv : t -> (string * string) list
   val lookup_gen_key : t -> Goal.t -> Gen_key.t option
   val run_generator_scheme : t -> Gen_key.t -> (Rule_generator.t,exn) Result.t
-  val run_scanner : t -> Scan_id.t -> unit Depends.t Deferred.t
-  val run_internal_action : t -> Action_id.t -> unit Deferred.t
   val build_begin : t -> unit Deferred.t
   val build_end : t -> unit Deferred.t
 
@@ -148,8 +105,6 @@ end = struct
     putenv : (string * string) list;
     lookup_gen_key : Goal.t -> Gen_key.t option;
     run_generator_scheme : Gen_key.t -> (Rule_generator.t,exn) Result.t;
-    run_scanner : Scan_id.t -> unit Depends.t Deferred.t;
-    run_internal_action : Action_id.t -> unit Deferred.t;
     build_begin : unit -> unit Deferred.t;
     build_end : unit -> unit Deferred.t;
   } with fields
@@ -165,7 +120,7 @@ end = struct
   let build_end t = t.build_end ()
 
   let of_env env =
-    let {Env. version; putenv; command_lookup_path; action; scan;
+    let {Env. version; putenv; command_lookup_path;
          build_begin; build_end;
          schemes} = env in
 
@@ -253,17 +208,6 @@ end = struct
         with exn -> Error exn
     in
 
-    (* scanner / internal-action wrapping *)
-    (* Avoid pointless sexp->string->sexp conversion spotted by Dmitry... *)
-    let run_scanner id =
-      (*scan (Sexp.of_string (Scan_id.to_string id))*)
-      scan (Scan_id.to_sexp id)
-    in
-    let run_internal_action id =
-      (*action (Sexp.of_string (Action_id.to_string id))*)
-      action (Action_id.to_sexp id)
-    in
-
     let dups = !dups in
     match dups with | _::_ -> `dups dups
     | [] ->
@@ -272,8 +216,6 @@ end = struct
         putenv;
         lookup_gen_key;
         run_generator_scheme;
-        run_scanner;
-        run_internal_action;
         build_begin;
         build_end;
       }
@@ -288,7 +230,6 @@ end
 module Ruleset : sig
 
   type t
-  val empty : t
   val create : Rule.t list -> [ `ok of t | `dups of Path.t list ]
 
   val lookup_target : t -> Path.t -> Target_rule.t option
@@ -306,12 +247,6 @@ end = struct
 
   let targets t =
     List.concat_map (rules t) ~f:Rule.targets
-
-  let empty = {
-    rules = [];
-    lookup_target = (fun _ -> None);
-    lookup_alias = (fun _ -> None);
-  }
 
   let create rules =
     let by_target = Path.Table.create () in
@@ -510,71 +445,36 @@ end = struct
 
 end
 
-module Root_proxy : sig (* this is really a Root_proxy_opt for convenience *)
-
-  type t with sexp, bin_io, compare
-  val create : Digest.t option -> t
-  val equal : t -> t -> bool
-
-end = struct
-
-  type t = {
-    root : Digest.t option;
-  } with sexp, bin_io, compare
-
-  let create root = { root }
-
-  let equal = equal_using_compare compare
-
-end
-
-module Rooted_proxy : sig
-
-  type t with sexp, bin_io, compare
-  val create : Root_proxy.t -> Proxy_map.t -> t
-  val diff : insensitive:bool ->
-    t -> t -> [`root_changed | `proxy_map_changed of Pm_key.t list] option
-
-end = struct
-
-  type t = {
-    rp : Root_proxy.t;
-    pm : Proxy_map.t;
-  } with sexp, bin_io, compare
-
-  let create rp pm = { rp; pm; }
-
-  let diff ~insensitive t1 t2 =
-    if not (insensitive || Root_proxy.equal t1.rp t2.rp) then Some `root_changed
-    else
-      match (Proxy_map.diff t1.pm t2.pm) with
-      | None -> None
-      | Some changed_keys -> Some (`proxy_map_changed changed_keys)
-
-end
-
 module Action_proxy : sig
 
   type t with sexp, bin_io, compare
-  val extern : Xaction.t -> t
-  val intern : Action_id.t -> Root_proxy.t -> t
-  val to_action : t -> Action.t
-  val diff : t -> t -> [`root_changed | `action_changed ] option
+  include Hashable_binable with type t := t
+
+  val create : Action.t-> t
+  val diff : t -> t -> [`action_changed ] option
+  val to_string : t -> string
 
 end = struct
 
-  type t = X of Xaction.t | I of Action_id.t * Root_proxy.t with sexp, bin_io, compare
+  module T = struct
+    type t =
+    | X of Xaction.t
+    | I of Sexp.t
+    with sexp, bin_io, compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make_binable(T)
 
-  let extern x = X x
-  let intern a rp = I (a,rp)
+  let create action =
+    match (Action.case action) with
+    | `xaction x -> X x
+    | `iaction i -> I (Iaction.tag i)
 
   let diff t1 t2 =
     match t1,t2 with
-    | I (i1,rp1), I (i2,rp2) ->
-      let insensitive = insensitive_scanners_and_internal_actions in
-      if not (insensitive || Root_proxy.equal rp1 rp2) then
-        Some `root_changed
-      else if Action_id.compare i1 i2 <> 0 then
+    | I i1, I i2 ->
+      if Sexp.compare i1 i2 <> 0 then
         Some `action_changed
       else
         None
@@ -587,9 +487,9 @@ end = struct
     | I _,X _ ->
       Some `action_changed
 
-  let to_action = function
-    | X x -> Action.xaction x
-    | I (i,_) -> Action.internal1 i
+  let to_string = function
+    | X x -> Xaction.to_string x
+    | I sexp -> sprintf "INTERNAL:%s"(Sexp.to_string sexp)
 
 end
 
@@ -606,7 +506,7 @@ end
 module Output_proxy = struct
 
   type t = {
-    deps : Rooted_proxy.t;
+    deps : Proxy_map.t;
     stdout : string;
   } with sexp, bin_io, compare, fields
 
@@ -616,21 +516,6 @@ end
 (*----------------------------------------------------------------------
   (error) reason
 ----------------------------------------------------------------------*)
-
-module Run_kind = struct
-  type t = Generator | Scanner | Action
-  with sexp_of
-  let to_string t = Sexp.to_string (sexp_of_t t)
-end
-
-let targets_to_string targets =
-  String.concat ~sep:" " (List.map targets ~f:Path.to_string)
-
-let item_to_string = function
-  | DG.Item.Root -> "ROOT"
-  | DG.Item.Dep dep -> (*sprintf "DEP: %s"*) (Dep1.to_string dep)
-  | DG.Item.Targets targets -> sprintf "RULE: %s"  (targets_to_string targets)
-  | DG.Item.Gen_key g -> sprintf "GEN: %s" (Gen_key.to_string g)
 
 module Reason = struct
 
@@ -653,9 +538,9 @@ module Reason = struct
   | Running_job_raised    of exn
   | Multiple_rules_for_paths          of Gen_key.t * Path.t list
   | Rule_failed_to_generate_targets   of Path.t list
-  | Usercode_raised                   of Run_kind.t * exn
+  | Usercode_raised                   of exn
   (* | Cycle... *)
-  | Scanning_with_internal_action_not_supported of Action_id.t
+  with sexp_of
 
   let to_string_one_line = function
     | Shutdown                          -> "Shutdown"
@@ -676,8 +561,8 @@ module Reason = struct
     | Multiple_rules_for_paths (gen_key,_) ->
       sprintf "Multiple rules generated for some paths (by: %s)" (Gen_key.to_string gen_key)
 
-    | Usercode_raised (k,_) ->
-      sprintf "User-code(%s) raised exception" (Run_kind.to_string k)
+    | Usercode_raised _ ->
+      "User-code raised exception"
     | Undigestable k                    ->
       sprintf "undigestable file kind: %s" (Fs.Kind.to_string k)
     | Duplicate_scheme_ids xs           ->
@@ -687,10 +572,6 @@ module Reason = struct
       sprintf "Inconsistency proxies on keys: %s"
         (String.concat ~sep:" " (List.map inconsistency ~f:(fun (key,_) ->
           Pm_key.to_string key)))
-
-    | Scanning_with_internal_action_not_supported id ->
-      sprintf "Scanning_with_internal_action_not_supported : %s"
-        (Action_id.to_string id)
 
   let to_extra_lines = function
     | Shutdown
@@ -707,11 +588,10 @@ module Reason = struct
     | No_directory_for_target _
     | Duplicate_scheme_ids _
     | Inconsistent_proxies _
-    | Scanning_with_internal_action_not_supported _
       -> []
 
     | Scheme_raised exn
-    | Usercode_raised (_,exn)
+    | Usercode_raised exn
     | Running_job_raised exn
       -> [Exn.to_string exn]
 
@@ -729,10 +609,8 @@ end
   Progress - progress monitor
 ----------------------------------------------------------------------*)
 
-(* TODO: Make this status be the same type as Dot.Status *)
-
 module What = struct (* what was build *)
-  type t = Source | Target | Alias | Glob
+  type t = Source | Target | Alias | Glob with sexp_of
 end
 
 module Status = struct
@@ -742,13 +620,18 @@ module Status = struct
   | Blocked (* for deps to be checked *)
 
   (* Jwait/Running show when an external job is in/though the -j throttle *)
-  | Jwait of Run_kind.t
-  | Running of Run_kind.t
-
-  | Usercode of Run_kind.t
+  | Jwait
+  | Running
+  | Usercode
 
   | Built of What.t
   | Error of Reason.t
+  with sexp_of
+
+  let to_string_one_line = function
+    | Error reason -> Reason.to_string_one_line reason
+    | status -> Sexp.to_string (sexp_of_t status)
+
 end
 
 module Progress : sig
@@ -759,6 +642,7 @@ module Progress : sig
   val set_status : t -> key:Dep1.t -> data:Status.t -> unit
   val mask_unreachable : t -> DG.t -> unit
   val message_errors : t -> unit
+  val message_everything : t -> unit
   val snap : t -> Mon.Progress.t
 
 end = struct
@@ -813,6 +697,15 @@ end = struct
           (Reason.to_string_one_line reason)
     )
 
+  let message_everything t =
+    Hashtbl.iter (t.status) ~f:(fun ~key:dep ~data:status ->
+      let masked = Hash_set.mem t.mask dep in
+      Message.message "(everything) %s: %s%s"
+        (Dep1.to_string dep)
+        (Status.to_string_one_line status)
+        (if masked then " (MASKED)" else "")
+    )
+
   let snap t =
     let checking = ref 0 in
     let blocked = ref 0 in
@@ -832,9 +725,9 @@ end = struct
           match status with
           | Status.Checking                         -> checking
           | Status.Blocked                          -> blocked
-          | Status.Jwait _                          -> jwait
-          | Status.Running _                        -> running
-          | Status.Usercode _                       -> usercode
+          | Status.Jwait                            -> jwait
+          | Status.Running                          -> running
+          | Status.Usercode                         -> usercode
           | Status.Built What.Source                -> source
           | Status.Built What.Target                -> target
           | Status.Built What.Alias                 -> alias
@@ -969,8 +862,7 @@ let build_all_in_sequence xs ~f = (* stopping on first error *)
 module RR = struct
   type t =
   | No_record_of_being_run_before
-  | Jenga_root_changed
-  | Action_changed_was              of Action.t
+  | Action_changed
   | Deps_have_changed               of Pm_key.t list
   | Targets_missing                 of Path.t list
   | Targets_not_as_expected         of Path.t list
@@ -980,8 +872,7 @@ module RR = struct
 
   let to_string config = function
   | No_record_of_being_run_before   -> "initial"
-  | Jenga_root_changed              -> "jengaroot"
-  | Action_changed_was _            -> "action"
+  | Action_changed                  -> "action"
   | Deps_have_changed keys ->
     if Config.run_reason_verbose config then
       sprintf "deps: %s" (String.concat ~sep:" " (List.map keys ~f:Pm_key.to_string))
@@ -1005,13 +896,13 @@ module Persist = struct
   type t = {
     generated   : Path.Set.t Gen_key.Table.t;
     ruled       : Rule_proxy.t Path.Table.t; (* actions run for target-rules *)
-    actioned    : Output_proxy.t Action.Table.t; (* actions run for their stdout *)
+    actioned    : Output_proxy.t Action_proxy.Table.t; (* actions run for their stdout *)
   } with sexp, bin_io
 
   let create () = {
     generated = Gen_key.Table.create();
     ruled = Path.Table.create();
-    actioned = Action.Table.create();
+    actioned = Action_proxy.Table.create();
   }
 
   let cat_build_script t paths =
@@ -1037,7 +928,7 @@ module Persist = struct
     (* collect action and target dirs *)
     let sources = Path.Hash_set.create () in
     let target_dirs = Path.Hash_set.create () in
-    let actions = ref [] in
+    let actions = ref [] in (* proxies *)
     let seen = Path.Hash_set.create () in
     let rec walk_path path =
       let path = head_target path in
@@ -1050,7 +941,7 @@ module Persist = struct
           List.iter targets ~f:(fun path -> Hash_set.add target_dirs (Path.dirname path));
           let deps = Proxy_map.to_path_keys (Rule_proxy.deps rule_proxy) in
           List.iter deps ~f:walk_path;
-          let action = Action_proxy.to_action (Rule_proxy.action rule_proxy) in
+          let action = Rule_proxy.action rule_proxy in
           actions := action :: !actions
       )
     in
@@ -1069,9 +960,7 @@ module Persist = struct
       write_line "mkdir -p %s" (Path.to_string dir)
     );
     List.iter (List.rev (!actions)) ~f:(fun action ->
-      match Description.Action.case action with
-      | `id x -> write_line "#INTERNAL:%s"(Description.Action_id.to_string x)
-      | `xaction xaction -> write_line "%s" (Description.Xaction.to_script xaction);
+      write_line "%s" (Action_proxy.to_string action);
     );
     ()
 
@@ -1080,39 +969,10 @@ end
 
 
 (*----------------------------------------------------------------------
- Targeted_action
-----------------------------------------------------------------------*)
-
-module Targeted_action : sig
-
-  type t
-  val create : targets:Path.t list -> deps: Proxy_map.t -> action:Action.t -> t
-  include Hashable_binable with type t := t
-
-end = struct
-
-  module T = struct
-    type t = {
-      targets : Path.Set.t;
-      deps : Proxy_map.t;
-      action : Action.t;
-    } with sexp, bin_io, compare
-    let hash = Hashtbl.hash
-  end
-
-  include T
-  include Hashable.Make_binable(T)
-
-  let create ~targets ~deps ~action =
-    let targets = Path.Set.of_list targets in
-    { targets; deps; action; }
-
-end
-
-
-(*----------------------------------------------------------------------
   Memo - dynamic cache - support sharing & cycle detection
 ----------------------------------------------------------------------*)
+
+type memo_ruling_t = (PPs.t Builder.t) Path.Table.t
 
 module Memo = struct
 
@@ -1123,16 +983,14 @@ module Memo = struct
      computatations *)
 
   type t = {
-    generating  : (Ruleset.t   Builder.t * DG.Node.t) Gen_key.Table.t;
+    generating  : ((Ruleset.t * memo_ruling_t) Builder.t * DG.Node.t) Gen_key.Table.t;
     building    : (Proxy_map.t  Builder.t * DG.Node.t) Dep1.Table.t;
-    ruling      : (PPs.t        Builder.t * DG.Node.t) Targeted_action.Table.t;
-    root        : (Env1.t * Root_proxy.t) Builder.t option ref;
+    root        : Env1.t Builder.t option ref;
   }
 
   let create () = {
     generating = Gen_key.Table.create();
     building = Dep1.Table.create();
-    ruling = Targeted_action.Table.create();
     root = ref None;
   }
 
@@ -1167,32 +1025,27 @@ type t = {
 let set_status t status =
   Progress.set_status t.progress ~key:(t.me) ~data:status
 
-let push_dependency t item =
-  {t with node = DG.create_dependency t.discovered_graph t.node item}
-
-
 let generated t = t.persist.Persist.generated
 let ruled t = t.persist.Persist.ruled
 let actioned t = t.persist.Persist.actioned
 
 let memo_generating t = t.memo.Memo.generating
 let memo_building t = t.memo.Memo.building
-let memo_ruling t = t.memo.Memo.ruling
 let memo_root t = t.memo.Memo.root
 
 let build_dep : (t ->  Dep1.t -> Proxy_map.t Builder.t) =
   fun t dep -> t.recurse_build_dep t dep
 
 
-let enqueue_external_job t run_kind f =
-  set_status t (Status.Jwait run_kind);
+let enqueue_external_job t f =
+  set_status t Status.Jwait;
   Throttle.enqueue t.job_throttle (fun () ->
     if Heart.is_broken Heart.is_shutdown
     then (
       Deferred.return (Error (`other_error Job.Shutdown));
     )
     else (
-      set_status t (Status.Running run_kind);
+      set_status t Status.Running;
       f () >>= fun res ->
       set_status t Status.Checking;
       Deferred.return res
@@ -1225,17 +1078,15 @@ let try_deferred t ~reason f =
     error t (reason exn)
 
 
-let run_user_code t env1 run_kind f =
-  let reason = (fun exn -> Reason.Usercode_raised (run_kind,exn)) in
+let run_user_code t env1 f =
+  let reason = (fun exn -> Reason.Usercode_raised exn) in
   try_deferred t ~reason (fun () ->
-    Effort.track user_functions_run (fun () ->
-      set_status t (Status.Usercode run_kind);
-      let putenv = Env1.putenv env1 in
-      List.iter putenv ~f:(fun (key,data) -> Core.Std.Unix.putenv ~key ~data);
-      f() >>= fun res ->
-      set_status t Status.Checking;
-      Deferred.return res
-    )
+    set_status t Status.Usercode;
+    let putenv = Env1.putenv env1 in
+    List.iter putenv ~f:(fun (key,data) -> Core.Std.Unix.putenv ~key ~data);
+    f() >>= fun res ->
+    set_status t Status.Checking;
+    Deferred.return res
   )
 
 
@@ -1282,38 +1133,16 @@ let ensure_directory : (t -> dir:Path.t -> unit Builder.t) =
   running things - generator, scanners, actions
 ----------------------------------------------------------------------*)
 
-(* we always run generators now, so we dont need a reason *)
-let run_generator :
-    (t -> Env1.t -> Gen_key.t -> Rule_generator.t -> Ruleset.t Builder.t) =
-  fun t env1 gen_key generator ->
-    let message() =
-      if Config.show_generators_run t.config then
-        Message.message "Generating rules: %s"
-          (Gen_key.to_string gen_key);
-    in
-    run_user_code t env1 Run_kind.Generator (fun () ->
-      message();
-      Effort.track generators_run (fun () ->
-        Rule_generator.gen generator
-      )
-    ) *>>= fun rules ->
-    match (Ruleset.create rules) with
-    | `ok ruleset -> return ruleset
-    | `dups paths -> error t (Reason.Multiple_rules_for_paths (gen_key,paths))
-
-
 let run_action_with_message :
     (t -> Env1.t -> Action.t -> message:(unit->unit) -> need:string ->
      output:'a Job.Output.t -> 'a Builder.t) =
   fun t env1 action ~message ~need ~output ->
     match Action.case action with
-    | `id action_id ->
-      run_user_code t env1 Run_kind.Action (fun ()->
+    | `iaction iaction ->
+      run_user_code t env1 (fun ()->
         message();
-        Effort.track actions_run (fun () ->
-          Env1.run_internal_action env1 action_id >>= fun () ->
-          Deferred.return (Job.Output.none output)
-        )
+        Iaction.func iaction () >>= fun () ->
+        Deferred.return (Job.Output.none output)
       )
     | `xaction xaction ->
       (* The putenv is determined from the env defined in jengaroot
@@ -1323,11 +1152,9 @@ let run_action_with_message :
       let rel_path_semantics = Env1.rel_path_semantics env1 in
       let putenv = Env1.putenv env1 in
       Builder.of_deferred (fun () ->
-        enqueue_external_job t Run_kind.Action (fun () ->
+        enqueue_external_job t (fun () ->
           message();
-          Effort.track actions_run (fun () ->
-            Job.run ~config:t.config ~need ~rel_path_semantics ~putenv ~xaction ~output
-          )
+          Job.run ~config:t.config ~need ~rel_path_semantics ~putenv ~xaction ~output
         )
       ) *>>= function
       | Ok x                                -> return x
@@ -1338,18 +1165,19 @@ let run_action_with_message :
 
 
 let run_action_for_targets :
-    (t -> RR.t -> Env1.t -> Action.t -> targets:Path.t list -> need:string ->
+    (t -> RR.t -> Env1.t -> Action.t -> Action_proxy.t ->
+     targets:Path.t list -> need:string ->
      unit Builder.t) =
   (* After running an action, synchronise until all inotify events triggered while the
      action was run have been delivered (and acted upon) by this process *)
-  fun t rr env1 action ~targets ~need ->
+  fun t rr env1 action action_proxy ~targets ~need ->
     let message() =
       if Config.show_actions_run t.config then
         Message.message "Building: %s [%s]"
           (String.concat ~sep:" " (List.map targets ~f:Path.to_string))
           (RR.to_string t.config rr)
     in
-    let sync_contents = Action.to_string action in
+    let sync_contents = Action_proxy.to_string action_proxy in
     Builder.wrap (
       Fs.sync_inotify_delivery t.fs ~sync_contents (
         Builder.expose (
@@ -1360,12 +1188,12 @@ let run_action_for_targets :
     )
 
 let run_action_for_stdout :
-    (t -> RR.t -> Env1.t -> Action.t -> string Builder.t) =
-  fun t rr env1 action ->
+    (t -> RR.t -> Env1.t -> Action.t -> Action_proxy.t -> string Builder.t) =
+  fun t rr env1 action action_proxy ->
     let message() =
       if Config.show_actions_run t.config then
         Message.message "Action: %s [%s]"
-          (Action.to_string action)
+          (Action_proxy.to_string action_proxy)
           (RR.to_string t.config rr)
     in
     run_action_with_message t env1 action ~message ~need:"stdout"
@@ -1376,22 +1204,24 @@ let run_action_for_stdout :
   jenga_root
 ----------------------------------------------------------------------*)
 
-let jenga_root : (t -> (Env1.t * Root_proxy.t) Builder.t) =
+let jenga_root : (t -> Env1.t Builder.t) =
   (* wrap up the call to [Load_root.get_env] into a tenacious builder,
      which will reload any time the jengaroot is modified *)
   fun t ->
     digest_path t t.jenga_root_path *>>= function
     | `missing -> error t (Reason.Jenga_root_problem "missing")
     | `is_a_dir -> error t (Reason.Jenga_root_problem "is-a-directory")
-    | `file digest ->
+    | `file __digest ->
       Builder.of_deferred (fun () -> Load_root.get_env t.jenga_root_path) *>>= function
-      | Error _ -> error t (Reason.Jenga_root_problem "failed to load")
+      | Error e ->
+        let exn = Monitor.extract_exn (Error.to_exn e) in
+        error t (Reason.Usercode_raised exn)
       | Ok env ->
         match (Env1.of_env env) with
         | `dups xs -> error t (Reason.Duplicate_scheme_ids xs)
-        | `ok env1 -> return (env1,Root_proxy.create (Some digest)) (* all ok *)
+        | `ok env1 -> return env1
 
-let jenga_root : (t -> (Env1.t * Root_proxy.t) Builder.t) =
+let jenga_root : (t -> Env1.t  Builder.t) =
   (* Memoization of jenga_root is simpler that other cases, becasuse:
      - There is only one; we don't need a hashtable, just a ref.
      - The root has no deps, so there is no chance of cycles,
@@ -1409,12 +1239,29 @@ let jenga_root : (t -> (Env1.t * Root_proxy.t) Builder.t) =
   build
 ----------------------------------------------------------------------*)
 
+let share_builder :
+    (key : 'a ->
+     memo : ('a, 'b Builder.t) Hashtbl.t ->
+     f : (unit -> 'b Builder.t) ->
+     'b Builder.t
+    ) =
+  (* simpler kind of sharing - no new nodes in discovered_graph *)
+  fun ~key ~memo ~f ->
+    match (Hashtbl.find memo key) with
+    | Some builder -> builder
+    | None ->
+      let builder = f () in
+      (* we use add_exn, because each key will be memoized exactly once *)
+      Hashtbl.add_exn memo ~key ~data:builder;
+      builder
+
+
 let share_and_check_for_cycles :
     (* memoize / check for cycles...
        3 places where this function is called, wraps for:
        - build_dep
        - generate_ruleset
-       - run_target_rule_action_if_necessary
+       - build_target_rule
        Which are the 3 places in the build description where sharing can be encountered
        - deps can be shared betweenmultiple rules/scanner/aliase
        - rule-generation is shared betwen all goals in a gen_key (scheme+dir)
@@ -1433,17 +1280,20 @@ let share_and_check_for_cycles :
     | Some (builder,node) ->
       begin
         set_status t Status.Blocked;
-        DG.link_dependants_no_cycle_check node ~additional:t.node;
+        (* The existing node just reached is also a dependency of t.node *)
+        DG.link_dependants_no_cycle_check t.discovered_graph node ~additional:t.node;
         builder;
       end
     | None ->
-      let t = push_dependency t item in
+      let pre_node = t.node in
+      let node = DG.create_dependency t.discovered_graph pre_node item in
+      let t = {t with node = node} in
+      (* newly created node(item) is a dependency of the t.node we were at before *)
       let builder = f t in (* critical - [f] must be called only once *)
       let builder =
         Builder.before_redo builder
           ~f:(fun () ->
-            (*Message.message "remove_all_dependencies: %s" (item_to_string item);*)
-            DG.remove_all_dependencies t.node;
+            DG.remove_all_dependencies t.discovered_graph t.node;
           )
       in
       (* we use add_exn, because each key will be memoized exactly once *)
@@ -1479,58 +1329,22 @@ let build_deps : (t -> Dep1.t list -> Proxy_map.t Builder.t) =
 let run_action_for_stdout_if_necessary
     : (t -> deps:Proxy_map.t -> Action.t -> string Builder.t) =
   fun t ~deps action ->
-    jenga_root t *>>= fun (env1,root_proxy) ->
-    let root_proxy =
-      match Action.case action with
-      (* external actions are not dependant on the jengaroot *)
-      | `xaction _ -> Root_proxy.create None
-      | `id _ -> root_proxy
-    in
-    let deps = Rooted_proxy.create root_proxy deps in
+    jenga_root t *>>= fun env1 ->
+    let action_proxy = Action_proxy.create action in
     let run_and_cache rr =
-      run_action_for_stdout t rr env1 action *>>= fun stdout ->
+      run_action_for_stdout t rr env1 action action_proxy *>>= fun stdout ->
       let output_proxy = {Output_proxy. deps; stdout;} in
-      Hashtbl.set (Misc.mod_persist (actioned t)) ~key:action ~data:output_proxy;
+      Hashtbl.set (Misc.mod_persist (actioned t)) ~key:action_proxy ~data:output_proxy;
       return stdout
     in
-    match (Hashtbl.find (actioned t) action) with
+    match (Hashtbl.find (actioned t) action_proxy) with
     | None -> run_and_cache RR.No_record_of_being_run_before
     | Some prev ->
-      let insensitive = insensitive_scanners_and_internal_actions in
-        match (Rooted_proxy.diff ~insensitive prev.Output_proxy.deps deps) with
-        | Some `root_changed -> run_and_cache RR.Jenga_root_changed
-        | Some (`proxy_map_changed keys) -> run_and_cache (RR.Deps_have_changed keys)
+        match (Proxy_map.diff prev.Output_proxy.deps deps) with
+        | Some keys -> run_and_cache (RR.Deps_have_changed keys)
         | None ->
           (* Nothing has changed, use cached stdout *)
           return prev.Output_proxy.stdout
-
-
-let run_local_deps_scanner :
-    (t -> Env1.t -> dir:Path.t -> Action.t -> Dep1.t list Builder.t) =
-  fun t env1 ~dir action ->
-    match Action.case action with
-
-
-    | `id action_id ->
-
-      error t (Reason.Scanning_with_internal_action_not_supported action_id)
-
-    | `xaction xaction ->
-      let need = "scanner" in
-      let rel_path_semantics = Env1.rel_path_semantics env1 in
-      let putenv = Env1.putenv env1 in
-      Builder.of_deferred (fun () ->
-        enqueue_external_job t Run_kind.Scanner (fun () ->
-          Effort.track scanners_run (fun () ->
-            Job.run ~config:t.config ~need ~rel_path_semantics ~putenv ~xaction
-              ~output:Job.Output.stdout
-          )
-        )
-      ) *>>= function
-      | Ok x                              -> return (Dep1.parse_string_as_deps ~dir x)
-      | Error `non_zero_status            -> error t Reason.Non_zero_status
-      | Error (`other_error Job.Shutdown) -> error t Reason.Shutdown
-      | Error (`other_error exn)          -> error t (Reason.Running_job_raised exn)
 
 
 
@@ -1547,9 +1361,14 @@ let build_depends : (t -> 'a Depends.t -> ('a * Proxy_map.t) Builder.t) =
 
       | Depends.Bind (left,f_right) ->
         exec left *>>= fun (v1,pm1) ->
-        exec (f_right v1) *>>= fun (v2,pm2) ->
-        build_merged_proxy_maps t [pm1;pm2] *>>= fun pm ->
-        return (v2, pm)
+        begin
+          match try (Ok (f_right v1)) with | exn -> Error exn with
+          | Error exn -> error t (Reason.Usercode_raised exn)
+          | Ok right ->
+            exec right *>>= fun (v2,pm2) ->
+            build_merged_proxy_maps t [pm1;pm2] *>>= fun pm ->
+            return (v2, pm)
+        end
 
       | Depends.All xs ->
         begin
@@ -1575,41 +1394,35 @@ let build_depends : (t -> 'a Depends.t -> ('a * Proxy_map.t) Builder.t) =
         let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing) in
         return (Fs.Listing.paths listing, pm)
 
-      | Depends.Scan_id scan_id_depends ->
-        jenga_root t *>>= fun (env1,__root_proxy) ->
-        exec scan_id_depends *>>= fun (scan_id,__pm) ->
-        run_user_code t env1 Run_kind.Scanner (fun () ->
-          Effort.track scanners_run (fun () ->
-            Env1.run_scanner env1 scan_id
-          )
-        )
-        *>>= exec
-
-      | Depends.Scan_local_deps depends ->
-        jenga_root t *>>= fun (env1,__root_proxy) ->
-        exec depends *>>= fun ((dir,action),__pm) ->
-        run_local_deps_scanner t env1 ~dir action *>>= fun scanned_deps ->
-        build_deps t scanned_deps *>>= fun pm ->
-        return ((), pm)
+      | Depends.Deferred f ->
+        jenga_root t *>>= fun env1 ->
+        run_user_code t env1 (fun () ->
+          f ()
+        ) *>>= fun v ->
+        return (v, Proxy_map.empty)
 
     in
     exec depends
 
 
 
-let generate_ruleset : (t -> Gen_key.t -> Ruleset.t Builder.t) =
+let generate_ruleset : (t -> Gen_key.t -> (Ruleset.t * memo_ruling_t) Builder.t) =
   (* Run rule generation (for a gen_key); always
      Record the generated targets in the persistent state,
      to allow stale targets to be removed later.
   *)
   fun t gen_key ->
-    jenga_root t *>>= fun (env1,__root_proxy) ->
+    jenga_root t *>>= fun env1 ->
     match (Env1.run_generator_scheme env1 gen_key) with
     | Error exn -> error t (Reason.Scheme_raised exn)
     | Ok generator ->
-      let generator_depends = Rule_generator.depends generator in
-      build_depends t generator_depends *>>= fun ((),__proxy_map) ->
-      run_generator t env1 gen_key generator *>>= fun ruleset ->
+      build_depends t (Rule_generator.rules generator) *>>= fun (rules,__proxy_map) ->
+      begin
+        match (Ruleset.create rules) with
+        | `ok ruleset -> return ruleset
+        | `dups paths -> error t (Reason.Multiple_rules_for_paths (gen_key,paths))
+      end
+      *>>= fun ruleset ->
       let prev_targets =
         match (Hashtbl.find (generated t) gen_key) with
         | Some x -> x
@@ -1619,14 +1432,14 @@ let generate_ruleset : (t -> Gen_key.t -> Ruleset.t Builder.t) =
       let stale = Set.to_list (Set.diff prev_targets targets) in
       Builder.of_deferred (fun () -> remove_stale_artifacts ~stale) *>>= fun () ->
       set_status t Status.Checking;
-
       if not (Path.Set.equal prev_targets targets) then (
         Hashtbl.set (Misc.mod_persist (generated t)) ~key:gen_key ~data:targets;
       );
-      return ruleset
+      let memo_ruling = Path.Table.create() in
+      return (ruleset,memo_ruling)
 
 
-let generate_ruleset : (t -> Gen_key.t -> Ruleset.t Builder.t) =
+let generate_ruleset : (t -> Gen_key.t -> (Ruleset.t * memo_ruling_t) Builder.t) =
   (* memo *)
   fun t gen_key ->
     share_and_check_for_cycles t
@@ -1680,36 +1493,27 @@ let prevent_action_overlap
     builder
 
 
-let run_target_rule_action_if_necessary
-    : (t -> targets:Path.t list -> deps:Proxy_map.t -> Action.t ->
-       need:string -> PPs.t Builder.t) =
+let build_target_rule :
   (* run a rule/action, iff:
      - we have no record of running it before
      - one of its dependencies has changed
      - the action has changed (for an internal action; jengaroot has changed)
-     - one of the targets is missinge
+     - one of the targets is missing
      - one of the targets is different from expected
      Record a successful run in the persistent state.
   *)
-  fun t ~targets ~deps:deps_proxy_map action ~need ->
+    (t -> Target_rule.t -> demanded:Path.t -> PPs.t Builder.t) =
+  fun t tr ~demanded ->
+    let need = Path.basename demanded in
+    let targets = Target_rule.targets tr in
+    build_depends t (Target_rule.action_depends tr) *>>= fun (action,deps_proxy_map) ->
     (* The persistent caching is keyed of the [head_target] *)
-    let head_target,other_targets =
-      match targets with
-      (* It is possible to construct a rule with an empty list of targets, but once rules
-         have been indexed (by target), and a rule obtained by lookup, then we can sure the
-         returned rule will have at least one target! *)
-      | [] -> assert false
-      | x::xs -> x,xs
-    in
-    jenga_root t *>>= fun (env1,root_proxy) ->
-    let action_proxy =
-      match Action.case action with
-      | `xaction x -> Action_proxy.extern x
-      | `id i -> Action_proxy.intern i root_proxy
-    in
+    let head_target,other_targets = Target_rule.head_target_and_rest tr in
+    jenga_root t *>>= fun env1 ->
+    let action_proxy = Action_proxy.create action in
     let run_and_cache rr =
       prevent_action_overlap t.fs ~targets (
-        run_action_for_targets t rr env1 action ~targets ~need
+        run_action_for_targets t rr env1 action action_proxy ~targets ~need
       ) *>>= fun () ->
       check_targets t targets *>>= function
       | `missing paths -> error t (Reason.Rule_failed_to_generate_targets paths)
@@ -1734,9 +1538,7 @@ let run_target_rule_action_if_necessary
     | None -> run_and_cache RR.No_record_of_being_run_before
     | Some prev ->
       match (Action_proxy.diff prev.Rule_proxy.action action_proxy ) with
-      | Some `action_changed -> let old = Action_proxy.to_action prev.Rule_proxy.action in
-                                run_and_cache (RR.Action_changed_was old)
-      | Some `root_changed -> run_and_cache RR.Jenga_root_changed
+      | Some `action_changed -> run_and_cache RR.Action_changed
       | None ->
         match (Proxy_map.diff prev.Rule_proxy.deps deps_proxy_map) with
         | Some keys -> run_and_cache (RR.Deps_have_changed keys)
@@ -1758,39 +1560,33 @@ let run_target_rule_action_if_necessary
               | None ->
                 (* Everything is as it should be! re-sensitize to the targets. *)
                 if Config.show_checked t.config then  (
-                  Message.message "NOT RUNNING: %s" (Action.to_string action);
+                  Message.message "NOT RUNNING: %s" (Action_proxy.to_string action_proxy);
                 );
                 Builder.sensitize heart *>>= fun () ->
                 return path_tagged_proxys
 
 
-let run_target_rule_action_if_necessary
-    : (t -> targets:Path.t list -> deps:Proxy_map.t -> Action.t ->
-       need:string -> PPs.t Builder.t) =
-  fun t ~targets ~deps action ~need ->
+
+let build_target_rule :
+    (t -> memo_ruling_t -> Target_rule.t -> demanded:Path.t -> PPs.t Builder.t) =
+  fun t memo_ruling tr ~demanded ->
     (* memo! *)
-    let key = Targeted_action.create ~targets ~deps ~action in
-    share_and_check_for_cycles t
-      ~key
-      ~memo: (memo_ruling t)
-      ~item: (DG.Item.Targets targets)
-      ~f: (fun t -> run_target_rule_action_if_necessary t ~targets ~deps action ~need)
+    share_builder
+      ~key: (Target_rule.head_target tr)
+      ~memo: memo_ruling
+      ~f: (fun () -> build_target_rule t tr ~demanded)
 
 
-let build_using_target_rule :
-    (* build a path, using the a specified rule
-       return a proxy_map specific to the target of interest
-    *)
-    (t -> Target_rule.t -> demanded:Path.t -> Proxy_map.t Builder.t) =
-  fun t tr ~demanded ->
-    let need = Path.basename demanded in
-    let targets = Target_rule.targets tr in
-    build_depends t (Target_rule.action_depends tr) *>>= fun (action,deps) ->
-    run_target_rule_action_if_necessary t ~targets ~deps action ~need *>>= fun tagged ->
-    let (path,proxy) =
-      List.find_exn tagged ~f:(fun (path,_) -> Path.equal path demanded)
-    in
-    return (Proxy_map.single (Pm_key.of_path path) proxy)
+let expect_source : (t -> Path.t -> (What.t * Proxy_map.t) Builder.t) =
+  fun t demanded ->
+    digest_path t (Path.X.of_relative demanded) *>>= fun res ->
+    match res with
+    | `missing ->  error t Reason.No_rule_or_source
+    | `is_a_dir -> error t Reason.Unexpected_directory
+    | `file digest ->
+      let proxy = Proxy.of_digest digest in
+      let pm = Proxy_map.single (Pm_key.of_path demanded) proxy in
+      return (What.Source, pm)
 
 
 let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
@@ -1802,37 +1598,41 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
      - Otherwise, that path had better exists as source.
   *)
   fun t goal ->
-    jenga_root t *>>= fun (env1,__root_proxy) ->
-    begin match (Env1.lookup_gen_key env1 goal) with
-    | None -> return Ruleset.empty
-    | Some gen_key -> generate_ruleset t gen_key
-    end *>>= fun ruleset ->
-    match Goal.case goal with
-    | `alias alias_id ->
+    jenga_root t *>>= fun env1 ->
+    match (Env1.lookup_gen_key env1 goal) with
+    | None ->
       begin
-        match (Ruleset.lookup_alias ruleset alias_id) with
-        | None -> error t Reason.No_definition_for_alias
-        | Some depends ->
-          build_depends t depends *>>= fun ((),pm) ->
-          return (What.Alias, pm)
+        match Goal.case goal with
+        | `alias _ -> error t Reason.No_definition_for_alias
+        | `path demanded -> expect_source t demanded
       end
-
-    | `path demanded ->
-      begin
-        match (Ruleset.lookup_target ruleset demanded) with
-        | Some tr ->
-          build_using_target_rule t tr ~demanded *>>= fun pm ->
-          return (What.Target, pm)
-        | None ->
-          digest_path t (Path.X.of_relative demanded) *>>= fun res ->
-          match res with
-          | `missing ->  error t Reason.No_rule_or_source
-          | `is_a_dir -> error t Reason.Unexpected_directory
-          | `file digest ->
-            let proxy = Proxy.of_digest digest in
-            let pm = Proxy_map.single (Pm_key.of_path demanded) proxy in
-            return (What.Source, pm)
-      end
+    | Some gen_key ->
+      generate_ruleset t gen_key *>>= fun (ruleset,memo_ruling) ->
+      match Goal.case goal with
+      | `alias alias_id ->
+        begin
+          match (Ruleset.lookup_alias ruleset alias_id) with
+          | None -> error t Reason.No_definition_for_alias
+          | Some depends ->
+            build_depends t depends *>>= fun ((),pm) ->
+            return (What.Alias, pm)
+        end
+      | `path demanded ->
+        begin
+          match (Ruleset.lookup_target ruleset demanded) with
+          | Some tr ->
+            (* Call build_deps here as well as in build_target_rule, so polling-rebuilds
+               re-create the correct edges in the discovered_graph. *)
+            build_depends t (Target_rule.action_depends tr) *>>= fun _ ->
+            build_target_rule t memo_ruling tr ~demanded *>>= fun tagged ->
+            let (path,proxy) =
+              List.find_exn tagged ~f:(fun (path,_) -> Path.equal path demanded)
+            in
+            let pm = Proxy_map.single (Pm_key.of_path path) proxy in
+            return (What.Target, pm)
+          | None ->
+            expect_source t demanded
+        end
 
 
 let is_path_a_directory : (t -> Path.t -> bool Builder.t) =
@@ -1890,11 +1690,9 @@ let build_dep : (t -> Dep1.t -> (What.t * Proxy_map.t) Builder.t) =
   (* Build a dependency by considering cases *)
   fun t dep ->
     match (Dep1.case dep) with
-
     | `path path                -> build_goal t (Goal.path path)
     | `alias alias              -> build_goal t (Goal.alias alias)
     | `absolute abs             -> need_abs_path t abs
-
     | `glob glob ->
       need_glob t glob *>>= fun listing ->
       let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing) in
@@ -2043,9 +1841,7 @@ let get_env_option :
       discovered_graph;
       node;
     } in
-    let builder =
-      jenga_root t *>>= fun (env1,__root_proxy) ->
-      Builder.return env1
+    let builder = jenga_root t
     in
     let tenacious =
       Tenacious.bind (Builder.expose builder) (function
@@ -2165,7 +1961,7 @@ let print_a_cycle_if_found dg =
             let item = DG.lookup_item dg node in
             sprintf "\n- [%s] %s"
               (DG.id_string node)
-              (item_to_string item))))
+              (DG.Item.to_string item))))
     in
     true
 
@@ -2227,7 +2023,9 @@ let build_once :
     );
     let quiet = Config.quiet config in
     if not quiet then (
-      Progress.message_errors progress;
+      if Config.show_status_all config
+      then Progress.message_everything progress
+      else Progress.message_errors progress
     );
     Deferred.return heart
 
@@ -2256,7 +2054,7 @@ let build_forever =
     ~when_polling ~when_rebuilding ->
 
     let memo = Memo.create () in
-    let discovered_graph = DG.create () in
+    let discovered_graph = DG.create config in
 
     let job_throttle =
       let max_concurrent_jobs = Config.j_number config in

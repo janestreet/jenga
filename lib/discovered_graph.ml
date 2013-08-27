@@ -11,8 +11,12 @@ module Item = struct
   type t =
   | Root
   | Dep of Dep1.t
-  | Targets of Path.t list
   | Gen_key of Gen_key.t
+
+  let to_string = function
+    | Root -> "ROOT"
+    | Dep dep -> (*sprintf "DEP: %s"*) (Dep1.to_string dep)
+    | Gen_key g -> sprintf "GEN: %s" (Gen_key.to_string g)
 
 end
 
@@ -21,10 +25,15 @@ module T = struct
   module Node = MG.Node
 
   type t = graph and graph = {
-    (* An edge (src,dest) in this graph inidates: src depends on dest.
-       - dest is a dependency of src
-       - src is a dependant of dest
+    (* Edges in this graph have the following meaning...
+       SRC --> DEST
+       -- SRC is (one of) the dependencies of DEST, or
+       -- DEST is (one of) the DEPENDANTS of DEST
+       i.e
+       these edges are *reverse* dependency edges
+       the arrow means: here are my dependants - "the things which depend on me"
     *)
+    debug : bool;
     mg : MG.t;
     mutable roots : Node.t list;
     data : (Node.t, Item.t) Hashtbl.t;
@@ -36,7 +45,8 @@ module T = struct
   let id_string n = MG.id_string n
   let lookup_item t n = Hashtbl.find_exn t.data n
 
-  let create () = {
+  let create config = {
+    debug = Config.debug_discovered_graph config;
     mg = MG.create ();
     roots = [];
     data = Node.Table.create ();
@@ -44,8 +54,17 @@ module T = struct
 
   let add_node graph value =
     let node = MG.create_node graph.mg in
+    if graph.debug then (
+      Message.message "%s = NODE (%s)" (id_string node) (Item.to_string value);
+    );
     Hashtbl.add_exn graph.data ~key:node ~data:value;
     node
+
+  let add_edge graph ~src ~dest =
+    if graph.debug then (
+      Message.message "DEP : %s --> %s" (id_string dest) (id_string src);
+    );
+    MG.add_edge ~src ~dest
 
   let create_root graph =
     let node = add_node graph (Item.Root) in
@@ -56,13 +75,16 @@ module T = struct
 
   let create_dependency graph old_node value =
     let new_node = add_node graph value in
-    MG.add_edge ~src:new_node ~dest:old_node;
+    add_edge graph ~src:new_node ~dest:old_node;
     new_node
 
-  let link_dependants_no_cycle_check n1 ~additional:n2 =
-    MG.add_edge ~src:n1 ~dest:n2
+  let link_dependants_no_cycle_check graph n1 ~additional:n2 =
+    add_edge graph ~src:n1 ~dest:n2
 
-  let remove_all_dependencies n =
+  let remove_all_dependencies graph n =
+    if graph.debug then (
+      Message.message "remove-all-dependencies: %s" (id_string n);
+    );
     MG.remove_all_incoming_edges_from_node n
 
 end

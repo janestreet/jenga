@@ -14,8 +14,10 @@ type t = {
   show_checked : bool;
   show_considering : bool;
   show_reconsidering : bool;
+  show_status_all : bool;
   quiet : bool;
   debug : bool;
+  debug_discovered_graph : bool;
   time : bool;
   report_mem : bool;
   sequential_deps : bool;

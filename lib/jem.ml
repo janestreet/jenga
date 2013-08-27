@@ -171,30 +171,19 @@ let good_breakdown =
     ~doc:" display breakdown for 'good' counts"
 
 
-let show_run =
-  Spec.step (fun m x -> m ~show_run:x)
-  +> Spec.flag "run" Spec.no_arg
-    ~doc:" display counts for build items run: generator/scanner/action"
-
 let show_work =
   Spec.step (fun m x -> m ~show_work:x)
   +> Spec.flag "work" Spec.no_arg
-    ~doc:" display counts for 'work' done: ls/digest/external-jobs/user-code"
-
-let show_intern =
-  Spec.step (fun m x -> m ~show_intern:x)
-  +> Spec.flag "intern" Spec.no_arg
-    ~doc:" display counts for other internal effort"
+    ~doc:" display counts for 'work' done: stat/digest/ls/external-jobs/db-saves"
 
 let error fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt
 
 let command_line () =
   Command.run (
-    Command.basic (todo_breakdown ++ good_breakdown
-                   ++ show_run ++ show_work ++ show_intern)
+    Command.basic (todo_breakdown ++ good_breakdown ++ show_work)
       ~summary:"Jenga monitor - monitor jenga running in the current repo."
       ~readme:Mon.readme
-      (fun ~todo_breakdown ~good_breakdown ~show_run ~show_work ~show_intern () ->
+      (fun ~todo_breakdown ~good_breakdown ~show_work  () ->
 
         match Path.Root.discover() with | `cant_find_root ->
           error "Cant find '%s' in start-dir or any ancestor dir"
@@ -205,15 +194,13 @@ let command_line () =
 
             let string_of_mon mon =
               let {Mon.progress;effort} = mon in
-              let eff_string ~tag ~switch ~limit =
+              let eff_string ~switch =
                 if not switch then "" else
-                  sprintf ", %s:[ %s ]" tag (Effort.Snapped.to_string ~limit effort)
+                  sprintf " [ %s ]" (Effort.Snapped.to_string effort)
               in
 
               Mon.Progress.to_string ~todo_breakdown ~good_breakdown progress
-              ^ eff_string ~tag:"run" ~switch:show_run ~limit:Build.run_effort
-              ^ eff_string ~tag:"work" ~switch:show_work ~limit:Build.work_effort
-              ^ eff_string ~tag:"intern" ~switch:show_intern ~limit:Build.intern_effort
+              ^ eff_string ~switch:show_work
             in
             run ~root_dir ~string_of_mon
           )

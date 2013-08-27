@@ -10,8 +10,9 @@ module Item : sig
   type t =
   | Root
   | Dep of Description.Dep1.t
-  | Targets of Path.t list
   | Gen_key of Description.Gen_key.t
+
+  val to_string : t -> string
 
 end
 
@@ -29,11 +30,11 @@ val dependants : Node.t -> Node.t list
 val id_string : Node.t -> string
 val lookup_item : t -> Node.t -> Item.t
 
-val create : unit -> t
+val create : Config.t -> t
 val create_root : t -> Node.t
 val disregard_roots : t -> unit
 val create_dependency : t -> Node.t -> Item.t -> Node.t
-val link_dependants_no_cycle_check : Node.t -> additional:Node.t -> unit
-val remove_all_dependencies : Node.t -> unit
+val link_dependants_no_cycle_check : t -> Node.t -> additional:Node.t -> unit
+val remove_all_dependencies : t -> Node.t -> unit
 
 val iter_reachable : t -> f:(Node.t -> unit) -> unit

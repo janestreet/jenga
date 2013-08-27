@@ -90,6 +90,11 @@ let show_reconsidering =
   +> Spec.flag "show-reconsidering" ~aliases:["recon"] Spec.no_arg
     ~doc:" Mainly for debug. Show when deps are re-considered"
 
+let show_status_all =
+  Spec.step (fun m x -> m ~show_status_all:x)
+  +> Spec.flag "show-status-all" ~aliases:["stall"] Spec.no_arg
+    ~doc:" Mainly for debug. Show status of all targets when reach polling"
+
 let quiet =
   Spec.step (fun m x -> m ~quiet:x)
   +> Spec.flag "quiet" Spec.no_arg
@@ -100,6 +105,11 @@ let debug =
   Spec.step (fun m x -> m ~debug:x)
   +> Spec.flag "debug" ~aliases:["D"] Spec.no_arg
     ~doc:" show debug"
+
+let debug_discovered_graph =
+  Spec.step (fun m x -> m ~debug_discovered_graph:x)
+  +> Spec.flag "debug-discovered-graph" ~aliases:["dg"] Spec.no_arg
+    ~doc:" debug when edges are added/removed in the discovered-graph"
 
 let time =
   Spec.step (fun m x -> m ~time:x)
@@ -172,8 +182,10 @@ let go_command =
     ++ show_checked
     ++ show_considering
     ++ show_reconsidering
+    ++ show_status_all
     ++ quiet
     ++ debug
+    ++ debug_discovered_graph
     ++ time
     ++ report_mem
     ++ sequential_deps
@@ -197,8 +209,9 @@ let go_command =
       ~show_scanners_run
       ~show_generators_run
       ~show_run_reason
-      ~show_checked ~show_considering ~show_reconsidering
-      ~quiet ~debug ~time ~report_mem
+      ~show_checked ~show_considering ~show_reconsidering ~show_status_all
+      ~quiet ~debug ~debug_discovered_graph
+      ~time ~report_mem
       ~sequential_deps ~show_sensitized
       ~delay_for_dev ~report_long_cycle_times
       ~wflag:_ ~output_postpone:_
@@ -219,8 +232,10 @@ let go_command =
           show_checked;
           show_considering;
           show_reconsidering;
+          show_status_all;
           quiet;
           debug;
+          debug_discovered_graph;
           time;
           report_mem;
           sequential_deps;

@@ -4,9 +4,7 @@ open Async.Std
 
 val snap_all_effort : unit -> Effort.Snapped.t
 
-val run_effort : Effort.t
-val work_effort : Effort.t
-val intern_effort : Effort.t
+val all_effort : Effort.t
 
 module Persist : sig
   type t with sexp, bin_io
