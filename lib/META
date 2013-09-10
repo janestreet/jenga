@@ -1,0 +1,13 @@
+# OASIS_START
+# DO NOT EDIT (digest: 09f455b44ef534bf78878fa9093e8e1f)
+version = "109.41.00"
+description = "Build system"
+requires =
+"sexplib fieldslib comparelib core core_extended async async_shell async_inotify async_parallel pcre ocaml_plugin str threads"
+archive(byte) = "jenga_lib.cma"
+archive(byte, plugin) = "jenga_lib.cma"
+archive(native) = "jenga_lib.cmxa"
+archive(native, plugin) = "jenga_lib.cmxs"
+exists_if = "jenga_lib.cma"
+# OASIS_STOP
+
