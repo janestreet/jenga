@@ -2,7 +2,7 @@ OASISFormat:      0.3
 OCamlVersion:     >= 4.00.0
 FindlibVersion:   >= 1.3.2
 Name:             jenga
-Version:          109.40.00
+Version:          109.41.00
 Synopsis:         Build system
 Authors:          Jane Street Capital LLC <opensource@janestreet.com>
 Copyrights:       (C) 2013 Jane Street Capital LLC <opensource@janestreet.com>
@@ -53,7 +53,7 @@ Library jenga_lib
                       Version
   BuildDepends:       async,
                       async_inotify,
-                      parallel,
+                      async_parallel,
                       async_shell,
                       bin_prot,
                       bin_prot.syntax,
@@ -77,7 +77,7 @@ Library jenga_lib
                       async,
                       async_shell,
                       async_inotify,
-                      parallel,
+                      async_parallel,
                       pcre,
                       ocaml_plugin,
                       str,

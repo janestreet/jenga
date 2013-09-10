@@ -93,7 +93,7 @@ let main config =
 
   (* Must do the chdir before Parallel.init is called, so that we have the same cwd when
      using parallel forkers or not *)
-  Parallel.Std.Parallel.init();
+  Async_parallel.Std.Parallel.init();
   Forker.init config;
 
   (* Only after Parallel.init is called may we start async *)
