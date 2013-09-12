@@ -8,10 +8,8 @@ let jenga_show_persist =
   | None -> false
   | Some _ -> true
 
-let message = Message.(if jenga_show_persist then message else trace)
-let message fmt = ksprintf (fun s -> message "Persist: %s" s) fmt
-
-let error fmt = ksprintf (fun s -> Message.error "Persist: %s" s) fmt
+let trace = Message.(if jenga_show_persist then message else trace)
+let trace fmt = ksprintf (fun s -> trace "Persist: %s" s) fmt
 
 let time_async f =
   let start_time = Time.now() in
@@ -45,28 +43,29 @@ end = struct
 
   (* load/save bin_prot.. *)
 
-  exception Unable_to_load_persist_db
-
   let max_len = 800 * 1024 * 1024 (* default 100Mb is too small *)
 
   let load_db ~db_filename =
     Sys.file_exists db_filename >>= function
     | `No | `Unknown ->
-      message "load: %s - failed (does not exist; will create)" db_filename;
+      trace "load: %s: does not exist" db_filename;
       return (empty())
     | `Yes ->
     try_with (fun () ->
       Reader.with_file db_filename ~f:(fun r ->
         Reader.read_bin_prot ~max_len r bin_reader_t
       )
-    ) >>= function
-      | Ok (`Ok t) -> return t (* successful load *)
-      | Ok `Eof ->
-        error "load: %s - failed: `Eof" db_filename;
-        raise Unable_to_load_persist_db
-      | Error exn ->
-        error "load: %s - failed:\n%s" db_filename (Exn.to_string exn);
-        raise Unable_to_load_persist_db
+    ) >>= fun res ->
+      match (
+        match res with
+        | Ok (`Ok t) -> Some t (* successful load *)
+        | Ok `Eof -> trace "load: %s: `Eof" db_filename; None
+        | Error exn -> trace "load: %s:\n%s" db_filename (Exn.to_string exn); None
+      ) with
+      | Some t -> return t
+      | None ->
+        Message.message "format of persistant state has changed; everything will rebuild";
+        return (empty())
 
   let save_db t ~db_filename =
     Effort.track Build.persist_saves_done (fun () ->
@@ -94,9 +93,9 @@ let db_filename t = t.db_filename
 let create ~root_dir =
   let db_filename = root_dir ^/ Path.db_basename in
 
-  message "LOAD_DB: %s..." db_filename;
+  trace "LOAD_DB: %s..." db_filename;
   time_async (fun () -> State.load_db ~db_filename) >>= fun (state,duration) ->
-  message "LOAD_DB: %s... done (%s)" db_filename (Time.Span.to_string duration);
+  trace "LOAD_DB: %s... done (%s)" db_filename (Time.Span.to_string duration);
 
   let t = {
     state_mem = state;
@@ -110,21 +109,21 @@ let create ~root_dir =
 let save_if_changed t =
   match Misc.persist_is_modified() with
   | false ->
-    message "SAVE_DB: unchanged so not saving";
+    trace "SAVE_DB: unchanged so not saving";
     Deferred.unit
   | true ->
-    message "SAVE_DB: %s..." (db_filename t);
+    trace "SAVE_DB: %s..." (db_filename t);
     time_async (fun () ->
       State.save_db t.state_mem ~db_filename:(db_filename t)
     ) >>= fun ((),duration) ->
-    message "SAVE_DB: %s... done (%s)" (db_filename t) (Time.Span.to_string duration);
+    trace "SAVE_DB: %s... done (%s)" (db_filename t) (Time.Span.to_string duration);
     return ()
 
 let save_now t =
   (* ensuring that subsequent saves wait until any in-flight save is done *)
   begin match t.save_status with
   | `not_saving -> Deferred.unit
-  | `saving fin -> message "save_now - waiting for in-flight save to complete"; fin
+  | `saving fin -> trace "save_now - waiting for in-flight save to complete"; fin
   end >>= fun () ->
   match t.save_status with
   | `saving _fin ->
@@ -144,7 +143,7 @@ let save_periodically ~save_span t =
       Clock.after save_span >>= fun () ->
       if t.periodic_saving_enabled
       then (
-        message "save_periodically, calling Persist.save_now...";
+        trace "save_periodically, calling Persist.save_now...";
         save_now t >>= fun () ->
         loop ()
       )
@@ -160,7 +159,7 @@ let create_saving_periodically ~root_dir save_span =
 
 let disable_periodic_saving_and_save_now t =
   t.periodic_saving_enabled <- false;
-  message "disable_periodic_saving_and_save_now, calling Persist.save_now...";
+  trace "disable_periodic_saving_and_save_now, calling Persist.save_now...";
   save_now t
 
 let re_enable_periodic_saving t = t.periodic_saving_enabled <- true

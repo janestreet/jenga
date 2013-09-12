@@ -13,6 +13,8 @@ module Digest = Fs.Digest
 module Glob = Fs.Glob
 module DG = Discovered_graph
 
+let exit_code_upon_control_c = ref Exit_code.incomplete
+
 (*----------------------------------------------------------------------
   effort
 ----------------------------------------------------------------------*)
@@ -599,8 +601,8 @@ module Reason = struct
     | Rule_failed_to_generate_targets paths
       -> List.map paths ~f:(fun path -> "- " ^ Path.to_string path)
 
-  let messages dep t =
-    Message.error "%s: %s" (Dep1.to_string dep) (to_string_one_line t);
+  let messages ~tag t =
+    Message.error "%s: %s" tag (to_string_one_line t);
     List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s);
 
 end
@@ -610,7 +612,7 @@ end
 ----------------------------------------------------------------------*)
 
 module What = struct (* what was build *)
-  type t = Source | Target | Alias | Glob with sexp_of
+  type t = Source | Target | Alias with sexp_of
 end
 
 module Status = struct
@@ -639,7 +641,7 @@ module Progress : sig
   type t
   val create : Fs.t -> t
 
-  val set_status : t -> key:Dep1.t -> data:Status.t -> unit
+  val set_status : t -> key:Goal.t -> data:Status.t -> unit
   val mask_unreachable : t -> DG.t -> unit
   val message_errors : t -> unit
   val message_everything : t -> unit
@@ -649,27 +651,27 @@ end = struct
 
   type t = {
     fs : Fs.t;
-    status : Status.t Dep1.Table.t;
-    mutable mask : Dep1.Hash_set.t;
+    status : Status.t Goal.Table.t;
+    mutable mask : Goal.Hash_set.t;
   }
 
   let create fs = {
     fs;
-    status = Dep1.Table.create();
-    mask = Dep1.Hash_set.create () ;
+    status = Goal.Table.create();
+    mask = Goal.Hash_set.create () ;
   }
 
   let set_status t = Hashtbl.set t.status
 
   let mask_unreachable t dg =
-    let mask_candidates = Dep1.Hash_set.create () in
-    Hashtbl.iter t.status ~f:(fun ~key:dep ~data:_ ->
-      Hash_set.add mask_candidates dep; (* add dep as candiate for mask *)
+    let mask_candidates = Goal.Hash_set.create () in
+    Hashtbl.iter t.status ~f:(fun ~key:goal ~data:_ ->
+      Hash_set.add mask_candidates goal; (* add goal as candiate for mask *)
     );
     DG.iter_reachable dg ~f:(fun node ->
       match (DG.lookup_item dg node) with
-      | DG.Item.Dep dep ->
-        Hash_set.remove mask_candidates dep (* dep is reachable; dont remove *)
+      | DG.Item.Goal goal ->
+        Hash_set.remove mask_candidates goal (* goal is reachable; dont remove *)
       | _ -> ()
     );
     t.mask <- mask_candidates
@@ -681,7 +683,7 @@ end = struct
     )
 
   let message_errors t =
-    iter_unmasked t ~f:(fun ~key:dep ~data:status ->
+    iter_unmasked t ~f:(fun ~key:goal ~data:status ->
       match (
         match status with
         (* suppress shutdown/dep-errors errors *)
@@ -693,15 +695,15 @@ end = struct
       ) with
       | None -> ()
       | Some reason ->
-        Message.error "(summary) %s: %s" (Dep1.to_string dep)
+        Message.error "(summary) %s: %s" (Goal.to_string goal)
           (Reason.to_string_one_line reason)
     )
 
   let message_everything t =
-    Hashtbl.iter (t.status) ~f:(fun ~key:dep ~data:status ->
-      let masked = Hash_set.mem t.mask dep in
+    Hashtbl.iter (t.status) ~f:(fun ~key:goal ~data:status ->
+      let masked = Hash_set.mem t.mask goal in
       Message.message "(everything) %s: %s%s"
-        (Dep1.to_string dep)
+        (Goal.to_string goal)
         (Status.to_string_one_line status)
         (if masked then " (MASKED)" else "")
     )
@@ -731,7 +733,6 @@ end = struct
           | Status.Built What.Source                -> source
           | Status.Built What.Target                -> target
           | Status.Built What.Alias                 -> alias
-          | Status.Built What.Glob                  -> glob
           | Status.Error Reason.Error_in_deps       -> failure
           | Status.Error _                          -> error
         in incr x
@@ -758,8 +759,8 @@ end
 ----------------------------------------------------------------------*)
 
 module Builder : sig (* layer error monad within tenacious monad *)
+  include Tenacious.REIFIABLE
 
-  type 'a t
   val wrap : ('a, Reason.t) Result.t Tenacious.t -> 'a t
   val expose : 'a t -> ('a, Reason.t) Result.t Tenacious.t
 
@@ -768,8 +769,11 @@ module Builder : sig (* layer error monad within tenacious monad *)
 
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
+  val map : 'a t -> ('a -> 'b) -> 'b t
 
   val error : Reason.t -> 'a t
+
+  val reify : 'a t -> 'a node
 
   val for_all_without_errors :
     'a list -> f:('a -> 'b t) -> 'b list option t
@@ -783,10 +787,14 @@ module Builder : sig (* layer error monad within tenacious monad *)
 
 end = struct
 
-  type 'a t = ('a, Reason.t) Result.t Tenacious.t
+  include Tenacious.Reifiable(struct
+    type ('a,'b) t' = ('a, Reason.t) Result.t Tenacious.t
+  end)
 
   let wrap t = t
   let expose t = t
+
+  let reify x = Tenacious.((reify x :> _ t))
 
   let of_tenacious tenacious =
     Tenacious.bind tenacious (fun x ->
@@ -802,6 +810,12 @@ end = struct
     Tenacious.bind t (function
     | Error e -> Tenacious.return (Error e)
     | Ok x -> f x
+    )
+
+  let map t f =
+    Tenacious.map t ~f:(function
+    | Error e -> Error e
+    | Ok x -> Ok (f x)
     )
 
   let error e = Tenacious.return (Error e)
@@ -820,20 +834,16 @@ end = struct
 
   let of_deferred f =
     Tenacious.lift (fun () ->
-      f () >>= fun x ->
-      Deferred.return (Ok x,Heart.unbreakable)
+      f () >>| fun x -> (Ok x, Heart.unbreakable)
     )
 
   let desensitize t = (* if not error *)
     Tenacious.lift_cancelable (fun ~cancel ->
-      Deferred.bind (Tenacious.exec_cancelable ~cancel t) (function
-      | None -> Deferred.return None
-      | Some (ore,heart) ->
-        match ore with
-        | Error e -> Deferred.return (Some (Error e, heart))
-        | Ok x -> Deferred.return (Some (Ok (x,heart), Heart.unbreakable))
-      )
-    )
+      Deferred.map (Tenacious.exec_cancelable ~cancel t)
+      ~f:(function None -> None
+          | Some (ore,heart) -> match ore with
+             | Error e -> Some (Error e, heart)
+             | Ok x -> Some (Ok (x,heart), Heart.unbreakable)))
 
   let sensitize heart =
     Tenacious.lift (fun () -> Deferred.return (Ok (), heart))
@@ -842,9 +852,10 @@ end = struct
 
 end
 
-let return = Builder.return
+let return   = Builder.return
 let ( *>>= ) = Builder.bind
-let error = Builder.error
+let ( *>>| ) = Builder.map
+let error    = Builder.error
 
 
 let build_all_in_sequence xs ~f = (* stopping on first error *)
@@ -972,7 +983,7 @@ end
   Memo - dynamic cache - support sharing & cycle detection
 ----------------------------------------------------------------------*)
 
-type memo_ruling_t = (PPs.t Builder.t) Path.Table.t
+type memo_ruling_t = (PPs.t Builder.node) Path.Table.t
 
 module Memo = struct
 
@@ -983,14 +994,14 @@ module Memo = struct
      computatations *)
 
   type t = {
-    generating  : ((Ruleset.t * memo_ruling_t) Builder.t * DG.Node.t) Gen_key.Table.t;
-    building    : (Proxy_map.t  Builder.t * DG.Node.t) Dep1.Table.t;
-    root        : Env1.t Builder.t option ref;
+    generating  : ((Ruleset.t * memo_ruling_t) Builder.node * DG.Node.t) Gen_key.Table.t;
+    building    : (Proxy_map.t  Builder.node * DG.Node.t) Goal.Table.t;
+    root        : Env1.t Builder.node option ref;
   }
 
   let create () = {
     generating = Gen_key.Table.create();
-    building = Dep1.Table.create();
+    building = Goal.Table.create();
     root = ref None;
   }
 
@@ -1007,14 +1018,14 @@ type t = {
   job_throttle : unit Throttle.t; (* -j throttle for external jobs *)
   persist : Persist.t; (* persisant cache *)
   memo : Memo.t; (* dynmaic cache *)
-  progress : Progress.t; (* track state of each dep being built *)
+  progress : Progress.t; (* track state of each goal being built *)
   jenga_root_path : Path.X.t; (* access to the jengaroot *)
 
-  (* recursive calls to build_dep go via here - avoids having big mutual let rec *)
-  recurse_build_dep : (t -> Dep1.t -> Proxy_map.t Builder.t);
+  (* recursive calls to build_goal go via here - avoids having big mutual let rec *)
+  recurse_build_goal : (t -> Goal.t -> Proxy_map.t Builder.t);
 
-  (* know dep being worked on, so can set the status *)
-  me : Dep1.t;
+  (* know goal being worked on, so can set the status *)
+  me : Goal.t option; (* None means jengaroot *)
 
   (* discovered_graph structure & current node - used for cycle checking *)
   discovered_graph : DG.t;
@@ -1023,7 +1034,9 @@ type t = {
 } with fields
 
 let set_status t status =
-  Progress.set_status t.progress ~key:(t.me) ~data:status
+  match t.me with
+  | None -> ()
+  | Some key -> Progress.set_status t.progress ~key ~data:status
 
 let generated t = t.persist.Persist.generated
 let ruled t = t.persist.Persist.ruled
@@ -1033,14 +1046,14 @@ let memo_generating t = t.memo.Memo.generating
 let memo_building t = t.memo.Memo.building
 let memo_root t = t.memo.Memo.root
 
-let build_dep : (t ->  Dep1.t -> Proxy_map.t Builder.t) =
-  fun t dep -> t.recurse_build_dep t dep
+let build_sub_goal : (t ->  Goal.t -> Proxy_map.t Builder.t) =
+  fun t goal -> t.recurse_build_goal t goal
 
 
 let enqueue_external_job t f =
   set_status t Status.Jwait;
   Throttle.enqueue t.job_throttle (fun () ->
-    if Heart.is_broken Heart.is_shutdown
+    if Quit.is_quitting()
     then (
       Deferred.return (Error (`other_error Job.Shutdown));
     )
@@ -1063,7 +1076,16 @@ let error t reason =
       -> true
   in
   if show_now then (
-    Reason.messages t.me reason;
+    let tag =
+      match t.me with
+      | Some goal -> Goal.to_string goal
+      | None -> Path.X.to_string t.jenga_root_path
+    in
+    Reason.messages ~tag reason;
+  );
+  if Config.stop_on_first_error t.config then (
+    (*Message.message "calling quit on first (every!) error";*)
+    Quit.quit Exit_code.build_failed; (* we still go on to report the error *)
   );
   error reason
 
@@ -1227,12 +1249,13 @@ let jenga_root : (t -> Env1.t  Builder.t) =
      - The root has no deps, so there is no chance of cycles,
   *)
   fun t ->
-    match !(memo_root t) with
+    (match !(memo_root t) with
     | Some builder  -> builder
     | None ->
-      let builder = jenga_root t in
+      let builder = Builder.reify (jenga_root t) in
       memo_root t := Some builder;
       builder
+    :> _ Builder.t)
 
 
 (*----------------------------------------------------------------------
@@ -1241,25 +1264,26 @@ let jenga_root : (t -> Env1.t  Builder.t) =
 
 let share_builder :
     (key : 'a ->
-     memo : ('a, 'b Builder.t) Hashtbl.t ->
+     memo : ('a, 'b Builder.node) Hashtbl.t ->
      f : (unit -> 'b Builder.t) ->
      'b Builder.t
     ) =
   (* simpler kind of sharing - no new nodes in discovered_graph *)
   fun ~key ~memo ~f ->
-    match (Hashtbl.find memo key) with
+    (match (Hashtbl.find memo key) with
     | Some builder -> builder
     | None ->
-      let builder = f () in
+      let builder = Builder.reify (f ()) in
       (* we use add_exn, because each key will be memoized exactly once *)
       Hashtbl.add_exn memo ~key ~data:builder;
       builder
+    :> _ Builder.t)
 
 
 let share_and_check_for_cycles :
     (* memoize / check for cycles...
        3 places where this function is called, wraps for:
-       - build_dep
+       - build_goal
        - generate_ruleset
        - build_target_rule
        Which are the 3 places in the build description where sharing can be encountered
@@ -1270,13 +1294,13 @@ let share_and_check_for_cycles :
     *)
     (t ->
      key : 'a ->
-     memo : ('a, 'b Builder.t * DG.Node.t) Hashtbl.t ->
+     memo : ('a, 'b Builder.node * DG.Node.t) Hashtbl.t ->
      item : DG.Item.t ->
      f : (t -> 'b Builder.t) ->
      'b Builder.t
     ) =
   fun t ~key ~memo ~item ~f ->
-    match (Hashtbl.find memo key) with
+    (match (Hashtbl.find memo key) with
     | Some (builder,node) ->
       begin
         set_status t Status.Blocked;
@@ -1296,35 +1320,12 @@ let share_and_check_for_cycles :
             DG.remove_all_dependencies t.discovered_graph t.node;
           )
       in
+      let builder = Builder.reify builder in
       (* we use add_exn, because each key will be memoized exactly once *)
       Hashtbl.add_exn memo ~key ~data:(builder,t.node);
       builder
+    :> _ Builder.t)
 
-
-let build_merged_proxy_maps : (t -> Proxy_map.t list -> Proxy_map.t Builder.t) =
-  fun t pms ->
-    match (Proxy_map.merge pms) with
-    | `err inconsistency -> error t (Reason.Inconsistent_proxies inconsistency)
-    | `ok pm -> return pm
-
-
-let build_deps : (t -> Dep1.t list -> Proxy_map.t Builder.t) =
-  (* Build a collection of [deps] in parallel.
-     Error if any of [deps] errors
-     - but for a new reason: [Error_in_deps], listing those deps in error.
-  *)
-  fun t deps ->
-    set_status t Status.Blocked;
-    Builder.for_all_without_errors deps ~f:(build_dep t) *>>= fun opt ->
-    set_status t Status.Checking;
-    match opt with
-    | None -> error t Reason.Error_in_deps
-    | Some pms -> build_merged_proxy_maps t pms
-
-
-(*----------------------------------------------------------------------
- NEW "Depends" (user-facing jenga-monad)...
-----------------------------------------------------------------------*)
 
 let run_action_for_stdout_if_necessary
     : (t -> deps:Proxy_map.t -> Action.t -> string Builder.t) =
@@ -1347,10 +1348,27 @@ let run_action_for_stdout_if_necessary
           return prev.Output_proxy.stdout
 
 
+let need_abs_path : (t -> Path.Abs.t -> Proxy_map.t Builder.t) =
+  (* For dependencies on absolute paths (extenal to the repo):
+     make no attempt to build them; (there can be no rule!)
+     just digest & return the proxy.
+  *)
+  fun t abs ->
+    digest_path t (Path.X.of_absolute abs) *>>= fun res ->
+    match res with
+    | `missing ->  error t Reason.No_source_at_abs_path
+    | `is_a_dir -> error t Reason.Unexpected_directory
+    | `file digest ->
+      let proxy = Proxy.of_digest digest in
+      let pm = Proxy_map.single (Pm_key.of_abs_path abs) proxy in
+      return pm
 
-(*----------------------------------------------------------------------
- build_depends
-----------------------------------------------------------------------*)
+
+let build_merged_proxy_maps : (t -> Proxy_map.t list -> Proxy_map.t Builder.t) =
+  fun t pms ->
+    match (Proxy_map.merge pms) with
+    | `err inconsistency -> error t (Reason.Inconsistent_proxies inconsistency)
+    | `ok pm -> return pm
 
 let build_depends : (t -> 'a Depends.t -> ('a * Proxy_map.t) Builder.t) =
   fun t depends ->
@@ -1380,26 +1398,32 @@ let build_depends : (t -> 'a Depends.t -> ('a * Proxy_map.t) Builder.t) =
             return (vs,pm)
         end
 
-      | Depends.Need deps ->
-        build_deps t deps *>>= fun pm ->
-        return ((), pm)
-
-      | Depends.Stdout action_depends ->
-        exec action_depends *>>= fun (action,pm) ->
-        run_action_for_stdout_if_necessary t ~deps:pm action *>>= fun stdout ->
-        return (stdout, Proxy_map.empty)
-
-      | Depends.Glob glob ->
-        need_glob t glob *>>= fun listing ->
-        let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing) in
-        return (Fs.Listing.paths listing, pm)
-
       | Depends.Deferred f ->
         jenga_root t *>>= fun env1 ->
         run_user_code t env1 (fun () ->
           f ()
-        ) *>>= fun v ->
-        return (v, Proxy_map.empty)
+        ) *>>| fun v ->
+        (v, Proxy_map.empty)
+
+      | Depends.Path path ->
+        build_sub_goal t (Goal.Path path) *>>| fun pm -> ((), pm)
+
+      | Depends.Absolute path ->
+        need_abs_path t path *>>| fun pm -> ((), pm)
+
+      | Depends.Alias alias ->
+        build_sub_goal t (Goal.Alias alias) *>>| fun pm -> ((), pm)
+
+      | Depends.Glob glob ->
+        need_glob t glob *>>| fun listing ->
+        let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing) in
+        (Fs.Listing.paths listing, pm)
+
+      | Depends.Stdout action_depends ->
+        exec action_depends *>>= fun (action,pm) ->
+        run_action_for_stdout_if_necessary t ~deps:pm action *>>| fun stdout ->
+        let pm = Proxy_map.empty in
+        (stdout, pm)
 
     in
     exec depends
@@ -1474,6 +1498,7 @@ let prevent_action_overlap
     : (Fs.t -> targets:Path.t list -> unit Builder.t -> unit Builder.t) =
   (* Prevent running overlapping actions for the same targets *)
   fun fs ~targets builder ->
+    let builder = Builder.((reify builder :> _ t)) in
     Builder.of_tenacious (
       Tenacious.prevent_overlap
         ~table:(Fs.active_targets fs)
@@ -1488,7 +1513,8 @@ let prevent_action_overlap
         ~notify_rem:(fun target ->
           Message.message "target: %s, RM active" (Path.to_string target);
         )*)
-        (Builder.expose_unit builder)
+        (* FIXME: Useless reification? *)
+        (Tenacious.reify (Builder.expose_unit builder))
     ) *>>= fun () ->
     builder
 
@@ -1602,14 +1628,14 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
     match (Env1.lookup_gen_key env1 goal) with
     | None ->
       begin
-        match Goal.case goal with
-        | `alias _ -> error t Reason.No_definition_for_alias
-        | `path demanded -> expect_source t demanded
+        match goal with
+        | Goal.Alias _ -> error t Reason.No_definition_for_alias
+        | Goal.Path demanded -> expect_source t demanded
       end
     | Some gen_key ->
       generate_ruleset t gen_key *>>= fun (ruleset,memo_ruling) ->
-      match Goal.case goal with
-      | `alias alias_id ->
+      match goal with
+      | Goal.Alias alias_id ->
         begin
           match (Ruleset.lookup_alias ruleset alias_id) with
           | None -> error t Reason.No_definition_for_alias
@@ -1617,13 +1643,25 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
             build_depends t depends *>>= fun ((),pm) ->
             return (What.Alias, pm)
         end
-      | `path demanded ->
+      | Goal.Path demanded ->
         begin
           match (Ruleset.lookup_target ruleset demanded) with
           | Some tr ->
             (* Call build_deps here as well as in build_target_rule, so polling-rebuilds
-               re-create the correct edges in the discovered_graph. *)
-            build_depends t (Target_rule.action_depends tr) *>>= fun _ ->
+               re-create the correct edges in the discovered_graph.
+
+               Turns out calling build_depends below is VERY slow. Need to rethink a
+               better way of getting the correct discovered_graph on polling builds.
+               For now: comment out the call.
+            *)
+            (
+              if Config.avoid_target_count_bug_very_slow t.config
+              then build_depends t (Target_rule.action_depends tr)
+                *>>= fun _ -> return ()
+              else return ()
+            )
+            *>>= fun () ->
+
             build_target_rule t memo_ruling tr ~demanded *>>= fun tagged ->
             let (path,proxy) =
               List.find_exn tagged ~f:(fun (path,_) -> Path.equal path demanded)
@@ -1651,9 +1689,9 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
   *)
   fun t goal ->
     begin
-      match Goal.case goal with
-      | `alias _ -> return None
-      | `path demanded ->
+      match goal with
+      | Goal.Alias _ -> return None
+      | Goal.Path demanded ->
         is_path_a_directory t demanded *>>= function
         | true -> return (Some demanded)
         | false -> return None
@@ -1661,72 +1699,28 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
     *>>= function
     | None -> build_goal t goal
     | Some demanded ->
-      let dep = Dep1.alias (Alias.default ~dir:demanded) in
-      build_dep t dep *>>= fun pm ->
+      let goal = Goal.Alias (Alias.default ~dir:demanded) in
+      build_sub_goal t goal *>>= fun pm ->
       return (What.Alias, pm)
 
 
-let need_abs_path : (t -> Path.Abs.t -> (What.t * Proxy_map.t) Builder.t) =
-  (* For dependencies on absolute paths (extenal to the repo):
-     make no attempt to build them; (there can be no rule!)
-     just digest & return the proxy.
-  *)
-  fun t abs ->
-    digest_path t (Path.X.of_absolute abs) *>>= fun res ->
-    match res with
-    | `missing ->  error t Reason.No_source_at_abs_path
-    | `is_a_dir -> error t Reason.Unexpected_directory
-    | `file digest ->
-      let proxy = Proxy.of_digest digest in
-      let pm = Proxy_map.single (Pm_key.of_abs_path abs) proxy in
-      return (What.Source, pm)
-
-
-(* now follows a sequence of functions named [build_dep] which shadow each other &
+(* now follows a sequence of functions named [build_goal] which shadow each other &
    extend with different behaviour... *)
 
-
-let build_dep : (t -> Dep1.t -> (What.t * Proxy_map.t) Builder.t) =
-  (* Build a dependency by considering cases *)
-  fun t dep ->
-    match (Dep1.case dep) with
-    | `path path                -> build_goal t (Goal.path path)
-    | `alias alias              -> build_goal t (Goal.alias alias)
-    | `absolute abs             -> need_abs_path t abs
-    | `glob glob ->
-      need_glob t glob *>>= fun listing ->
-      let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing) in
-      return (What.Glob,pm)
-
-
-let build_dep : (t -> Dep1.t -> (What.t * Proxy_map.t) Builder.t) =
-  (* Wrapper to check invariant that we never traverse the same dep more than once
-     i.e. that the dynamic memoization is working!
-  *)
-  let seen = Dep1.Hash_set.create () in
-  fun t dep ->
-    let again = Hash_set.mem seen dep in
-    if again then (
-      Message.error "build_dep: unexpected repeated traversal for: %s" (Dep1.to_string dep);
-    );
-    Hash_set.add seen dep;
-    build_dep t dep
-
-
-let build_dep : (t -> Dep1.t -> (What.t * Proxy_map.t) Builder.t) =
+let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
   (* Report considering/re-considering *)
-  fun t dep ->
+  fun t goal ->
     if Config.show_considering t.config
     then (
-      Message.message "Considering: %s" (Dep1.to_string dep);
+      Message.message "Considering: %s" (Goal.to_string goal);
     );
     set_status t Status.Checking;
-    let builder = build_dep t dep in
+    let builder = build_goal t goal in
     let builder = Builder.before_redo builder
       ~f:(fun () ->
         if Config.show_considering t.config || Config.show_reconsidering t.config
         then  (
-          Message.message "Re-considering: %s" (Dep1.to_string dep)
+          Message.message "Re-considering: %s" (Goal.to_string goal)
         );
         set_status t Status.Checking;
       )
@@ -1734,10 +1728,10 @@ let build_dep : (t -> Dep1.t -> (What.t * Proxy_map.t) Builder.t) =
     builder
 
 
-let build_dep : (t -> Dep1.t -> Proxy_map.t Builder.t) =
+let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
   (* Expose the builder's result/error for reporting *)
-  fun t dep ->
-    let builder = build_dep t dep in
+  fun t goal ->
+    let builder = build_goal t goal in
     Builder.wrap (
       Tenacious.bind (
         Builder.expose builder
@@ -1752,20 +1746,27 @@ let build_dep : (t -> Dep1.t -> Proxy_map.t Builder.t) =
       )
     )
 
-let build_dep : (t ->  Dep1.t -> Proxy_map.t Builder.t) =
-  fun t dep -> build_dep {t with me = dep} dep
+let build_goal : (t ->  Goal.t -> Proxy_map.t Builder.t) =
+  fun t goal -> build_goal {t with me = Some goal} goal
 
-let build_dep : (t -> Dep1.t -> Proxy_map.t Builder.t) =
-  fun t dep ->
+let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
+  fun t goal ->
     (* memo! *)
     share_and_check_for_cycles t
-      ~key: dep
+      ~key: goal
       ~memo: (memo_building t)
-      ~item: (DG.Item.Dep dep)
-      ~f: (fun t -> build_dep t dep)
+      ~item: (DG.Item.Goal goal)
+      ~f: (fun t -> build_goal t goal)
 
 
-let build_one_root_dep :
+let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
+  fun t goal ->
+    if Quit.is_quitting()
+    then error t Reason.Shutdown
+    else build_goal t goal
+
+
+let build_one_root_goal :
     (
       jenga_root_path: Path.X.t ->
       job_throttle: unit Throttle.t ->
@@ -1775,10 +1776,10 @@ let build_one_root_dep :
       DG.t ->
       Config.t ->
       Progress.t ->
-      demanded:Dep1.t ->
+      demanded:Goal.t ->
       unit Tenacious.t
     ) =
-  (* Entry point to build a single root/
+  (* Entry point to build a single root goal
      Here the downwards "t" parameter is constructed from various components.
      And here we break out of the Builder monad, and revert to the plain
      tenacious monad - ignoring the proxy map or any errors.
@@ -1794,12 +1795,12 @@ let build_one_root_dep :
       memo;
       progress;
       jenga_root_path;
-      recurse_build_dep = build_dep;
-      me = demanded;
+      recurse_build_goal = build_goal;
+      me = Some demanded;
       discovered_graph;
       node;
     } in
-    let builder = build_dep t demanded in
+    let builder = build_goal t demanded in
     let tenacious =
       Tenacious.bind (Builder.expose builder) (function
       | Error _ -> Tenacious.return ()
@@ -1822,11 +1823,6 @@ let get_env_option :
       Env1.t option Tenacious.t
     ) =
   fun ~jenga_root_path ~job_throttle fs persist memo discovered_graph config progress ->
-    let me =
-      match Path.X.case jenga_root_path with
-      | `relative x -> Dep1.path x
-      | `absolute x -> Dep1.absolute ~path:(Path.Abs.to_string x)
-    in
     let node = DG.create_root discovered_graph in
     let t = {
       config;
@@ -1836,8 +1832,8 @@ let get_env_option :
       memo;
       progress;
       jenga_root_path;
-      recurse_build_dep = build_dep;
-      me;
+      recurse_build_goal = build_goal;
+      me = None;
       discovered_graph;
       node;
     } in
@@ -1861,7 +1857,7 @@ let progress_report_period = sec 1.0
 let show_progress_fraction_reports ~fin progress =
   let rec loop () =
     Clock.after progress_report_period >>= fun () ->
-    if (!fin) then Deferred.return () else (
+    if (!fin) then Deferred.unit else (
       let progress = Progress.snap progress in
       let fraction = Mon.Progress.fraction progress in
       Message.progress ~fraction;
@@ -1971,7 +1967,7 @@ let cycle_watch_period = sec 10.0
 let watch_for_cycles ~cycle_found ~fin dg =
   let rec loop () =
     Clock.after cycle_watch_period >>= fun () ->
-    if (!fin) then Deferred.return () else (
+    if (!fin) then Deferred.unit else (
       match (print_a_cycle_if_found dg) with
       | false -> loop ()
       | true ->
@@ -1983,7 +1979,7 @@ let watch_for_cycles ~cycle_found ~fin dg =
           pr "*** omake error:";
         in
         Ivar.fill cycle_found ();
-        Deferred.return ()
+        Deferred.unit
     )
   in
   loop ()
@@ -1994,7 +1990,7 @@ let watch_for_cycles ~cycle_found ~fin dg =
 ----------------------------------------------------------------------*)
 
 let build_once :
-    (Config.t -> DG.t -> Progress.t -> unit Tenacious.t -> Heart.t Deferred.t) =
+    (Config.t -> DG.t -> Progress.t -> unit Tenacious.t -> (Heart.t * int) Deferred.t) =
   (* Make a single build using the top level tenacious builder
      Where a single build means we've done all we can
      (maybe we are complete, or maybe some targets are in error)
@@ -2005,7 +2001,7 @@ let build_once :
   fun config dg progress top_tenacious ->
     let u = genU() in (* count of the times we reach polling *)
     let start_time = Time.now() in
-    Tenacious.exec top_tenacious >>= fun ((),heart) ->
+    Tenacious.exec top_tenacious >>| fun ((),heart) ->
 
     (* to avoid reporting of stale errors etc... *)
     Progress.mask_unreachable progress dg;
@@ -2014,20 +2010,30 @@ let build_once :
     let duration = Time.diff (Time.now()) start_time in
     let effort_string = Effort.Snapped.to_string (snap_all_effort()) in
 
-    if Mon.Progress.completed counts then (
-      let total = Mon.Progress.total counts in
-      Message.build_done ~duration ~u ~total effort_string
-    ) else (
-      let fraction = Mon.Progress.fraction counts in
-      Message.build_failed ~duration ~u ~fraction effort_string
-    );
+    let () =
+      if Config.full_gc_when_build_done config then (
+        Message.message "GC.full_major...";
+        Gc.full_major()
+      )
+    in
+    let exit_code =
+      if Mon.Progress.completed counts then (
+        let total = Mon.Progress.total counts in
+        Message.build_done ~duration ~u ~total effort_string;
+        Exit_code.build_done
+      ) else (
+        let fraction = Mon.Progress.fraction counts in
+        Message.build_failed ~duration ~u ~fraction effort_string;
+        Exit_code.build_failed
+      )
+    in
     let quiet = Config.quiet config in
     if not quiet then (
       if Config.show_status_all config
       then Progress.message_everything progress
       else Progress.message_errors progress
     );
-    Deferred.return heart
+    heart, exit_code
 
 (*----------------------------------------------------------------------
   entry point -- build_forever
@@ -2035,16 +2041,16 @@ let build_once :
 
 let run_user_function_from_env_opt env_opt tag ~f =
   match env_opt with
-  | None -> Deferred.return ()
+  | None -> Deferred.unit
   | Some env1 ->
     Monitor.try_with (fun () ->
       f env1
     ) >>= function
-    | Ok () -> Deferred.return ()
+    | Ok () -> Deferred.unit
     | Error exn ->
       let exn = Monitor.extract_exn exn in
       Message.error "%s: threw exception:\n%s" tag (Exn.to_string exn);
-      Deferred.return ()
+      Deferred.unit
 
 
 let build_forever =
@@ -2073,7 +2079,7 @@ let build_forever =
     let top_tenacious =
       Tenacious.all_unit (
         List.map top_level_demands ~f:(fun demanded ->
-          build_one_root_dep
+          build_one_root_goal
             ~jenga_root_path
             ~job_throttle
             fs persist memo discovered_graph
@@ -2083,6 +2089,13 @@ let build_forever =
     in
 
     let cycle_found = Ivar.create () in
+    let () =
+      don't_wait_for (
+        Ivar.read cycle_found >>= fun () ->
+        Quit.quit Exit_code.cycle_abort;
+        Deferred.return ()
+      )
+    in
 
     let rec build_and_poll ()  = (* never finishes if polling *)
 
@@ -2106,7 +2119,7 @@ let build_forever =
       run_user_function_from_env_opt env_opt "build_begin" ~f:Env1.build_begin >>= fun () ->
 
       (* do the build once *)
-      build_once config discovered_graph progress top_tenacious >>= fun heart ->
+      build_once config discovered_graph progress top_tenacious >>= fun (heart,exit_code) ->
 
       (* call user build_end function *)
       run_user_function_from_env_opt env_opt "build_end" ~f:Env1.build_end >>= fun () ->
@@ -2115,7 +2128,10 @@ let build_forever =
       when_polling() >>= fun () ->
 
       match Config.poll_forever config with
-      | false -> Deferred.return ()
+      | false ->
+        Message.message "build finished; not in polling mode so quitting";
+        Quit.quit exit_code;
+        Deferred.return ()
       | true ->
         (* -P *)
         Message.polling ();
@@ -2126,13 +2142,12 @@ let build_forever =
         );
         (* wait here until something changes on the file-system *)
         let wait = Heart.when_broken heart in
+        exit_code_upon_control_c := exit_code;
         wait >>= fun () ->
+        exit_code_upon_control_c := Exit_code.incomplete;
         Message.rebuilding ();
         when_rebuilding() >>= fun () ->
         build_and_poll ()
 
     in
-    Deferred.any [
-      Ivar.read cycle_found;
-      build_and_poll ();
-    ]
+    build_and_poll ()

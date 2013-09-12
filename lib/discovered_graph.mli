@@ -9,7 +9,7 @@ module Item : sig
 
   type t =
   | Root
-  | Dep of Description.Dep1.t
+  | Goal of Description.Goal.t
   | Gen_key of Description.Gen_key.t
 
   val to_string : t -> string

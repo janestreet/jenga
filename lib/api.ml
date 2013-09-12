@@ -18,7 +18,6 @@ module Glob = struct
     match res with
     | `listing listing -> Fs.Listing.paths listing
     | _ -> failwith "Glob.exec"
-
 end
 
 module Alias = Description.Alias
@@ -56,7 +55,7 @@ end
 
 module Dep = struct
 
-  module Dep1 = Description.Dep1
+  module Goal = Description.Goal
 
   type t = unit Depends.t
 
@@ -67,7 +66,12 @@ module Dep = struct
   let glob x = Depends.glob x *>>| fun (_:Path.t list) -> ()
   let alias x = Depends.alias x
   let absolute ~path = Depends.absolute ~path
-  let parse_string ~dir x = Depends.dep1s [Dep1.parse_string ~dir x]
+
+  let goal = function
+    | Goal.Path x -> path x
+    | Goal.Alias x -> alias x
+
+  let parse_string ~dir x = goal (Goal.parse_string ~dir x)
 
   let scan ts sexp =
     Depends.all_unit ts *>>= fun () ->
@@ -79,7 +83,11 @@ module Dep = struct
     Depends.action_stdout (
       Depends.all_unit ts *>>| fun () -> action
     ) *>>= fun string ->
-    Depends.dep1s (Dep1.parse_string_as_deps ~dir string)
+    let string = String.tr string ~target:'\n' ~replacement:' ' in
+    let words = String.split string ~on:' ' in
+    let words = List.filter words ~f:(function | "" -> false | _ -> true) in
+    let ts = List.map words ~f:(fun word -> goal (Goal.parse_string ~dir word)) in
+    Depends.all_unit ts
 
 end
 
@@ -93,18 +101,18 @@ module Rule = struct
         Depends.all_unit deps *>>| fun () -> action)
     )
 
-  let create_new ~targets action_depends =
-    Description.Rule.Target (Description.Target_rule.create ~targets action_depends)
-
   let alias a deps =
     Description.Rule.Alias (a, Depends.all_unit deps)
-
-  let alias_new a dep = Description.Rule.Alias (a, dep)
 
   let default ~dir deps =
     alias (Alias.default ~dir) deps
 
   let targets = Description.Rule.targets
+
+  let create_api_v2 ~targets action_depends =
+    Description.Rule.Target (Description.Target_rule.create ~targets action_depends)
+
+  let alias_api_v2 a dep = Description.Rule.Alias (a, dep)
 
 end
 
@@ -120,7 +128,7 @@ module Rule_generator = struct
       Depends.deferred gen
     )
 
-  let create_new = Description.Rule_generator.create
+  let create_api_v2 = Description.Rule_generator.create
 
 end
 

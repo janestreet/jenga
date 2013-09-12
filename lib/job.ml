@@ -49,7 +49,7 @@ let run ~config ~need ~rel_path_semantics ~putenv ~xaction ~output =
     let request = Forker.Request.create ~rel_path_semantics ~putenv ~dir ~prog ~args in
     Forker.run request
   ) >>= fun {Forker.Reply. stdout;stderr;outcome} ->
-  match Heart.is_broken Heart.is_shutdown with
+  match Quit.is_quitting() with
   | true  ->
     return (Error (`other_error Shutdown))
   | false ->

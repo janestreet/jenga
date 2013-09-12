@@ -45,6 +45,11 @@ let poll_forever =
   +> Spec.flag "poll-forever" ~aliases:["P"] Spec.no_arg
     ~doc:" poll filesystem for changes (keep polling forever)"
 
+let stop_on_first_error =
+  Spec.step (fun m x -> m ~stop_on_first_error:x)
+  +> Spec.flag "stop-on-first-error" ~aliases:["Q"] Spec.no_arg
+    ~doc:" stop when first error encounterd"
+
 let verbose =
   Spec.step (fun m x -> m ~verbose:x)
   +> Spec.flag "verbose" ~aliases:["--verbose"] Spec.no_arg
@@ -116,10 +121,10 @@ let time =
   +> Spec.flag "time" Spec.no_arg
     ~doc:" prefix all messages with the time (since the build started)"
 
-let report_mem =
-  Spec.step (fun m x -> m ~report_mem:x)
-  +> Spec.flag "report-mem" Spec.no_arg
-    ~doc:" report heap mem usage when polling; causes one major GC to be forced"
+let full_gc_when_build_done =
+  Spec.step (fun m x -> m ~full_gc_when_build_done:x)
+  +> Spec.flag "full-gc-when-build-done" ~aliases:["gc"] Spec.no_arg
+    ~doc:" force full gc when build done/failed, for better memory report"
 
 let sequential_deps =
   Spec.step (fun m x -> m ~sequential_deps:x)
@@ -140,6 +145,11 @@ let report_long_cycle_times =
   Spec.step (fun m x -> m ~report_long_cycle_times:x)
   +> Spec.flag "report-long-cycle-times" ~aliases:["long"] (Spec.optional Spec.int)
     ~doc:"<ms> (for development) pass to Scheduler.report_long_cycle_times"
+
+let avoid_target_count_bug_very_slow =
+  Spec.step (fun m x -> m ~avoid_target_count_bug_very_slow:x)
+  +> Spec.flag "avoid-target-count-bug-very-slow" ~aliases:["tc"] Spec.no_arg
+    ~doc:" (for development) try out a bug fix (very slow)"
 
 (* compatability with omake - oamke-mode passes this *)
 let wflag =
@@ -173,6 +183,7 @@ let go_command =
     j_number
     ++ f_number
     ++ poll_forever
+    ++ stop_on_first_error
     ++ verbose
     ++ run_reason_verbose
     ++ show_actions_run
@@ -187,22 +198,24 @@ let go_command =
     ++ debug
     ++ debug_discovered_graph
     ++ time
-    ++ report_mem
+    ++ full_gc_when_build_done
     ++ sequential_deps
     ++ show_sensitized
     ++ delay_for_dev
     ++ report_long_cycle_times
+    ++ avoid_target_count_bug_very_slow
     ++ wflag
     ++ output_postpone
     ++ progress
     ++ external_jenga_root
     ++ anon_demands
+
   )
     ~summary:"Run Jenga in the current directory."
     ~readme:(fun () -> String.concat ~sep:"\n" [
       "By default building the .DEFAULT target.";
     ])
-    (fun ~j_number ~f_number ~poll_forever
+    (fun ~j_number ~f_number ~poll_forever ~stop_on_first_error
       ~verbose
       ~run_reason_verbose
       ~show_actions_run
@@ -211,9 +224,11 @@ let go_command =
       ~show_run_reason
       ~show_checked ~show_considering ~show_reconsidering ~show_status_all
       ~quiet ~debug ~debug_discovered_graph
-      ~time ~report_mem
+      ~time
+      ~full_gc_when_build_done
       ~sequential_deps ~show_sensitized
       ~delay_for_dev ~report_long_cycle_times
+      ~avoid_target_count_bug_very_slow
       ~wflag:_ ~output_postpone:_
       ~progress
       ~external_jenga_root
@@ -224,6 +239,7 @@ let go_command =
           j_number;
           f_number;
           poll_forever;
+          stop_on_first_error;
           verbose;
           run_reason_verbose;
           show_actions_run      = show_run_reason || show_actions_run;
@@ -237,12 +253,13 @@ let go_command =
           debug;
           debug_discovered_graph;
           time;
-          report_mem;
+          full_gc_when_build_done;
           sequential_deps;
           show_sensitized;
           delay_for_dev = Option.map delay_for_dev ~f:(fun x -> sec (float x));
           report_long_cycle_times =
             Option.map report_long_cycle_times ~f:(fun ms -> Time.Span.create ~ms ());
+          avoid_target_count_bug_very_slow;
           progress;
           external_jenga_root;
           demands;

@@ -25,7 +25,7 @@ let lock_running_server ~root_dir  ~port =
   ) >>= function
   | false ->
     Message.error "jenga already running, lockfile = %s" (lock_filename ^ nfs_lock);
-    Shutdown.shutdown 1;
+    Quit.quit Exit_code.server_locked;
     Deferred.never()
   | true ->
     let server_filename = root_dir ^/ Path.server_basename in

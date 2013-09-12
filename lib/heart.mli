@@ -1,4 +1,3 @@
-
 open Core.Std
 open Async.Std
 
@@ -8,6 +7,7 @@ open Async.Std
 *)
 
 type t
+type canceller = (unit -> unit) option
 
 module Glass : sig
   type t
@@ -18,14 +18,15 @@ module Glass : sig
 end
 
 val of_glass : Glass.t -> t
-val unbreakable : t
+
 val combine2 : t -> t -> t
 val combine : t list -> t
 
+val upon : t -> f:(unit -> unit) -> canceller
+val trigger : canceller -> unit
+
+val unbreakable : t
 val is_broken : t -> bool
 val when_broken : t -> unit Deferred.t
 
 val to_sensitivity_list : t -> string list
-
-val shutdown : unit -> unit (* for C-c handler *)
-val is_shutdown : t

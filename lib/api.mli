@@ -62,6 +62,7 @@ module Dep : sig (* old pre-monadic interface *)
   val parse_string : dir:Path.t -> string -> t
 end
 
+(* taster of API v2...*)
 module Depends : sig (* The jenga monad *)
   type 'a t
   val return : 'a -> 'a t
@@ -86,17 +87,18 @@ end
 module Rule : sig
   type t
   val create : targets:Path.t list -> deps:Dep.t list -> action:Action.t -> t
-  val create_new : targets:Path.t list -> Action.t Depends.t -> t
   val alias : Alias.t -> Dep.t list -> t
-  val alias_new : Alias.t -> unit Depends.t -> t
   val default : dir:Path.t -> Dep.t list -> t
   val targets : t -> Path.t list
+  (* taster of API v2 create function... *)
+  val create_api_v2 : targets:Path.t list -> Action.t Depends.t -> t
+  val alias_api_v2 : Alias.t -> unit Depends.t -> t
 end
 
 module Rule_generator : sig
   type t
   val create : deps:Dep.t list -> gen:(unit -> Rule.t list Deferred.t) -> t
-  val create_new : Rule.t list Depends.t -> t
+  val create_api_v2 : Rule.t list Depends.t -> t
 end
 
 module Rule_scheme : sig
@@ -105,6 +107,7 @@ module Rule_scheme : sig
 end
 
 module Version : sig
+   (* This Versioning pre-dates idea for versioning of entire API *)
   type t =
   | Pre_versioning
   | V_2013_07_09

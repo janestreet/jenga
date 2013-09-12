@@ -22,7 +22,7 @@ val build_forever :
   Config.t ->
   Progress.t ->
   jenga_root_path: Path.X.t ->
-  top_level_demands : Description.Dep1.t list ->
+  top_level_demands : Description.Goal.t list ->
   Fs.t ->
   Persist.t ->
   when_polling:(unit -> unit Deferred.t) ->
@@ -30,3 +30,5 @@ val build_forever :
   unit Deferred.t
 
 val persist_saves_done : Effort.Counter.t
+
+val exit_code_upon_control_c : int ref

@@ -13,17 +13,16 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path =
   trace "----------------------------------------------------------------------";
   trace "Root: %s" root_dir;
   trace "Start: %s" (Path.to_string start_dir);
-  Persist.create_saving_periodically ~root_dir db_save_span
-  >>= fun persist ->
-  let fs_persist = Persist.fs_persist persist in
-  Fs.create fs_persist >>= fun fs ->
+  Forker.init config;
+  Persist.create_saving_periodically ~root_dir db_save_span >>= fun persist ->
+  Fs.create (Persist.fs_persist persist) >>= fun fs ->
   let progress = Build.Progress.create fs in
   Rpc_server.go ~root_dir progress >>= fun () ->
   For_user.install_fs_for_user_rules fs;
   let top_level_demands =
     match Config.demands config with
-    | [] -> [ Description.Dep1.default ~dir:start_dir ]
-    | demands -> List.map demands ~f:(Description.Dep1.parse_string ~dir:start_dir)
+    | [] -> [ Description.Goal.Alias (Description.Alias.default ~dir:start_dir) ]
+    | demands -> List.map demands ~f:(Description.Goal.parse_string ~dir:start_dir)
   in
   let when_polling () =
     Persist.disable_periodic_saving_and_save_now persist
@@ -34,16 +33,13 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path =
   let bs = Persist.build_persist persist in
   Build.build_forever config progress
     ~jenga_root_path ~top_level_demands fs bs ~when_polling ~when_rebuilding
-  >>= fun () ->
-  Message.flushed () >>= fun () ->
-  return 0
 
 let install_signal_handlers () =
   trace "install_signal_handlers..";
   Signal.handle Signal.terminating ~f:(fun s ->
-    Message.message "handling signal: %s, calling shutdown" (Signal.to_string s);
-    Heart.shutdown();
-    Shutdown.shutdown 1;
+    Message.message "handling: %s; quitting" (Signal.to_string s);
+    let exit_code = ! Build.exit_code_upon_control_c in
+    Quit.quit exit_code
   )
 
 (* for pre-init_logging errors *)
@@ -68,7 +64,7 @@ let main config =
         | `cant_find_root ->
           error "Cant find '%s' in start-dir or any ancestor dir"
             Misc.jenga_root_basename;
-          Pervasives.exit 1
+          Pervasives.exit Exit_code.cant_start
       end
   in
 
@@ -94,12 +90,12 @@ let main config =
   (* Must do the chdir before Parallel.init is called, so that we have the same cwd when
      using parallel forkers or not *)
   Async_parallel.Std.Parallel.init();
-  Forker.init config;
 
   (* Only after Parallel.init is called may we start async *)
-  Deferred.unit >>> (fun () ->
-    run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path >>> (fun n ->
-      Shutdown.shutdown n
+  don't_wait_for (
+    Deferred.unit >>= fun () ->
+    Quit.ignore_exn_while_quitting (fun () ->
+      run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path;
     )
   );
   (

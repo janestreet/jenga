@@ -117,7 +117,7 @@ end = struct
       channel_def >>= fun channel ->
       let rec loop () =
         Async_parallel.Std.Channel.read channel >>= fun (uid,reply) ->
-        match (Hashtbl.find reply_table uid) with
+        match (Hashtbl.find_and_remove reply_table uid) with
         | None -> failwith "Forker_proc, unknown reply uid";
         | Some ivar ->
           Ivar.fill ivar reply;

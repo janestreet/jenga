@@ -10,13 +10,14 @@ module Alias : sig
   val default : dir:Path.t -> t
   val to_string : t -> string
 end
+
 module Goal : sig
-  type t with sexp, bin_io
-  val case : t -> [ `path of Path.t | `alias of Alias.t ]
-  val path : Path.t -> t
-  val alias : Alias.t -> t
+  type t = Path of Path.t | Alias of Alias.t
+  with sexp, bin_io
+  include Hashable with type t := t
   val to_string : t -> string
   val directory : t -> Path.t
+  val parse_string : dir:Path.t -> string -> t
 end
 
 module Xaction : sig
@@ -40,35 +41,18 @@ module Action : sig
   val write_string : string -> target:Path.t -> t
 end
 
-module Dep1 : sig
-  type t with sexp, bin_io
-  include Hashable with type t := t
-  val case : t -> [
-  | `path of Path.t
-  | `alias of Alias.t
-  | `glob of Fs.Glob.t
-  | `absolute of Path.Abs.t
-  ]
-  val to_string : t -> string
-  val path : Path.t -> t
-  val absolute : path:string -> t
-  val glob : Fs.Glob.t -> t
-  val alias : Alias.t -> t
-  val default : dir:Path.t -> t
-  val parse_string : dir:Path.t -> string -> t
-  val parse_string_as_deps : dir:Path.t -> string -> t list
-end
-
 module Depends : sig
 
   type _ t =
   | Return : 'a -> 'a t
   | Bind : 'a t * ('a -> 'b t) -> 'b t
   | All : 'a t list -> 'a list t
-  | Need : Dep1.t list -> unit t
-  | Stdout : Action.t t -> string t
-  | Glob : Fs.Glob.t -> Path.t list t
   | Deferred : (unit -> 'a Deferred.t) -> 'a t
+  | Path : Path.t -> unit t
+  | Absolute : Path.Abs.t -> unit t
+  | Alias : Alias.t -> unit t
+  | Glob : Fs.Glob.t -> Path.t list t
+  | Stdout : Action.t t -> string t
 
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
@@ -89,8 +73,6 @@ module Depends : sig
 
   val read_sexp : Path.t -> Sexp.t t
   val read_sexps : Path.t -> Sexp.t list t
-
-  val dep1s : Dep1.t list -> unit t (* to die *)
 
 end
 

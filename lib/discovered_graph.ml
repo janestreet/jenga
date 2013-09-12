@@ -10,12 +10,12 @@ module Item = struct
 
   type t =
   | Root
-  | Dep of Dep1.t
+  | Goal of Goal.t
   | Gen_key of Gen_key.t
 
   let to_string = function
     | Root -> "ROOT"
-    | Dep dep -> (*sprintf "DEP: %s"*) (Dep1.to_string dep)
+    | Goal dep -> (*sprintf "DEP: %s"*) (Goal.to_string dep)
     | Gen_key g -> sprintf "GEN: %s" (Gen_key.to_string g)
 
 end

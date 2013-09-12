@@ -212,10 +212,12 @@ let pretty_span span =
   else                                sprintf        "%dms"                parts.P.ms
 
 let prety_mem_usage =
-  let words_per_mb = 1024 * 1024 / 8 in
+  let words_per_kb = 1024 / 8 in
   fun () ->
-    let words = Misc.heap_words () in
-    sprintf "%dMb" (words / words_per_mb)
+    let stat = Gc.stat () in
+    let live = stat.Gc.Stat.live_words / words_per_kb in
+    let heap = stat.Gc.Stat.heap_words / words_per_kb in
+    sprintf "heap(Kb)= %d/%d" live heap
 
 
 let omake_style_logger config event =
@@ -312,21 +314,15 @@ let omake_style_logger config event =
     )
   | Event.Build_done (duration,`u u,total,s) ->
     jput "%d/%d targets are up to date" total total;
-    let mem_string =
-      if not (Config.report_mem config) then "" else (
-        Gc.full_major();
-        sprintf ", %s" (prety_mem_usage())
-      )
-    in
-    jput "done (#%d, %s%s, %s) -- HURRAH" u (pretty_span duration) mem_string s
+    jput "done (#%d, %s, %s, %s) -- HURRAH" u (pretty_span duration) (prety_mem_usage()) s
 
   | Event.Build_failed (duration, `u u,(num,den),s) -> (
     jput "%d/%d targets are up to date" num den;
-    jput "failed (#%d, %s, %s)" u (pretty_span duration) s;
+    jput "failed (#%d, %s, %s, %s)" u (pretty_span duration) (prety_mem_usage()) s;
   )
 
   | Event.Progress (num,den) -> (
-    put "[= ] %d / %d" num den;
+    put "\r[= ] %d / %d" num den;
   )
 
   | Event.Polling ->

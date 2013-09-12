@@ -3,6 +3,20 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
+type 'a v = ('a * Heart.t) option
+
+module type REIFIABLE = sig
+  type ('a,-'b) t'
+  type 'a t = ('a,[`t]) t'
+  type 'a node = ('a,[`t|`node]) t'
+end
+module Reifiable (S : sig type ('a,-'b) t' end) =
+struct
+  include S
+  type 'a t = ('a,[`t]) t'
+  type 'a node = ('a,[`t|`node]) t'
+end
+
 let (=) = Int.(=)
 let (>) = Int.(>)
 
@@ -123,11 +137,11 @@ module T = struct
         choice (request runner) (fun x -> x);
       ]
 
-  let exec_cancelable t ~cancel : ('a * Heart.t) option Deferred.t =
+  let exec_cancelable t ~cancel : 'a v Deferred.t =
     get ~cancel t >>= function
     | Res_none -> Deferred.return None
-    | Res_some (x,heart) -> Deferred.return (Some (x,heart))
-    | Res_return x -> Deferred.return (Some (x,Heart.unbreakable))
+    | Res_some (x,heart) -> Deferred.return (Some (x, heart))
+    | Res_return x -> Deferred.return (Some (x, Heart.unbreakable))
 
   let create ~run =
     Run {
@@ -154,13 +168,13 @@ module T = struct
         f ~cancel >>= function
         | None -> Deferred.return Res_none
         | Some res ->
-          if Heart.is_broken cancel then (
+        if Heart.is_broken cancel then (
             computed_but_unwanted := Some res;
             Deferred.return Res_none
-          ) else (
+        ) else (
             let x,heart = res in
             Deferred.return (Res_some (x,heart))
-          )
+        )
     in
     create ~run
 
@@ -171,10 +185,10 @@ module T = struct
         | Res_none -> Deferred.return Res_none
         | Res_return x -> (
           get (f x) ~cancel >>= function
-          | Res_none -> Deferred.return Res_none
-          | Res_return y -> Deferred.return (Res_some (y, Heart.unbreakable))
-          | Res_some (y,heart2) -> Deferred.return (Res_some (y, heart2))
-        )
+            | Res_none -> Deferred.return Res_none
+            | Res_return y -> Deferred.return (Res_some (y, Heart.unbreakable))
+            | Res_some (y,heart2) -> Deferred.return (Res_some (y, heart2))
+          )
         | Res_some (x,heart1) ->
           get (f x) ~cancel:(Heart.combine2 heart1 cancel) >>= function
           | Res_none ->
@@ -237,6 +251,33 @@ module T = struct
     in
     create ~run
 
+  let reify x = x
+  let map m ~f = bind m (fun x -> return (f x))
+
+  (*let deferred x =
+    let run ~cancel:_ = x >>| fun x -> Res_return x in
+    create ~run*)
+  (*let defer dx = bind dx (fun x -> deferred x)*)
+
+  (*let filter t ~f =
+    lift_cancelable (fun ~cancel ->
+      exec_cancelable t ~cancel >>| function
+      | _, None as res -> res
+      | a, Some heart ->
+        let g = Heart.Glass.create ~desc:"ten/filter" in
+        let rec check () =
+          exec_cancelable t ~cancel >>> function
+          | b, Some heart when not (Heart.is_broken cancel) && f a b ->
+            ignore (Heart.upon heart check)
+          | _, Some _ ->
+            Heart.Glass.break g
+          (* heart == None, the computation suddenly become unbreakable,
+           * that's not normally possible, invalidate current result *)
+          | _, None ->
+            Heart.Glass.break g
+        in
+        Heart.upon heart check;
+        a, Some (Heart.of_glass g))*)
 end
 
 (*include T*)
@@ -250,8 +291,13 @@ module type Ten_sig = sig
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
   val all : 'a t list -> 'a list t
-  val exec_cancelable : 'a t -> cancel:Heart.t -> ('a * Heart.t) option Deferred.t
-  val lift_cancelable :        (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> 'a t
+  val exec_cancelable : 'a t -> cancel:Heart.t -> 'a v Deferred.t
+  val lift_cancelable :        (cancel:Heart.t -> 'a v Deferred.t) -> 'a t
+
+  val map : 'a t -> f:('a -> 'b) -> 'b t
+  (*val defer : 'a Deferred.t t -> 'a t*)
+  val reify : 'a t -> 'a t
+  (*val filter : 'a t -> f:('a -> 'a -> bool) -> 'a t*)
 end
 
 
@@ -268,45 +314,62 @@ module Ten_dummy = struct
     Deferred.map t ~f:(fun x -> Some (x,Heart.unbreakable))
 
   let lift_cancelable f =
-    Deferred.map (f ~cancel:Heart.unbreakable) ~f:(function
-    | None -> assert false
-    | Some (x,_heart) -> x
-    )
+    f ~cancel:(Heart.of_glass (Heart.Glass.create ~desc:"unbreakable"))
+    >>| function
+      | None -> assert false
+      | Some (x,_) -> x
 
+  let map = Deferred.map
+  (*let defer = Deferred.join*)
+  let reify x = x
+(*   let filter x ~f:_ = x *)
 end
 
-let dummy =
+module Ten_ten = struct
+  type 'a t = 'a Ten.t
+
+  let return      = Ten.pure
+  let bind m f    = Ten.stable (Ten.bind m f)
+  let all l       = Ten.reify (Ten.all (List.map ~f:Ten.reify l))
+  let map m ~f    = Ten.map m ~f
+(*   let filter m ~f = Ten.filter (Ten.reify m) ~f *)
+  let reify       = Ten.reify
+  (*let defer       = Ten.defer*)
+
+  let exec_cancelable t  = Ten.sample (Ten.stable t)
+  let lift_cancelable f = Ten.reify (Ten.lift f)
+end
+
+let monad, monad_name =
   match Core.Std.Sys.getenv "DUMMY_TEN" with
-  | None -> false
-  | Some _ -> true
+  | None       -> `Ten, None
+  | Some "old" -> `Tenacious, Some "old-tenacious"
+  | Some _     -> `Ten_dummy, Some "dummy"
 
 let m =
-  match dummy with
-  | false -> (module T : Ten_sig)
-  | true -> (module Ten_dummy : Ten_sig)
+  match monad with
+  | `Tenacious -> ( module T : Ten_sig )
+  | `Ten       -> ( module Ten_ten : Ten_sig )
+  | `Ten_dummy -> ( module Ten_dummy : Ten_sig )
 
 let () =
-  if dummy then (
-    Printf.eprintf "tenacious, dummy = %b\n%!" dummy
-  )
+  match monad_name with
+  | None -> ()
+  | Some monad_name-> Printf.eprintf "tenacious monad = %s\n%!" monad_name
 
-module M = (val m : Ten_sig)
+module M = ( val m : Ten_sig )
 
 include M
+type ('a,_) t' = 'a t
+type 'a node = ('a,[`t|`node]) t'
 
+let use x = x
 
 (*----------------------------------------------------------------------
 
 ----------------------------------------------------------------------*)
 
 (* non primitive ops... *)
-
-let before_redo t ~f =
-  let first_time = ref true in
-  lift_cancelable (fun ~cancel ->
-    (if not !first_time then f() else first_time := false);
-    exec_cancelable t ~cancel
-  )
 
 let ( *>>= ) = bind
 
@@ -319,18 +382,21 @@ let all_unit ts =
   all ts *>>= fun (_:unit list) ->
   return ()
 
-
 let exec t =
-  exec_cancelable t ~cancel:Heart.unbreakable >>= function
-  | None -> assert false (* impossible! *)
-  | Some x -> Deferred.return x
+  let d = exec_cancelable t ~cancel:Heart.unbreakable in
+  d >>| function
+  | None -> assert false
+  | Some v -> v
 
-let lift f =
-  lift_cancelable (fun ~cancel:_ ->
-    f () >>= fun x ->
-    Deferred.return (Some x)
+let lift f = lift_cancelable (fun ~cancel:_ -> f () >>| Option.some)
+
+
+let before_redo t ~f =
+  let first_time = ref true in
+  lift_cancelable (fun ~cancel ->
+    (if not !first_time then f() else first_time := false);
+    exec_cancelable t ~cancel
   )
-
 
 let prevent_overlap
     : (
@@ -339,7 +405,7 @@ let prevent_overlap
       ?notify_wait: ('key -> unit) ->
       ?notify_add: ('key -> unit) ->
       ?notify_rem: ('key -> unit) ->
-      'a t ->
+      'a node ->
       'a t
     ) =
   (* Prevent overlapping tenacious execution *)

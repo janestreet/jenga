@@ -4,6 +4,7 @@ open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
 let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
+let unbreakable x = x,Heart.unbreakable
 
 let lstat_counter = Effort.Counter.create "stat"
 let digest_counter = Effort.Counter.create "digest"
@@ -509,20 +510,14 @@ end = struct
       unlogged "setup watcher: %s" absolute_dir;
       Monitor.try_with (fun () ->
         Inotify.add t.notifier absolute_dir
-      ) >>= function
+      ) >>| function
       | Error exn ->
         Message.error "Unable to watch path: %s" absolute_dir;
-        return (Error (Error.of_exn exn))
+        Error (Error.of_exn exn)
       | Ok () ->
-        let glass = Heart.Glass.create ~desc in
-        (*Hashtbl.add_exn*)
-        begin
-          match (Hashtbl.add glass_cache ~key:path ~data:glass) with
-          | `Ok -> ()
-          | `Duplicate ->
-            Message.error "Unexpected existing entry in watcher cache: %s" path
-        end;
-        return (Ok (Heart.of_glass glass))
+        let default () = Heart.Glass.create ~desc in
+        let glass = Hashtbl.find_or_add glass_cache path ~default in
+        Ok (Heart.of_glass glass)
 
 
 end
@@ -541,7 +536,7 @@ module Stat_memo : sig
 
 end = struct
 
-  type computation = Stats.t Or_error.t Tenacious.t
+  type computation = Stats.t Or_error.t Tenacious.node
   type t = {
     watcher : Watcher.t;
     file_watch_cache : computation Path.X.Table.t;
@@ -560,7 +555,7 @@ end = struct
       | `file -> t.file_watch_cache
       | `dir -> t.dir_watch_cache
     in
-    match (Hashtbl.find cache path) with
+    (match (Hashtbl.find cache path) with
     | Some tenacious -> tenacious
     | None ->
       let tenacious =
@@ -570,14 +565,15 @@ end = struct
             ~desc:(Path.X.to_string path)
           >>= function
           | Error exn ->
-            return (Error exn, Heart.unbreakable)
+            return (unbreakable (Error exn))
           | Ok heart ->
-            Stats.lstat path >>= fun res ->
-            return (res,heart)
+            Stats.lstat path >>| fun res -> (res,heart)
         )
       in
+      let tenacious = Tenacious.reify tenacious in
       Hashtbl.add_exn cache ~key:path ~data:tenacious;
       tenacious
+     :> _ Tenacious.t)
 
 end
 
@@ -658,7 +654,7 @@ end = struct
         | Some old_good_digest -> Tenacious.return (`digest old_good_digest)
         | None ->
           Tenacious.lift (fun () ->
-            Compute_digest.of_file file >>| fun digest -> (digest,Heart.unbreakable)
+            Compute_digest.of_file file >>| unbreakable
           ) *>>= function
           | Error e -> (remove(); Tenacious.return (`digest_error e))
           | Ok new_digest ->
@@ -697,34 +693,37 @@ end = struct
 
   let list_dir t sm ~dir =
     let remove() = Hashtbl.remove t.cache dir in
-    Stat_memo.lstat sm ~what:`dir (Path.X.of_relative dir) *>>= function
-    | Error e -> (remove(); Tenacious.return (`stat_error e))
-    | Ok stats ->
-      if not (is_dir stats) then Tenacious.return `not_a_dir else
-        match (
-          match (Hashtbl.find t.cache dir) with
-          | None -> None
-          | Some (prev_stats,prev_proxy) ->
-            if Stats.equal stats prev_stats
-            then Some prev_proxy
-            else None
-        ) with
-        | Some old_good_listing -> Tenacious.return (`listing old_good_listing)
-        | None ->
-          Tenacious.lift (fun () ->
-            Listing.run_ls ~dir >>| fun listing -> (listing,Heart.unbreakable)
-          ) *>>= function
-          | Error e -> (remove(); Tenacious.return (`listing_error e))
-          | Ok new_listing ->
-            if Path.(equal the_root dir) then (
-            (* Don't save the result of listing the root of the repo because having .jenga
-               files in the root means that the stat will always differ and so we can
-               never use the listing saved.  The cost of saving the listing for root is
-               that the persistent state will always change and hence need writing.  *)
-            ) else (
-              Hashtbl.set (Misc.mod_persist t.cache) ~key:dir ~data:(stats,new_listing);
-            );
-            Tenacious.return (`listing new_listing)
+    let tenacious =
+      Stat_memo.lstat sm ~what:`dir (Path.X.of_relative dir) *>>= function
+      | Error e -> (remove(); Tenacious.return (`stat_error e))
+      | Ok stats ->
+        if not (is_dir stats) then Tenacious.return `not_a_dir else
+          match (
+            match (Hashtbl.find t.cache dir) with
+            | None -> None
+            | Some (prev_stats,prev_proxy) ->
+              if Stats.equal stats prev_stats
+              then Some prev_proxy
+              else None
+          ) with
+          | Some old_good_listing -> Tenacious.return (`listing old_good_listing)
+          | None ->
+            Tenacious.lift (fun () ->
+              Listing.run_ls ~dir >>| unbreakable
+            ) *>>= function
+            | Error e -> (remove(); Tenacious.return (`listing_error e))
+            | Ok new_listing ->
+              if Path.(equal the_root dir) then (
+              (* Don't save the result of listing the root of the repo because having .jenga
+                 files in the root means that the stat will always differ and so we can
+                 never use the listing saved.  The cost of saving the listing for root is
+                 that the persistent state will always change and hence need writing.  *)
+              ) else (
+                Hashtbl.set (Misc.mod_persist t.cache) ~key:dir ~data:(stats,new_listing);
+              );
+              Tenacious.return (`listing new_listing)
+    in
+    Tenacious.((reify tenacious :> _ t))
 
 
 end
@@ -786,18 +785,19 @@ module Digest_memo : sig
 
 end = struct
 
-  type computation = Digest_result.t Tenacious.t
+  type computation = Digest_result.t Tenacious.node
   type t = {
     cache : computation Path.X.Table.t;
   }
 
   let digest_file t dp sm ~file =
-    match (Hashtbl.find t.cache file) with
+    (match (Hashtbl.find t.cache file) with
     | Some tenacious -> tenacious
     | None ->
-      let tenacious = Persist.digest_file dp sm ~file in
+      let tenacious = Tenacious.reify (Persist.digest_file dp sm ~file) in
       Hashtbl.add_exn t.cache ~key:file ~data:tenacious;
       tenacious
+    :> _ Tenacious.t)
 
   let create () = {
     cache = Path.X.Table.create ();
@@ -823,18 +823,19 @@ module Listing_memo : sig
 
 end = struct
 
-  type computation = Listing_result.t Tenacious.t
+  type computation = Listing_result.t Tenacious.node
   type t = {
     cache : computation Path.Table.t;
   }
 
   let list_dir t dp sm ~dir =
-    match (Hashtbl.find t.cache dir) with
+    (match (Hashtbl.find t.cache dir) with
     | Some tenacious -> tenacious
     | None ->
-      let tenacious = Persist.list_dir dp sm ~dir in
+      let tenacious = Tenacious.reify (Persist.list_dir dp sm ~dir) in
       Hashtbl.add_exn t.cache ~key:dir ~data:tenacious;
       tenacious
+    :> _ Tenacious.t)
 
   let create () = {
     cache = Path.Table.create ();
@@ -921,28 +922,25 @@ end = struct
       Tenacious.return x
 
   let exec glob lm per sm =
-    Tenacious.lift (fun () ->
+    (Tenacious.reify (Tenacious.lift (fun () ->
       let my_glass =
         Heart.Glass.create ~desc:(to_string glob)
       in
-      Tenacious.exec (exec_no_cutoff glob lm per sm) >>= fun (res,heart) ->
-      don't_wait_for (
-        let rec loop heart =
-          Heart.when_broken heart >>= fun () ->
-          Tenacious.exec (exec_no_cutoff glob lm per sm) >>= fun (res2,heart) ->
-          if (Listing_result.equal res res2)
-          then loop heart
-          else (
-            Message.file_changed ~desc:(to_string glob);
-            Heart.Glass.break my_glass;
-            Deferred.return ()
-          )
-        in
-        loop heart
-      );
+      Tenacious.exec (exec_no_cutoff glob lm per sm) >>| fun (res,heart) ->
+      let rec loop heart =
+        Heart.when_broken heart >>> fun () ->
+        Tenacious.exec (exec_no_cutoff glob lm per sm) >>> fun (res2,heart) ->
+        if (Listing_result.equal res res2)
+        then loop heart
+        else (
+          Message.file_changed ~desc:(to_string glob);
+          Heart.Glass.break my_glass
+        )
+      in
+      loop heart;
       let my_heart = Heart.of_glass my_glass in
-      Deferred.return (res, my_heart)
-    )
+      (res, my_heart)
+    )) :> _ Tenacious.t)
 
 end
 
@@ -965,18 +963,19 @@ module Glob_memo : sig
 
 end = struct
 
-  type computation = Listing_result.t Tenacious.t
+  type computation = Listing_result.t Tenacious.node
   type t = {
     cache : computation Glob.Table.t;
   }
 
   let list_glob t lm per sm glob =
-    match (Hashtbl.find t.cache glob) with
+    (match (Hashtbl.find t.cache glob) with
     | Some tenacious -> tenacious
     | None ->
-      let tenacious = Glob.exec glob lm per sm in
+      let tenacious = Tenacious.reify (Glob.exec glob lm per sm) in
       Hashtbl.add_exn t.cache ~key:glob ~data:tenacious;
       tenacious
+    :> _ Tenacious.t)
 
   let create () = {
     cache = Glob.Table.create ();
@@ -1046,7 +1045,7 @@ module Fs : sig
     Glob.t ->
     Listing_result.t Tenacious.t
 
-  val active_targets : t -> unit Tenacious.t Path.Table.t
+  val active_targets : t -> unit Tenacious.node Path.Table.t
 
   val watch_sync_file : t -> path:string -> Heart.t Deferred.t
 
@@ -1054,7 +1053,7 @@ end = struct
 
   type t = {
     watcher : Watcher.t;
-    active_targets : unit Tenacious.t Path.Table.t;
+    active_targets : unit Tenacious.node Path.Table.t;
     memo : Memo.t;
     persist : Persist.t;
   }
@@ -1104,8 +1103,7 @@ include Fs
 
 let ensure_directory (_:t) ~dir = (* why need t ? *)
   Tenacious.lift (fun () ->
-    ensure_directory ~dir >>= fun res ->
-    return (res,Heart.unbreakable) (* ?? *)
+    ensure_directory ~dir >>| unbreakable (* ?? *)
   )
 
 (*----------------------------------------------------------------------
@@ -1150,7 +1148,7 @@ let sync_inotify_delivery
   fun t ~sync_contents tenacious ->
     let u1 = genU1 () in
     let genU2 = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-    Tenacious.lift (fun () ->
+    (Tenacious.reify (Tenacious.lift (fun () ->
       let u2 = genU2 () in
       let path = sprintf "/tmp/jenga-%s-%d-%d.sync" pid_string u1 u2 in
 
@@ -1190,4 +1188,5 @@ let sync_inotify_delivery
 
       (* Now we are synchronised! *)
       return res
-    )
+    )) :> _ Tenacious.t)
+

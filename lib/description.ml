@@ -37,18 +37,39 @@ end
 
 module Goal = struct
 
-  type t = [ `path of Path.t | `alias of Alias.t ] with sexp, bin_io, compare
-  let path x = `path x
-  let alias x = `alias x
-  let case t = t
+  module T = struct
+    type t = Path of Path.t | Alias of Alias.t with sexp, bin_io, compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make(T)
 
   let to_string = function
-    | `path path -> Path.to_string path
-    | `alias alias -> Alias.to_string alias
+    | Path path -> Path.to_string path
+    | Alias alias -> Alias.to_string alias
 
   let directory = function
-    | `path path -> Path.dirname path
-    | `alias alias -> Alias.directory alias
+    | Path path -> Path.dirname path
+    | Alias alias -> Alias.directory alias
+
+  let parse_string ~dir string = (* for command-line selection of  top-level demands *)
+    (* syntax...
+       foo             - target
+       path/to/foo     - target
+       .foo            - alias
+       path/to/.foo    - alias
+    *)
+    let dir,base =
+      match String.rsplit2 string ~on:'/' with
+      | None -> dir, string
+      | Some (rel_dir_string,base) ->
+        match rel_dir_string with
+        | "." -> dir,string
+        | _ -> Path.relative ~dir rel_dir_string, base
+    in
+    match String.chop_prefix base ~prefix:"." with
+    | None -> Path (Path.relative ~dir base)
+    | Some after_dot -> Alias (Alias.create ~dir after_dot)
 
 end
 
@@ -106,87 +127,32 @@ module Action = struct
 
 end
 
-
-module Dep1 = struct
-
-  module T = struct
-
-    type t = [
-    | `path of Path.t
-    | `alias of Alias.t
-    | `glob of Glob.t
-    | `absolute of Path.Abs.t
-    ]
-    with sexp, bin_io, compare
-    let hash = Hashtbl.hash
-  end
-  include T
-  include Hashable.Make(T)
-
-  let case t = t
-
-  let path path = `path path
-  let alias alias = `alias alias
-  let glob glob = `glob glob
-  let absolute ~path = `absolute (Path.Abs.create path)
-
-  let to_string t =
-    match t with
-    | `path path -> Path.to_string path
-    | `alias alias -> Alias.to_string alias
-    | `glob glob -> Fs.Glob.to_string glob
-    | `absolute a -> Path.Abs.to_string a
-
-  let default ~dir = alias (Alias.default ~dir)
-
-  let parse_string ~dir string = (* for command-line selection of  top-level demands *)
-    (* syntax...
-       foo             - target
-       path/to/foo     - target
-       .foo            - alias
-       path/to/.foo    - alias
-    *)
-    let dir,base =
-      match String.rsplit2 string ~on:'/' with
-      | None -> dir, string
-      | Some (rel_dir_string,base) ->
-        match rel_dir_string with
-        | "." -> dir,string
-        | _ -> Path.relative ~dir rel_dir_string, base
-    in
-    match String.chop_prefix base ~prefix:"." with
-    | None -> path (Path.relative ~dir base)
-    | Some after_dot -> alias (Alias.create ~dir after_dot)
-
-  let parse_string_as_deps ~dir string =
-    let string = String.tr string ~target:'\n' ~replacement:' ' in
-    let words = String.split string ~on:' ' in
-    let words = List.filter words ~f:(function | "" -> false | _ -> true) in
-    let deps = List.map words ~f:(parse_string ~dir) in
-    deps
-
-end
-
 module Depends = struct
 
   type _ t =
   | Return : 'a -> 'a t
   | Bind : 'a t * ('a -> 'b t) -> 'b t
   | All : 'a t list -> 'a list t
-  | Need : Dep1.t list -> unit t
-  | Stdout : Action.t t -> string t (* special -- arg nested in t gives scoping *)
-  | Glob : Glob.t -> Path.t list t
   | Deferred : (unit -> 'a Deferred.t) -> 'a t
+  | Path : Path.t -> unit t
+  | Absolute : Path.Abs.t -> unit t
+  | Alias : Alias.t -> unit t
+  | Glob : Glob.t -> Path.t list t
+  | Stdout : Action.t t -> string t (* special -- arg nested in t gives scoping *)
 
   let return x = Return x
   let bind t f = Bind (t,f)
   let all ts = All ts
-  let dep1s ds = Need ds
+
+  let path p = Path p
+  let absolute ~path = Absolute (Path.Abs.create path)
+  let alias x = Alias x
+
   let action_stdout t = Stdout t
   let glob t = Glob t
   let deferred t = Deferred t
 
-  (* non primitive *)
+  (* non primitive... *)
 
   let map t f = bind t (fun x -> return (f x))
   let all_unit ts = map (all ts) (fun (_:unit list) -> ())
@@ -194,20 +160,10 @@ module Depends = struct
   let ( *>>= ) = bind
   let ( *>>| ) = map
 
-  let path p = dep1s [Dep1.path p]
-  let absolute ~path = dep1s [Dep1.absolute ~path]
-  let alias a = dep1s [Dep1.alias a]
-
   let action a = action_stdout a *>>| fun (_:string) -> ()
 
   let bash ~dir command_string =
     Action.shell ~dir ~prog:"bash" ~args:["-c"; command_string]
-
-  let __contents p =
-    action_stdout (
-      path p *>>= fun () ->
-      return (bash ~dir:(Path.dirname p) (sprintf "cat %s" (Path.basename p)))
-    )
 
   let contents p =
     path p *>>= fun () ->
