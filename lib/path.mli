@@ -1,5 +1,6 @@
 
 open Core.Std
+open Async.Std
 
 module Root : sig
   val discover : unit -> [ `ok | `cant_find_root ]
@@ -60,3 +61,21 @@ module X : sig
   val to_string : t -> string (* leading / for absolute; not for relative *)
   val to_absolute_string : t -> string
 end
+
+module Key : sig
+  type 'a t
+  val create : tag:'a -> 'a t
+  val tag    : 'a t -> 'a
+  val locked : 'a t -> bool
+  val wait   : 'a t -> unit Deferred.t
+end
+
+val get_key : t -> t Key.t
+
+val prevent_overlap
+  :  keys: 'k Key.t list
+  -> ?notify_wait: ('k -> unit)
+  -> ?notify_add:  ('k -> unit)
+  -> ?notify_rem:  ('k -> unit)
+  -> 'a Tenacious.t
+  -> 'a Tenacious.t

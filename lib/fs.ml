@@ -214,7 +214,6 @@ end
 
 module External__Compute_digest : Compute_digest_sig = struct
 
-  let rel_path_semantics = Forker.Rel_path_semantics.New_wrt_working_dir
   let putenv = []
   let prog = "/usr/bin/md5sum"
   let dir = Path.the_root
@@ -222,7 +221,7 @@ module External__Compute_digest : Compute_digest_sig = struct
   let of_file path =
     Effort.track digest_counter (fun () ->
       let args = [Path.X.to_absolute_string path] in
-      let request = Forker.Request.create ~rel_path_semantics ~putenv ~dir ~prog ~args in
+      let request = Forker.Request.create ~putenv ~dir ~prog ~args in
       Forker.run request >>= fun {Forker.Reply. stdout;stderr=_;outcome} ->
       match outcome with
       | `error s -> return (Error (Error.of_string s))
@@ -555,6 +554,7 @@ end = struct
       | `file -> t.file_watch_cache
       | `dir -> t.dir_watch_cache
     in
+    Tenacious.use
     (match (Hashtbl.find cache path) with
     | Some tenacious -> tenacious
     | None ->
@@ -572,8 +572,7 @@ end = struct
       in
       let tenacious = Tenacious.reify tenacious in
       Hashtbl.add_exn cache ~key:path ~data:tenacious;
-      tenacious
-     :> _ Tenacious.t)
+      tenacious)
 
 end
 
@@ -723,7 +722,7 @@ end = struct
               );
               Tenacious.return (`listing new_listing)
     in
-    Tenacious.((reify tenacious :> _ t))
+    Tenacious.(use (reify tenacious))
 
 
 end
@@ -791,13 +790,13 @@ end = struct
   }
 
   let digest_file t dp sm ~file =
+    Tenacious.use
     (match (Hashtbl.find t.cache file) with
     | Some tenacious -> tenacious
     | None ->
       let tenacious = Tenacious.reify (Persist.digest_file dp sm ~file) in
       Hashtbl.add_exn t.cache ~key:file ~data:tenacious;
-      tenacious
-    :> _ Tenacious.t)
+      tenacious)
 
   let create () = {
     cache = Path.X.Table.create ();
@@ -829,13 +828,13 @@ end = struct
   }
 
   let list_dir t dp sm ~dir =
+    Tenacious.use
     (match (Hashtbl.find t.cache dir) with
     | Some tenacious -> tenacious
     | None ->
       let tenacious = Tenacious.reify (Persist.list_dir dp sm ~dir) in
       Hashtbl.add_exn t.cache ~key:dir ~data:tenacious;
-      tenacious
-    :> _ Tenacious.t)
+      tenacious)
 
   let create () = {
     cache = Path.Table.create ();
@@ -922,7 +921,7 @@ end = struct
       Tenacious.return x
 
   let exec glob lm per sm =
-    (Tenacious.reify (Tenacious.lift (fun () ->
+    Tenacious.lift (fun () ->
       let my_glass =
         Heart.Glass.create ~desc:(to_string glob)
       in
@@ -940,7 +939,7 @@ end = struct
       loop heart;
       let my_heart = Heart.of_glass my_glass in
       (res, my_heart)
-    )) :> _ Tenacious.t)
+    )
 
 end
 
@@ -969,13 +968,13 @@ end = struct
   }
 
   let list_glob t lm per sm glob =
+    Tenacious.use
     (match (Hashtbl.find t.cache glob) with
     | Some tenacious -> tenacious
     | None ->
       let tenacious = Tenacious.reify (Glob.exec glob lm per sm) in
       Hashtbl.add_exn t.cache ~key:glob ~data:tenacious;
-      tenacious
-    :> _ Tenacious.t)
+      tenacious)
 
   let create () = {
     cache = Glob.Table.create ();
@@ -1045,22 +1044,17 @@ module Fs : sig
     Glob.t ->
     Listing_result.t Tenacious.t
 
-  val active_targets : t -> unit Tenacious.node Path.Table.t
-
   val watch_sync_file : t -> path:string -> Heart.t Deferred.t
 
 end = struct
 
   type t = {
     watcher : Watcher.t;
-    active_targets : unit Tenacious.node Path.Table.t;
     memo : Memo.t;
     persist : Persist.t;
   }
 
   let create persist =
-
-    let active_targets = Path.Table.create () in
 
     let ignore ~path =
       match (Path.create_from_absolute path) with
@@ -1076,19 +1070,17 @@ end = struct
       ||
       match (Path.create_from_absolute path) with
       | None -> false
-      | Some path -> Hashtbl.mem active_targets path
+      | Some path -> Path.Key.locked (Path.get_key path) 
     in
 
     Watcher.create ~ignore ~expect >>= fun watcher ->
     let memo = Memo.create watcher in
-    let t = { watcher; active_targets; memo; persist; } in
+    let t = { watcher; memo; persist; } in
     return t
 
   let digest_file t ~file = Memo.digest_file t.memo t.persist ~file
 
   let list_glob t glob = Memo.list_glob t.memo t.persist glob
-
-  let active_targets t = t.active_targets
 
   let watch_sync_file t ~path =
     Watcher.watch_file_or_dir t.watcher ~what:`file ~path ~desc:path
@@ -1148,7 +1140,7 @@ let sync_inotify_delivery
   fun t ~sync_contents tenacious ->
     let u1 = genU1 () in
     let genU2 = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-    (Tenacious.reify (Tenacious.lift (fun () ->
+    Tenacious.lift (fun () ->
       let u2 = genU2 () in
       let path = sprintf "/tmp/jenga-%s-%d-%d.sync" pid_string u1 u2 in
 
@@ -1188,5 +1180,5 @@ let sync_inotify_delivery
 
       (* Now we are synchronised! *)
       return res
-    )) :> _ Tenacious.t)
+    )
 

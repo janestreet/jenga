@@ -36,18 +36,8 @@ open Async.Std
    longer required.
 *)
 
-type 'a v = ('a * Heart.t) option
-
-
-module type REIFIABLE = sig
-  type ('a,-'b) t'
-  type 'a t = ('a,[`t]) t'
-  type 'a node = ('a,[`t|`node]) t'
-end
-module Reifiable (S : sig type ('a,-'b) t' end) : REIFIABLE
-          with type ('a,'b) t' = ('a,'b) S.t'
-
-include REIFIABLE
+type 'a t
+type 'a node
 
 (* lift/exec
    Unlike the cancelable versions below, these DON'T have the nice semantic equality:
@@ -61,6 +51,12 @@ include REIFIABLE
 val exec : 'a t -> ('a * Heart.t) Deferred.t
 val lift : (unit -> ('a * Heart.t) Deferred.t) -> 'a t
 
+val with_tenacious
+  :  'a t
+  ->  f:( cancel:Heart.t
+     -> (cancel:Heart.t -> ('a * Heart.t) option Deferred.t)
+     -> ('b * Heart.t) option Deferred.t)
+  -> 'b t
 
 (* standard combinators *)
 
@@ -68,10 +64,8 @@ val return : 'a -> 'a t
 val map    : 'a t -> f:('a -> 'b) -> 'b t
 val bind   : 'a t -> ('a -> 'b t) -> 'b t
 val all    : 'a t list -> 'a list t
-val reify : ('a,_) t' -> 'a node
-val use   : ('a,_) t' -> 'a t
-(* val filter : 'a t -> f:('a -> 'a -> bool) -> 'a t *)
-(* val defer : 'a Deferred.t t -> 'a t *)
+val reify  : 'a t -> 'a node
+val use    : 'a node -> 'a t
 
 (*
   lift_cancelable / exec_cancelable
@@ -91,21 +85,11 @@ val use   : ('a,_) t' -> 'a t
   The caller MAY assume the result will only be [None] if he cancels.
 *)
 
-val exec_cancelable : 'a t -> cancel:Heart.t -> 'a v Deferred.t
-val lift_cancelable :        (cancel:Heart.t -> 'a v Deferred.t) -> 'a t
+val exec_cancelable : 'a t -> cancel:Heart.t -> ('a * Heart.t) option Deferred.t
+val lift_cancelable :        (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> 'a t
 
 
 (* non primitive ops... *)
 
-val before_redo : 'a t -> f:(unit -> unit) -> 'a t
 val all_unit : unit t list -> unit t
 
-(* Prevent overlapping tenacious execution *)
-val prevent_overlap :
-  table : ('key, 'a node) Hashtbl.t ->
-  keys: 'key list ->
-  ?notify_wait: ('key -> unit) ->
-  ?notify_add: ('key -> unit) ->
-  ?notify_rem: ('key -> unit) ->
-  'a node ->
-  'a t

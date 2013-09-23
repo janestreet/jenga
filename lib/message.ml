@@ -162,10 +162,16 @@ module Q = struct
     | _
       -> false
 
-  let escape_special_chars s =
+  (*let escape_special_chars s =
     String.concat_map s ~f:(fun c ->
       if is_special_char_to_bash c then sprintf "\\%c" c else Char.to_string c
-    )
+    )*)
+
+  let shell_escape s =
+    "'" ^ String.concat_map s ~f:(function
+    | '\'' -> "'\\''"
+    | c -> String.make 1 c
+    ) ^ "'"
 
   let quote_arg_prevent_bash_interpretation s =
     (* quote a string (if necessary) to prevent interpretation of any chars which have a
@@ -174,7 +180,7 @@ module Q = struct
     then
       if String.contains s '\''
       (* already contains single-quotes; quote using backslash escaping *)
-      then escape_special_chars s
+      then shell_escape s
       (* no embedded single quotes; just wrap with single quotes *)
       else sprintf "'%s'" s
     else
@@ -211,7 +217,7 @@ let pretty_span span =
   else if Int.(parts.P.sec > 0) then  sprintf     "%d.%03ds"   parts.P.sec parts.P.ms
   else                                sprintf        "%dms"                parts.P.ms
 
-let prety_mem_usage =
+let pretty_mem_usage =
   let words_per_kb = 1024 / 8 in
   fun () ->
     let stat = Gc.stat () in
@@ -314,11 +320,11 @@ let omake_style_logger config event =
     )
   | Event.Build_done (duration,`u u,total,s) ->
     jput "%d/%d targets are up to date" total total;
-    jput "done (#%d, %s, %s, %s) -- HURRAH" u (pretty_span duration) (prety_mem_usage()) s
+    jput "done (#%d, %s, %s, %s) -- HURRAH" u (pretty_span duration) (pretty_mem_usage()) s
 
   | Event.Build_failed (duration, `u u,(num,den),s) -> (
     jput "%d/%d targets are up to date" num den;
-    jput "failed (#%d, %s, %s, %s)" u (pretty_span duration) (prety_mem_usage()) s;
+    jput "failed (#%d, %s, %s, %s)" u (pretty_span duration) (pretty_mem_usage()) s;
   )
 
   | Event.Progress (num,den) -> (

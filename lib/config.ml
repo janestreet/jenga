@@ -20,7 +20,6 @@ type t = {
   debug : bool;
   debug_discovered_graph : bool;
   time : bool;
-  full_gc_when_build_done : bool;
   sequential_deps : bool;
   show_sensitized : bool;
   delay_for_dev : Time.Span.t option;

@@ -68,5 +68,4 @@ val digest_file : t -> file:Path.X.t -> Digest_result.t Tenacious.t
 val list_glob : t -> Glob.t -> Listing_result.t Tenacious.t
 val ensure_directory : t -> dir:Path.X.t -> Ensure_directory_result.t Tenacious.t
 
-val active_targets : t -> unit Tenacious.node Path.Table.t
 val sync_inotify_delivery : t -> sync_contents:string -> 'a Tenacious.t -> 'a Tenacious.t

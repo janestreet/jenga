@@ -210,3 +210,67 @@ module X = struct
 end
 
 include Rel
+
+open Async.Std
+
+(* Prevent overlapping executions on a specific path *)
+module Key = struct
+  type 'a t = {tag: 'a; mutable cell: unit Deferred.t}
+
+  let create ~tag = {tag; cell = Deferred.unit}
+  let tag t = t.tag
+  
+  let locked t = not (Deferred.is_determined t.cell)
+  
+  let wait t = t.cell
+end
+
+let prevent_overlap
+    : (
+      keys: 'k Key.t list ->
+      ?notify_wait: ('k -> unit) ->
+      ?notify_add:  ('k -> unit) ->
+      ?notify_rem:  ('k -> unit) ->
+      'a Tenacious.t ->
+      'a Tenacious.t
+    ) =
+  fun ~keys 
+    ?(notify_wait = ignore)
+    ?(notify_add  = ignore) 
+    ?notify_rem
+    tenacious ->
+  let ivar = Ivar.create () in
+  let cell = Ivar.read ivar in
+  let wait_for_key key = 
+    if Key.locked key
+    then (notify_wait key.Key.tag; Some (Key.wait key))
+    else None
+  in
+  let acquire_key key =
+    (* Can't acquire a locked key *)
+    assert (not (Key.locked key));
+    key.Key.cell <- cell;
+    notify_add key.Key.tag 
+  in
+  let rec acquire () =
+    match List.rev_filter_map keys ~f:wait_for_key with
+    | [] ->
+      List.iter ~f:acquire_key keys;
+      Deferred.unit
+    | defer ->
+      Deferred.all_unit defer >>= acquire
+  in
+  let release result = 
+    Option.iter notify_rem ~f:(fun f -> List.iter keys
+                                ~f:(fun key -> f (Key.tag key)));
+    Ivar.fill ivar ();
+    result
+  in
+  Tenacious.with_tenacious tenacious ~f:(fun ~cancel sample ->
+    acquire () >>= fun () -> sample ~cancel >>| release)
+
+let get_key =
+  let tenacious_keys = Weak_hashtbl.create hashable in
+  fun t ->
+    let default () = Heap_block.create_exn (Key.create ~tag:t) in
+    Heap_block.value (Weak_hashtbl.find_or_add tenacious_keys t ~default)

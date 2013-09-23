@@ -132,12 +132,16 @@ module Rule_generator = struct
 
 end
 
+(* This versioning pre-dates idea for versioning of entire API *)
+module Version = struct type t = V_2013_07_09 end
+
 module Env = struct
 
   type t = Description.Env.t
 
   let create
-      ?version ?putenv ?command_lookup_path ?action ?scan ?build_begin ?build_end schemes
+      ~version:Version.V_2013_07_09
+      ?putenv ?command_lookup_path ?action ?scan ?build_begin ?build_end schemes
       =
 
     let () =
@@ -153,12 +157,10 @@ module Env = struct
     in
 
     Description.Env.create
-      ?version ?putenv ?command_lookup_path
+      ?putenv ?command_lookup_path
       ?build_begin ?build_end schemes
 
 end
-
-module Version = Version
 
 let verbose() = Config.verbose (For_user.config ())
 
@@ -168,20 +170,17 @@ let load_sexps_for_jenga = For_user.load_sexps_for_jenga
 exception Run_now_of_internal_action_not_supported
 exception Non_zero_status_from_action_run_now of Action.t
 
-
 let run_action_now_output ~output action =
   match Action.case action with
   | `iaction _ -> raise Run_now_of_internal_action_not_supported
   | `xaction xaction ->
     let config = For_user.config() in
     let need = "run_now" in
-    let rel_path_semantics = Forker.Rel_path_semantics.New_wrt_working_dir in
     let putenv = [] in
-    Job.run ~config ~need ~rel_path_semantics ~putenv ~xaction ~output >>= function
+    Job.run ~config ~need ~putenv ~xaction ~output >>= function
     | Error `non_zero_status     -> raise (Non_zero_status_from_action_run_now action)
     | Error (`other_error exn)   -> raise exn
     | Ok x                       -> Deferred.return x
-
 
 let run_action_now =
   run_action_now_output ~output:Job.Output.ignore

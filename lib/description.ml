@@ -114,17 +114,6 @@ module Action = struct
   let shell ~dir ~prog ~args = X (Xaction.shell ~dir ~prog ~args)
   let internal ~tag ~func = I (Iaction.create ~tag ~func)
 
-  (* non primitive *)
-
-  let bash ~dir command_string =
-    shell ~dir ~prog:"bash" ~args:["-c"; command_string]
-
-  let write_string string ~target = (* should be build in *)
-    bash ~dir:(Path.dirname target) (
-      (* quotes wont work if string contains quotes *)
-      sprintf "echo '%s' > %s" string (Path.basename target)
-    )
-
 end
 
 module Depends = struct
@@ -142,6 +131,7 @@ module Depends = struct
 
   let return x = Return x
   let bind t f = Bind (t,f)
+
   let all ts = All ts
 
   let path p = Path p
@@ -159,6 +149,15 @@ module Depends = struct
 
   let ( *>>= ) = bind
   let ( *>>| ) = map
+
+  let both : ('a t -> 'b t -> ('a * 'b) t) =
+    fun a b ->
+      all [
+        (a *>>| fun a -> `a a);
+        (b *>>| fun b -> `b b);
+      ] *>>| function
+      | [`a a; `b b] -> (a,b)
+      | _ -> assert false
 
   let action a = action_stdout a *>>| fun (_:string) -> ()
 
@@ -275,7 +274,6 @@ end
 module Env = struct
 
   type t = {
-    version:Version.t;
     putenv:(string * string) list;
     command_lookup_path : [`Replace of string list | `Extend of string list] option;
     schemes : (Pattern.t * Rule_scheme.t option) list;
@@ -284,14 +282,12 @@ module Env = struct
   }
 
   let create
-      ?(version=Version.Pre_versioning)
       ?(putenv=[])
       ?command_lookup_path
       ?(build_begin=(fun () -> Deferred.return ()))
       ?(build_end=(fun () -> Deferred.return ()))
       schemes =
     {
-      version;
       putenv;
       command_lookup_path;
       schemes =

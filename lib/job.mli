@@ -25,7 +25,6 @@ end
 val run :
   config:Config.t ->
   need:string ->
-  rel_path_semantics:Forker.Rel_path_semantics.t ->
   putenv : (string * string) list ->
   xaction : Description.Xaction.t ->
   output : 'a Output.t ->

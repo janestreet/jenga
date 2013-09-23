@@ -35,9 +35,16 @@ let go ~root_dir progress =
         )
       )
   in
+  let dump_progress_state =
+    Rpc.Rpc.implement Rpc_intf.dump_progress_state (fun () () ->
+      Build.Progress.dump progress;
+      Deferred.unit
+    )
+  in
   let implementations =
     Rpc.Implementations.create ~on_unknown_rpc:`Ignore ~implementations: [
       progress_stream;
+      dump_progress_state;
     ]
   in
   match implementations with

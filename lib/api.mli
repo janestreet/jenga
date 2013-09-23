@@ -42,8 +42,6 @@ module Action : sig
   type t
   val internal : Sexp.t -> t
   val shell : dir:Path.t -> prog:string -> args:string list -> t
-  val bash : dir:Path.t -> string -> t
-  val write_string : string -> target:Path.t -> t
 end
 
 module Scanner : sig
@@ -106,17 +104,13 @@ module Rule_scheme : sig
   val create : tag:string -> (dir:Path.t -> Rule_generator.t) -> t
 end
 
-module Version : sig
-   (* This Versioning pre-dates idea for versioning of entire API *)
-  type t =
-  | Pre_versioning
-  | V_2013_07_09
-end
+(* This versioning pre-dates idea for versioning of entire API *)
+module Version : sig type t = V_2013_07_09 end
 
 module Env : sig
   type t = Description.Env.t
   val create :
-    ?version:Version.t ->
+    version:Version.t ->
     ?putenv:(string * string) list ->
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?action : (Sexp.t -> unit Deferred.t) ->

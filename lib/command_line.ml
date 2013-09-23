@@ -121,11 +121,6 @@ let time =
   +> Spec.flag "time" Spec.no_arg
     ~doc:" prefix all messages with the time (since the build started)"
 
-let full_gc_when_build_done =
-  Spec.step (fun m x -> m ~full_gc_when_build_done:x)
-  +> Spec.flag "full-gc-when-build-done" ~aliases:["gc"] Spec.no_arg
-    ~doc:" force full gc when build done/failed, for better memory report"
-
 let sequential_deps =
   Spec.step (fun m x -> m ~sequential_deps:x)
   +> Spec.flag "sequential-deps" Spec.no_arg
@@ -198,7 +193,6 @@ let go_command =
     ++ debug
     ++ debug_discovered_graph
     ++ time
-    ++ full_gc_when_build_done
     ++ sequential_deps
     ++ show_sensitized
     ++ delay_for_dev
@@ -225,7 +219,6 @@ let go_command =
       ~show_checked ~show_considering ~show_reconsidering ~show_status_all
       ~quiet ~debug ~debug_discovered_graph
       ~time
-      ~full_gc_when_build_done
       ~sequential_deps ~show_sensitized
       ~delay_for_dev ~report_long_cycle_times
       ~avoid_target_count_bug_very_slow
@@ -253,7 +246,6 @@ let go_command =
           debug;
           debug_discovered_graph;
           time;
-          full_gc_when_build_done;
           sequential_deps;
           show_sensitized;
           delay_for_dev = Option.map delay_for_dev ~f:(fun x -> sec (float x));

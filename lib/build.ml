@@ -93,7 +93,6 @@ module Env1 : sig
 
   type t
   val of_env : Env.t ->  [ `ok of t | `dups of scheme_id list ]
-  val rel_path_semantics : t -> Forker.Rel_path_semantics.t
   val putenv : t -> (string * string) list
   val lookup_gen_key : t -> Goal.t -> Gen_key.t option
   val run_generator_scheme : t -> Gen_key.t -> (Rule_generator.t,exn) Result.t
@@ -103,7 +102,6 @@ module Env1 : sig
 end = struct
 
   type t = {
-    version : Version.t;
     putenv : (string * string) list;
     lookup_gen_key : Goal.t -> Gen_key.t option;
     run_generator_scheme : Gen_key.t -> (Rule_generator.t,exn) Result.t;
@@ -111,18 +109,11 @@ end = struct
     build_end : unit -> unit Deferred.t;
   } with fields
 
-  let rel_path_semantics t =
-    match t.version with
-    | Version.Pre_versioning
-      -> Forker.Rel_path_semantics.Old_wrt_repo_root
-    | Version.V_2013_07_09
-      -> Forker.Rel_path_semantics.New_wrt_working_dir
-
   let build_begin t = t.build_begin ()
   let build_end t = t.build_end ()
 
   let of_env env =
-    let {Env. version; putenv; command_lookup_path;
+    let {Env. putenv; command_lookup_path;
          build_begin; build_end;
          schemes} = env in
 
@@ -214,7 +205,6 @@ end = struct
     match dups with | _::_ -> `dups dups
     | [] ->
       `ok {
-        version;
         putenv;
         lookup_gen_key;
         run_generator_scheme;
@@ -644,8 +634,8 @@ module Progress : sig
   val set_status : t -> key:Goal.t -> data:Status.t -> unit
   val mask_unreachable : t -> DG.t -> unit
   val message_errors : t -> unit
-  val message_everything : t -> unit
   val snap : t -> Mon.Progress.t
+  val dump : t -> unit
 
 end = struct
 
@@ -699,14 +689,31 @@ end = struct
           (Reason.to_string_one_line reason)
     )
 
-  let message_everything t =
+  let is_going_still =
+    Status.(
+      function
+      | Checking
+      | Blocked
+      | Jwait
+      | Running
+      | Usercode -> true
+      | Built _
+      | Error _ -> false
+    )
+
+  let dump t =
+    Message.message "dumping working/blocked...";
     Hashtbl.iter (t.status) ~f:(fun ~key:goal ~data:status ->
       let masked = Hash_set.mem t.mask goal in
-      Message.message "(everything) %s: %s%s"
-        (Goal.to_string goal)
-        (Status.to_string_one_line status)
-        (if masked then " (MASKED)" else "")
-    )
+      if is_going_still status then (
+        Message.message "- %s%s %s"
+          (if masked then "(MASKED) " else "")
+          (Status.to_string_one_line status)
+          (Goal.to_string goal)
+      )
+    );
+    Message.message "dumping working/blocked...done";
+    ()
 
   let snap t =
     let checking = ref 0 in
@@ -759,13 +766,13 @@ end
 ----------------------------------------------------------------------*)
 
 module Builder : sig (* layer error monad within tenacious monad *)
-  include Tenacious.REIFIABLE
+  type 'a t
+  type 'a node
 
   val wrap : ('a, Reason.t) Result.t Tenacious.t -> 'a t
   val expose : 'a t -> ('a, Reason.t) Result.t Tenacious.t
 
   val of_tenacious : 'a Tenacious.t -> 'a t
-  val expose_unit : 'a t -> unit Tenacious.t
 
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
@@ -774,6 +781,7 @@ module Builder : sig (* layer error monad within tenacious monad *)
   val error : Reason.t -> 'a t
 
   val reify : 'a t -> 'a node
+  val use : 'a node -> 'a t
 
   val for_all_without_errors :
     'a list -> f:('a -> 'b t) -> 'b list option t
@@ -787,22 +795,17 @@ module Builder : sig (* layer error monad within tenacious monad *)
 
 end = struct
 
-  include Tenacious.Reifiable(struct
-    type ('a,'b) t' = ('a, Reason.t) Result.t Tenacious.t
-  end)
+  type 'a t = ('a, Reason.t) Result.t Tenacious.t
+  type 'a node = ('a, Reason.t) Result.t Tenacious.node
 
   let wrap t = t
   let expose t = t
 
-  let reify x = Tenacious.((reify x :> _ t))
+  let reify = Tenacious.reify
+  let use = Tenacious.use
 
   let of_tenacious tenacious =
-    Tenacious.bind tenacious (fun x ->
-      Tenacious.return (Ok x)
-    )
-
-  let expose_unit t =
-    Tenacious.bind t (fun _ -> Tenacious.return ())
+    Tenacious.map tenacious ~f:(fun x -> Ok x)
 
   let return x = Tenacious.return (Ok x)
 
@@ -828,9 +831,8 @@ end = struct
     in loop [] errs
 
   let for_all_without_errors xs ~f =
-    Tenacious.bind (Tenacious.all (List.map xs ~f)) (
-      fun ys -> return (without_errors ys)
-    )
+    Tenacious.map (Tenacious.all (List.map xs ~f))
+      ~f:(fun ys -> Ok (without_errors ys))
 
   let of_deferred f =
     Tenacious.lift (fun () ->
@@ -838,18 +840,28 @@ end = struct
     )
 
   let desensitize t = (* if not error *)
-    Tenacious.lift_cancelable (fun ~cancel ->
-      Deferred.map (Tenacious.exec_cancelable ~cancel t)
-      ~f:(function None -> None
-          | Some (ore,heart) -> match ore with
-             | Error e -> Some (Error e, heart)
-             | Ok x -> Some (Ok (x,heart), Heart.unbreakable)))
+    let f ~cancel sample =
+      sample ~cancel >>| function
+      | None -> None
+      | Some (Error e, heart) ->
+        Some (Error e, heart)
+      | Some (Ok x, heart) ->
+        Some (Ok (x,heart), Heart.unbreakable)
+    in
+    Tenacious.with_tenacious t ~f
 
   let sensitize heart =
     Tenacious.lift (fun () -> Deferred.return (Ok (), heart))
 
-  let before_redo = Tenacious.before_redo
-
+  let before_redo t ~f =
+    let first_time = ref true in
+    let hook () =
+      if !first_time
+      then first_time := false
+      else f ()
+    in
+    let f ~cancel sample = hook (); sample ~cancel in
+    use (reify (Tenacious.with_tenacious t ~f))
 end
 
 let return   = Builder.return
@@ -1171,12 +1183,11 @@ let run_action_with_message :
          but we really DONT want every command to be sensitize to jengaroot
          (its a compromise, but a necessary one!)
       *)
-      let rel_path_semantics = Env1.rel_path_semantics env1 in
       let putenv = Env1.putenv env1 in
       Builder.of_deferred (fun () ->
         enqueue_external_job t (fun () ->
           message();
-          Job.run ~config:t.config ~need ~rel_path_semantics ~putenv ~xaction ~output
+          Job.run ~config:t.config ~need ~putenv ~xaction ~output
         )
       ) *>>= function
       | Ok x                                -> return x
@@ -1249,13 +1260,13 @@ let jenga_root : (t -> Env1.t  Builder.t) =
      - The root has no deps, so there is no chance of cycles,
   *)
   fun t ->
+    Builder.use
     (match !(memo_root t) with
     | Some builder  -> builder
     | None ->
       let builder = Builder.reify (jenga_root t) in
       memo_root t := Some builder;
-      builder
-    :> _ Builder.t)
+      builder)
 
 
 (*----------------------------------------------------------------------
@@ -1270,14 +1281,8 @@ let share_builder :
     ) =
   (* simpler kind of sharing - no new nodes in discovered_graph *)
   fun ~key ~memo ~f ->
-    (match (Hashtbl.find memo key) with
-    | Some builder -> builder
-    | None ->
-      let builder = Builder.reify (f ()) in
-      (* we use add_exn, because each key will be memoized exactly once *)
-      Hashtbl.add_exn memo ~key ~data:builder;
-      builder
-    :> _ Builder.t)
+    let default () = Builder.reify (f ()) in
+    Builder.use (Hashtbl.find_or_add memo key ~default)
 
 
 let share_and_check_for_cycles :
@@ -1300,6 +1305,7 @@ let share_and_check_for_cycles :
      'b Builder.t
     ) =
   fun t ~key ~memo ~item ~f ->
+    Builder.use
     (match (Hashtbl.find memo key) with
     | Some (builder,node) ->
       begin
@@ -1323,8 +1329,7 @@ let share_and_check_for_cycles :
       let builder = Builder.reify builder in
       (* we use add_exn, because each key will be memoized exactly once *)
       Hashtbl.add_exn memo ~key ~data:(builder,t.node);
-      builder
-    :> _ Builder.t)
+      builder)
 
 
 let run_action_for_stdout_if_necessary
@@ -1495,18 +1500,16 @@ let check_targets :
 
 
 let prevent_action_overlap
-    : (Fs.t -> targets:Path.t list -> unit Builder.t -> unit Builder.t) =
+    : (targets:Path.t list -> unit Builder.t -> unit Builder.t) =
   (* Prevent running overlapping actions for the same targets *)
-  fun fs ~targets builder ->
-    let builder = Builder.((reify builder :> _ t)) in
-    Builder.of_tenacious (
-      Tenacious.prevent_overlap
-        ~table:(Fs.active_targets fs)
-        ~keys:targets
-        ~notify_wait:(fun key ->
-          Message.trace "waiting for action to complete for: %s"
+  fun ~targets builder ->
+    Builder.wrap (
+      Path.prevent_overlap
+        ~keys:(List.map ~f:Path.get_key targets)
+        (*~notify_wait:(fun key ->
+          Message.message "waiting for action to complete for: %s"
             (Path.to_string key);
-        )
+        )*)
         (*~notify_add:(fun target ->
           Message.message "target: %s, SET active" (Path.to_string target);
         )
@@ -1514,9 +1517,8 @@ let prevent_action_overlap
           Message.message "target: %s, RM active" (Path.to_string target);
         )*)
         (* FIXME: Useless reification? *)
-        (Tenacious.reify (Builder.expose_unit builder))
-    ) *>>= fun () ->
-    builder
+        (Builder.expose builder)
+    )
 
 
 let build_target_rule :
@@ -1538,7 +1540,7 @@ let build_target_rule :
     jenga_root t *>>= fun env1 ->
     let action_proxy = Action_proxy.create action in
     let run_and_cache rr =
-      prevent_action_overlap t.fs ~targets (
+      prevent_action_overlap ~targets (
         run_action_for_targets t rr env1 action action_proxy ~targets ~need
       ) *>>= fun () ->
       check_targets t targets *>>= function
@@ -1989,6 +1991,12 @@ let watch_for_cycles ~cycle_found ~fin dg =
   build_once
 ----------------------------------------------------------------------*)
 
+let compact_zero_overhead () =
+  let prev_space_overhead = (Gc.get()).Gc.Control.space_overhead in
+  Gc.tune ~space_overhead:0 ();
+  Gc.compact();
+  Gc.tune ~space_overhead:prev_space_overhead ()
+
 let build_once :
     (Config.t -> DG.t -> Progress.t -> unit Tenacious.t -> (Heart.t * int) Deferred.t) =
   (* Make a single build using the top level tenacious builder
@@ -2011,9 +2019,19 @@ let build_once :
     let effort_string = Effort.Snapped.to_string (snap_all_effort()) in
 
     let () =
-      if Config.full_gc_when_build_done config then (
-        Message.message "GC.full_major...";
-        Gc.full_major()
+      (* NO point doing the GC unless we are in polling mode *)
+      if Config.poll_forever config then (
+        Gc.full_major();
+        let percentage_live =
+          let stat = Gc.stat () in
+          let live = stat.Gc.Stat.live_words in
+          let heap = stat.Gc.Stat.heap_words in
+          Float.to_int (100. *. float live /. float heap)
+        in
+        if Int.(percentage_live < 80) then (
+          Message.message "GC.compacting...";
+          compact_zero_overhead();
+        )
       )
     in
     let exit_code =
@@ -2029,9 +2047,9 @@ let build_once :
     in
     let quiet = Config.quiet config in
     if not quiet then (
-      if Config.show_status_all config
+      (*if Config.show_status_all config
       then Progress.message_everything progress
-      else Progress.message_errors progress
+      else *)Progress.message_errors progress
     );
     heart, exit_code
 

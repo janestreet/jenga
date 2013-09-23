@@ -2,20 +2,14 @@
 open Core.Std
 open Async.Std
 
-module Rel_path_semantics = struct
-  type t = Old_wrt_repo_root | New_wrt_working_dir
-end
-
 module Request = struct
   type t = {
-    rel_path_semantics : Rel_path_semantics.t;
     putenv : (string * string) list;
     dir : Path.t;
     prog : string;
     args : string list;
   }
-  let create ~rel_path_semantics ~putenv ~dir ~prog ~args =
-    {rel_path_semantics; putenv; dir; prog; args}
+  let create ~putenv ~dir ~prog ~args = {putenv; dir; prog; args}
 end
 
 module Reply = struct
@@ -30,24 +24,11 @@ module type Fork_process_sig = sig
   val run : Request.t -> Reply.t Deferred.t
 end
 
-let empty_string = function "" -> true | _ -> false
-let starts_with_slash s =
-  not (empty_string s)
-  && (match (String.get s 0) with | '/' -> true | _-> false)
-let is_rel_path_sting s = String.contains s '/' && not (starts_with_slash s)
-
 module Fork_process : Fork_process_sig = struct
 
-  let run {Request. rel_path_semantics; putenv; dir; prog; args} =
+  let run {Request. putenv; dir; prog; args} =
     List.iter putenv ~f:(fun (key,data) -> Core.Std.Unix.putenv ~key ~data);
     let working_dir = Path.to_absolute_string dir in
-    let prog =
-      match (is_rel_path_sting prog) with false -> prog | true ->
-        match rel_path_semantics with
-        | Rel_path_semantics.New_wrt_working_dir -> prog (* semantics of Async.Process *)
-        | Rel_path_semantics.Old_wrt_repo_root ->
-          (Path.to_absolute_string Path.the_root) ^/ prog
-    in
     Process.create ~working_dir ~prog ~args () >>= function
     | Error error ->
       let exn = Error.to_exn error in

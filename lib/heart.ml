@@ -2,120 +2,155 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
-type state =
-  | Unbreakable
-  | Broken
-  | Fresh
-  | Fragile of (unit -> unit) ref (* This is by far the most common case *)
-  | Fragiles of (unit -> unit) Bag.t
+module Ring : sig
+  type 'a t
+  val root : 'a -> 'a t
+  val extend : 'a t -> 'a -> 'a t
+  val detach : 'a t -> unit
+  val to_list : 'a t -> 'a list
+  val value : 'a t -> 'a
+end = struct
+  type 'a t = {mutable prev: 'a t; value: 'a; mutable next: 'a t}
 
-(* mutable node set to Void to avoid keeping reference to graph of broken nodes *)
-type node = Void | Base of string | Node of h list
-and h = {
+  let root value =
+    let rec t = {prev = t; next = t; value} in
+    t
+
+  let extend t value =
+    let t' = {prev = t.prev; value; next = t} in
+    t.prev.next <- t';
+    t.prev <- t';
+    t'
+
+  let detach t =
+    t.next.prev <- t.prev;
+    t.prev.next <- t.next;
+    t.next <- t;
+    t.prev <- t
+
+  let to_list =
+    let rec aux t t' acc =
+      if phys_equal t t'
+      then t.value :: acc
+      else aux t t'.prev (t'.value :: acc)
+    in
+    fun t -> aux t t.prev []
+
+  let value t = t.value
+end
+ 
+type t = {
   u : int;
-  mutable node : node;
+  desc : string;
   mutable state : state;
 }
+and state =
+  | Unbreakable
+  | Fresh
+  | Fragile of (t Ring.t * t Ring.t Weak.t * (unit -> unit) Ring.t)
+  | Broken
+
+type canceller = (unit -> unit) Ring.t
 
 let create_u =
   let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-  fun ~node -> {
-    u = genU();
-    node;
-    state = Fresh;
-  }
+  fun ~desc -> 
+    {
+      u = genU();
+      desc;
+      state = Fresh;
+    }
 
-let seal h =
-  (match h.node with Node _ -> h.node <- Void | _ -> ());
-  h.state <- Broken
+let no_deps = Weak.create ~len:0
 
-let break h =
-  match h.state with
-  | Unbreakable -> assert false
-  | Broken -> ()
+let fragilize t =
+  match t.state with 
+  | Broken | Unbreakable | Fragile _ -> t
   | Fresh ->
-    seal h
-  | Fragile f ->
-    seal h; !f ()
-  | Fragiles bag ->
-    seal h;
-    let triggers = Bag.to_list bag in
-    Bag.clear bag;
-    List.iter ~f:(fun f -> f ()) triggers
+    t.state <- Fragile (Ring.root t, no_deps, Ring.root ignore);
+    t
 
-let register g ~f =
-  let ignore' = ignore in
-  let fragile g f =
-    let one = ref f in
-    g.state <- Fragile one;
-    Some (fun () -> one := ignore')
-  in
-  let fragiles bag f =
-    let elt = Bag.add bag f in
-    Some (fun () -> if not (Bag.is_empty bag) then Bag.remove bag elt)
-  in
-  match g.state with
+let rec break t =
+  match t.state with
+  | Broken -> ()
+  | Unbreakable -> assert false
+  | Fresh ->
+    t.state <- Broken;
+  | Fragile (deps, rdeps, callbacks) ->
+    let callbacks = Ring.to_list callbacks in
+    let deps = Ring.to_list deps in
+    t.state <- Broken;
+    for i = 0 to Weak.length rdeps - 1 do
+      match Weak.get rdeps i with
+      | None -> ()
+      | Some h -> Ring.detach (Heap_block.value h)
+    done;
+    List.iter deps ~f:break;
+    List.iter callbacks ~f:(fun f -> f ())
+
+let register t ~f =
+  match (fragilize t).state with
+  | Broken      -> f (); None
   | Unbreakable -> None
-  | Broken -> f (); None
-  | Fresh -> fragile g f
-  | Fragile one when phys_equal !one ignore' ->
-    fragile g f
-  | Fragile one ->
-    let bag = Bag.of_list [(fun () -> !one ())] in
-    g.state <- Fragiles bag;
-    fragiles bag f
-  | Fragiles bag ->
-    fragiles bag f
+  | Fresh       -> assert false
+  | Fragile (_deps, _rdeps, callbacks) ->
+    Some (Ring.extend callbacks f)
 
-let link ~child ~parent = register child ~f:(fun () -> break parent)
-
-let is_broken h =
-  match h.state with
+let is_broken t =
+  match t.state with
   | Broken -> true
-  | (Unbreakable | Fresh | Fragile _ | Fragiles _) -> false
+  | Unbreakable | Fresh | Fragile _ -> false
+
+let broken =
+  let g = create_u ~desc:"Broken" in
+  break g; g
+
+let unbreakable =
+  let g = create_u ~desc:"Unbreakable" in
+  g.state <- Unbreakable; g
+
+let create_with_deps ~is_glass ~desc deps =
+  let breakable = function {state = Unbreakable; _} -> false | _ -> true in
+  match List.rev_filter ~f:breakable deps with
+  | [h] when not is_glass -> h
+  | []  when not is_glass -> unbreakable
+  | [] -> create_u ~desc
+  | deps when List.exists ~f:is_broken deps -> broken
+  | deps ->
+    let t = create_u ~desc in
+    let len = List.length deps in
+    let weak = Weak.create ~len in
+    t.state <- Fragile (Ring.root t, weak, Ring.root ignore);
+    List.iteri deps ~f:(fun i dep ->
+      match (fragilize dep).state with
+      | Fragile (root,_rdeps,_callbacks) ->
+        let dep = Ring.extend root t in
+        Weak.set weak i (Heap_block.create dep)
+      | Unbreakable | Broken | Fresh -> assert false
+    );
+    t
 
 module Glass = struct
-  type t = h
-  let create ~desc = create_u ~node:(Base desc)
+  type heart = t
+  type nonrec t = t
+  let create = create_u
+  let create_with_deps deps ~desc = create_with_deps ~is_glass:true ~desc deps
+
   let is_broken = is_broken
   let break = break
-  let desc h = match h.node with | Base desc -> desc | (Void | Node _) -> assert false
+  let desc h = h.desc
 end
 
-type t = h
+let combine2 h1 h2 = create_with_deps ~is_glass:false ~desc:"" [h1;h2]
+let combine hs = create_with_deps ~is_glass:false ~desc:"" hs
 
 let of_glass g = g
 
-let broken =
-  let g = Glass.create ~desc:"Broken" in
-  break g; g
-let unbreakable =
-  let g = Glass.create ~desc:"Unbreakable" in
-  g.state <- Unbreakable; g
-
-let combine2 h1 h2 = match h1, h2 with
-  | {state=Broken;_},_ | _, {state=Broken;_} -> broken
-  | {state=Unbreakable;_},h | h,{state=Unbreakable;_} -> h
-  | h1,h2 ->
-    let g = create_u ~node:(Node [h1;h2]) in
-    ignore (link ~child:h1 ~parent:g);
-    ignore (link ~child:h2 ~parent:g);
-    g
-
-let combine hearts =
-  if List.exists ~f:is_broken hearts then broken
-  else if List.for_all hearts ~f:(phys_equal unbreakable) then unbreakable
-  else
-    let g = create_u ~node:(Node hearts) in
-    List.iter hearts ~f:(fun child -> ignore (link ~child ~parent:g));
-    g
-
 let upon h ~f = register h ~f
 
-type canceller = (unit -> unit) option
-let trigger = function
+let cancel = function
   | None -> ()
-  | Some f -> f ()
+  | Some r -> Ring.detach r
 
 let when_broken h =
   if is_broken h
@@ -125,13 +160,21 @@ let when_broken h =
 let collect pred h =
   let visited = Int.Hash_set.create() in
   let rec walk acc h =
-    if Hash_set.mem visited h.u then acc else (
+    if Hash_set.mem visited h.u
+    then acc
+    else
+      let acc = if pred h then h.desc :: acc else acc in
       Hash_set.add visited h.u;
-      match h.node with
-      | Base who -> if pred h then who :: acc else acc
-      | Node hs -> List.fold_left ~init:acc ~f:walk hs
-      | Void -> acc
-    )
+      match h.state with
+      | Fragile (_deps,rdeps,_callbacks) ->
+        let acc = ref acc in
+        for i = 0 to Weak.length rdeps - 1 do
+          match Weak.get rdeps i with
+          | None -> ()
+          | Some h -> acc := walk !acc (Ring.value (Heap_block.value h))
+        done;
+        !acc
+      | Unbreakable | Broken | Fresh -> acc
   in
   walk [] h
 

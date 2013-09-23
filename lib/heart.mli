@@ -7,11 +7,12 @@ open Async.Std
 *)
 
 type t
-type canceller = (unit -> unit) option
 
 module Glass : sig
+  type heart = t
   type t
   val create : desc:string -> t
+  val create_with_deps : heart list -> desc:string -> t
   val desc : t -> string
   val is_broken : t -> bool
   val break : t -> unit
@@ -22,8 +23,9 @@ val of_glass : Glass.t -> t
 val combine2 : t -> t -> t
 val combine : t list -> t
 
-val upon : t -> f:(unit -> unit) -> canceller
-val trigger : canceller -> unit
+type canceller
+val upon : t -> f:(unit -> unit) -> canceller option
+val cancel : canceller option -> unit
 
 val unbreakable : t
 val is_broken : t -> bool

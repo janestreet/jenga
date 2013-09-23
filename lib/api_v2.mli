@@ -39,9 +39,9 @@ end
 
 module Action : sig
   type t
+  val internal : tag:Sexp.t -> func:(unit -> unit Deferred.t) -> t
   val shell : dir:Path.t -> prog:string -> args:string list -> t
-  val bash : dir:Path.t -> string -> t
-  val write_string : string -> target:Path.t -> t
+  val bash : dir:Path.t -> string -> t (* convenience *)
 end
 
 module Depends : sig (* The jenga monad *)
@@ -49,6 +49,7 @@ module Depends : sig (* The jenga monad *)
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
   val map : 'a t -> ('a -> 'b) -> 'b t
+  val both : 'a t -> 'b t -> ('a * 'b) t
   val all : 'a t list -> 'a list t
   val all_unit : unit t list -> unit t
   val path : Path.t -> unit t
@@ -89,13 +90,13 @@ module Env : sig
     ?build_begin : (unit -> unit Deferred.t) ->
     ?build_end : (unit -> unit Deferred.t) ->
     (string * Scheme.t option) list ->
-    (* odd return type (instead of "t") - matches expected type of setup *)
-    (unit -> t Deferred.t)
-
+    t
 end
 
 val verbose : unit -> bool
 
-(* should these stay? *)
-val load_sexp_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a Depends.t
-val load_sexps_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a list Depends.t
+val run_action_now : Action.t -> unit Deferred.t
+val run_action_now_stdout : Action.t -> string Deferred.t
+
+val load_sexp_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a Deferred.t
+val load_sexps_for_jenga : (Sexp.t -> 'a) -> Path.t -> 'a list Deferred.t

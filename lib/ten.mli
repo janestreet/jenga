@@ -10,9 +10,6 @@ val bind   : 'a t -> ('a -> 'b t) -> 'b t
 val reify  : 'a t -> 'a t
 val all    : 'a t list -> 'a list t
 val stable : 'a t -> 'a t
-
-(*val apply  : ('a -> 'b) t -> 'a t -> 'b t
-val defer  : 'a Deferred.t t -> 'a t
-val of_lazy : 'a t Lazy.t -> 'a t*)
+val with_ten : 'a t -> f:(cancel:Heart.t -> (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> ('b * Heart.t) option Deferred.t) -> 'b t
 
 val sample : 'a t -> cancel:Heart.t -> 'a v Deferred.t

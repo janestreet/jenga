@@ -3,19 +3,7 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
-type 'a v = ('a * Heart.t) option
-
-module type REIFIABLE = sig
-  type ('a,-'b) t'
-  type 'a t = ('a,[`t]) t'
-  type 'a node = ('a,[`t|`node]) t'
-end
-module Reifiable (S : sig type ('a,-'b) t' end) =
-struct
-  include S
-  type 'a t = ('a,[`t]) t'
-  type 'a node = ('a,[`t|`node]) t'
-end
+type 'a v = 'a Ten.v
 
 let (=) = Int.(=)
 let (>) = Int.(>)
@@ -42,14 +30,14 @@ module T = struct
     mutable state : 'a state
   }
 
-  let string_of_res = function
+  (*let string_of_res = function
     | Res_none -> "N"
     | Res_some _ -> "S"
-    | Res_return _ -> "R"
+    | Res_return _ -> "R"*)
 
-  let string_of_state = function
+  (*let string_of_state = function
     | Running _ -> "Running"
-    | Dormant res -> sprintf "Dormant/%s" (string_of_res res)
+    | Dormant res -> sprintf "Dormant/%s" (string_of_res res)*)
 
   let set_state runner state =
     let ok =
@@ -61,10 +49,10 @@ module T = struct
       | Dormant _, Dormant _
         -> false
     in
-    if ok then runner.state <- state else
+    if ok then runner.state <- state else ()
       (* think this is harmless, dont display it to screen *)
-      Message.trace "tenacious: invalid transition, %s -> %s"
-        (string_of_state runner.state) (string_of_state state)
+      (*Message.trace "tenacious: invalid transition, %s -> %s"
+        (string_of_state runner.state) (string_of_state state)*)
 
   let start runner : Heart.Glass.t * 'a res Deferred.t =
     let glass = Heart.Glass.create ~desc:"tenacious/request" in
@@ -278,6 +266,9 @@ module T = struct
         in
         Heart.upon heart check;
         a, Some (Heart.of_glass g))*)
+
+  let with_tenacious t ~f =
+    lift_cancelable (fun ~cancel -> f ~cancel (exec_cancelable t))
 end
 
 (*include T*)
@@ -295,15 +286,18 @@ module type Ten_sig = sig
   val lift_cancelable :        (cancel:Heart.t -> 'a v Deferred.t) -> 'a t
 
   val map : 'a t -> f:('a -> 'b) -> 'b t
-  (*val defer : 'a Deferred.t t -> 'a t*)
   val reify : 'a t -> 'a t
-  (*val filter : 'a t -> f:('a -> 'a -> bool) -> 'a t*)
+  val with_tenacious
+    :  'a t
+    ->  f:(cancel:Heart.t
+       -> (cancel:Heart.t -> ('a * Heart.t) option Deferred.t)
+       -> ('b * Heart.t) option Deferred.t)
+    -> 'b t
 end
 
 
 
 module Ten_dummy = struct
-
   type 'a t = 'a Deferred.t
 
   let return = Deferred.return
@@ -314,30 +308,31 @@ module Ten_dummy = struct
     Deferred.map t ~f:(fun x -> Some (x,Heart.unbreakable))
 
   let lift_cancelable f =
-    f ~cancel:(Heart.of_glass (Heart.Glass.create ~desc:"unbreakable"))
+    f ~cancel:Heart.unbreakable
     >>| function
       | None -> assert false
       | Some (x,_) -> x
 
   let map = Deferred.map
-  (*let defer = Deferred.join*)
   let reify x = x
-(*   let filter x ~f:_ = x *)
+
+  let with_tenacious t ~f =
+    lift_cancelable (fun ~cancel -> f ~cancel (exec_cancelable t))
 end
 
 module Ten_ten = struct
   type 'a t = 'a Ten.t
 
-  let return      = Ten.pure
-  let bind m f    = Ten.stable (Ten.bind m f)
-  let all l       = Ten.reify (Ten.all (List.map ~f:Ten.reify l))
-  let map m ~f    = Ten.map m ~f
-(*   let filter m ~f = Ten.filter (Ten.reify m) ~f *)
-  let reify       = Ten.reify
-  (*let defer       = Ten.defer*)
+  let return   = Ten.pure
+  let bind m f = Ten.bind m f
+  let all l    = Ten.all l
+  let map m ~f = Ten.map m ~f
+  let reify    = Ten.reify
 
-  let exec_cancelable t  = Ten.sample (Ten.stable t)
-  let lift_cancelable f = Ten.reify (Ten.lift f)
+  let exec_cancelable t = Ten.sample t
+  let lift_cancelable f = Ten.lift f
+   
+  let with_tenacious t ~f = Ten.with_ten t ~f
 end
 
 let monad, monad_name =
@@ -348,20 +343,19 @@ let monad, monad_name =
 
 let m =
   match monad with
-  | `Tenacious -> ( module T : Ten_sig )
-  | `Ten       -> ( module Ten_ten : Ten_sig )
+  | `Tenacious -> ( module T         : Ten_sig )
+  | `Ten       -> ( module Ten_ten   : Ten_sig )
   | `Ten_dummy -> ( module Ten_dummy : Ten_sig )
 
 let () =
   match monad_name with
   | None -> ()
-  | Some monad_name-> Printf.eprintf "tenacious monad = %s\n%!" monad_name
+  | Some monad_name -> Printf.eprintf "tenacious monad = %s\n%!" monad_name
 
 module M = ( val m : Ten_sig )
 
 include M
-type ('a,_) t' = 'a t
-type 'a node = ('a,[`t|`node]) t'
+type 'a node = 'a t
 
 let use x = x
 
@@ -389,61 +383,3 @@ let exec t =
   | Some v -> v
 
 let lift f = lift_cancelable (fun ~cancel:_ -> f () >>| Option.some)
-
-
-let before_redo t ~f =
-  let first_time = ref true in
-  lift_cancelable (fun ~cancel ->
-    (if not !first_time then f() else first_time := false);
-    exec_cancelable t ~cancel
-  )
-
-let prevent_overlap
-    : (
-      table : ('key, 'a t) Hashtbl.t ->
-      keys: 'key list ->
-      ?notify_wait: ('key -> unit) ->
-      ?notify_add: ('key -> unit) ->
-      ?notify_rem: ('key -> unit) ->
-      'a node ->
-      'a t
-    ) =
-  (* Prevent overlapping tenacious execution *)
-  fun ~table ~keys
-    ?(notify_wait = fun _ -> ())
-    ?(notify_add = fun _ -> ())
-    ?(notify_rem = fun _ -> ())
-    tenacious ->
-      lift (fun () ->
-        let run() =
-          List.iter keys ~f:(fun key ->
-            notify_add key;
-            Hashtbl.add_exn table ~key ~data:tenacious
-          );
-          exec tenacious >>= fun res ->
-          List.iter keys ~f:(fun key ->
-            notify_rem key;
-            Hashtbl.remove table key
-          );
-          Deferred.return res
-        in
-        let rec maybe_wait_then_run () =
-          match
-            List.filter_map keys ~f:(fun key ->
-              match (Hashtbl.find table key) with
-              | None -> None
-              | Some t_running ->
-                Some (
-                  notify_wait key;
-                  exec t_running >>= fun _ ->
-                  Deferred.return ()
-                )
-            )
-          with
-          | [] -> run ()
-          | xs ->
-            let wait = Deferred.all_unit xs in
-            wait >>= maybe_wait_then_run
-        in
-        maybe_wait_then_run()
-      )

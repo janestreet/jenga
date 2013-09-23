@@ -37,8 +37,6 @@ module Action : sig
   val case : t -> [ `xaction of Xaction.t | `iaction of Iaction.t ]
   val shell : dir:Path.t -> prog:string -> args:string list -> t
   val internal : tag:Sexp.t -> func:(unit -> unit Deferred.t) -> t
-  val bash : dir:Path.t -> string -> t
-  val write_string : string -> target:Path.t -> t
 end
 
 module Depends : sig
@@ -57,6 +55,7 @@ module Depends : sig
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
   val map : 'a t -> ('a -> 'b) -> 'b t
+  val both : 'a t -> 'b t -> ('a * 'b) t
   val all : 'a t list -> 'a list t
   val all_unit : unit t list -> unit t
   val path : Path.t -> unit t
@@ -117,7 +116,6 @@ end
 
 module Env : sig
   type t = {
-    version : Version.t;
     putenv : (string * string) list;
     command_lookup_path : [`Replace of string list | `Extend of string list] option;
     schemes : (Pattern.t * Rule_scheme.t option) list;
@@ -125,7 +123,6 @@ module Env : sig
     build_end : (unit -> unit Deferred.t);
   }
   val create :
-    ?version : Version.t ->
     ?putenv : (string * string) list ->
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?build_begin : (unit -> unit Deferred.t) ->

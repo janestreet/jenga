@@ -33,7 +33,7 @@ end
 
 exception Shutdown
 
-let run ~config ~need ~rel_path_semantics ~putenv ~xaction ~output =
+let run ~config ~need ~putenv ~xaction ~output =
   let {Xaction.dir;prog;args} = xaction in
   let {Output.stdout_expected;get_result;none=_} = output in
   let where = Path.to_string dir in
@@ -46,7 +46,7 @@ let run ~config ~need ~rel_path_semantics ~putenv ~xaction ~output =
     | None -> return ()
     | Some seconds -> Clock.after seconds
     ) >>= fun () ->
-    let request = Forker.Request.create ~rel_path_semantics ~putenv ~dir ~prog ~args in
+    let request = Forker.Request.create ~putenv ~dir ~prog ~args in
     Forker.run request
   ) >>= fun {Forker.Reply. stdout;stderr;outcome} ->
   match Quit.is_quitting() with
