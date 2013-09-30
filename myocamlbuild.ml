@@ -44,6 +44,12 @@ let dispatch = function
           :: (stdlib / "threads")
           :: List.filter ((<>) stdlib) (List.map (fun pkg -> pkg.Findlib.location) deps)
         in
+        let rec dedup l =
+          match l with
+          | [] | [_] -> l
+          | a :: (b :: _ as l) -> if a = b then dedup l else a :: dedup l
+        in
+        let directories = dedup directories in
         (* List of .cmi and .cmxs (for camlp4o.opt): *)
         let cmi_list, cmxs_list =
           List.fold_right
