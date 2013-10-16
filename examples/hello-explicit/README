@@ -1,0 +1,29 @@
+
+NOTE: This example is almost an anti-example; you don't really want to
+be using jenga like this. See other examples, for example "make-style"
+to see how things can be much better!
+
+
+Use jenga to setup a fixed set of rules for a very small example.
+Shows the API functions which construct values of the various types:
+
+   Depends.t
+   Path.t
+   Action.t
+   Rule.t
+   Generator.t
+   Scheme.t
+   Env.t
+
+This is a-typical for how jenga is expected to be used. Normally
+jengaroot.ml would setup rules in a programmatic fashion.
+
+One thing this example does show is that jenga expects a very accurate
+description of the targets & dependencies of each rule...
+
+In this example, we are careful to list .o files as well as .cmx
+
+Also note the difference between the rules which compile hello.ml and
+world.ml - the difference due to the existence of world.mli - so
+world.cmi is a dependency of world.cmx/o - as opposed to being a
+further sibling target, as it is in the case of hello.cmi/cmx/o

@@ -128,6 +128,13 @@ let run ~root_dir ~string_of_mon =
     | `info info ->
       let host = Server_lock.Info.host info in
       let port = Server_lock.Info.port info in
+      let host = if String.(host = Unix.gethostname()) then "localhost" else host in
+      match port with
+      | 0 ->
+        message "%s (jenga running in -no-server mode)" (string_of_last_mon ());
+        retry();
+
+      | _ ->
       let server_name = sprintf "%s:%d" host port in
       let where_to_connect = Tcp.to_host_and_port host port in
       try_with (fun () ->

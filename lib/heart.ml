@@ -38,7 +38,7 @@ end = struct
 
   let value t = t.value
 end
- 
+
 type t = {
   u : int;
   desc : string;
@@ -54,7 +54,7 @@ type canceller = (unit -> unit) Ring.t
 
 let create_u =
   let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-  fun ~desc -> 
+  fun ~desc ->
     {
       u = genU();
       desc;
@@ -64,7 +64,7 @@ let create_u =
 let no_deps = Weak.create ~len:0
 
 let fragilize t =
-  match t.state with 
+  match t.state with
   | Broken | Unbreakable | Fragile _ -> t
   | Fresh ->
     t.state <- Fragile (Ring.root t, no_deps, Ring.root ignore);
@@ -157,7 +157,9 @@ let when_broken h =
   then Deferred.unit
   else Deferred.create (fun ivar -> ignore (register h ~f:(Ivar.fill ivar)))
 
-let collect pred h =
+let _ = Ring.value
+
+(*let collect pred h =
   let visited = Int.Hash_set.create() in
   let rec walk acc h =
     if Hash_set.mem visited h.u
@@ -178,4 +180,4 @@ let collect pred h =
   in
   walk [] h
 
-let to_sensitivity_list = collect (fun _ -> true)
+let to_sensitivity_list = collect (fun _ -> true)*)

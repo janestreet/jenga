@@ -6,7 +6,7 @@ module Info = struct
 
   type t = {
     host : string;
-    port: int;
+    port : int;
   } with sexp,fields
 
   let create ~port =

@@ -2,4 +2,4 @@
 open Core.Std
 open Async.Std
 
-val go : root_dir:string -> Build.Progress.t -> unit Deferred.t
+val go : Config.t -> root_dir:string -> Build.Progress.t -> unit Deferred.t

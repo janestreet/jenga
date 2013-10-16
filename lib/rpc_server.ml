@@ -22,7 +22,7 @@ let make_periodic_pipe_writer span ~aborted ~f =
   );
   return (Ok r)
 
-let go ~root_dir progress =
+let really_go ~root_dir progress =
   let progress_report_span = sec (0.3) in
   let progress_stream =
     Rpc.Pipe_rpc.implement Rpc_intf.progress_stream
@@ -37,7 +37,7 @@ let go ~root_dir progress =
   in
   let dump_progress_state =
     Rpc.Rpc.implement Rpc_intf.dump_progress_state (fun () () ->
-      Build.Progress.dump progress;
+      Message.message "dumping not supported";
       Deferred.unit
     )
   in
@@ -61,3 +61,11 @@ let go ~root_dir progress =
     let port = Tcp.Server.listening_on inet in
     (* write the server lock file - will shutdown it not possible *)
     Server_lock.lock_running_server ~root_dir ~port
+
+let go config ~root_dir progress =
+  if Config.no_server config (* jem will interpret port=0 to mean no server is running *)
+  then Server_lock.lock_running_server ~root_dir ~port:0
+  else really_go ~root_dir progress
+
+
+

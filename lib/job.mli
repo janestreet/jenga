@@ -28,4 +28,9 @@ val run :
   putenv : (string * string) list ->
   xaction : Description.Xaction.t ->
   output : 'a Output.t ->
-  ('a, [ `non_zero_status | `other_error of exn ]) Result.t Deferred.t
+  ('a,
+   [
+   | `non_zero_status of Message.Job_summary.t
+   | `other_error of exn
+   ]
+  ) Result.t Deferred.t

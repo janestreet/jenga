@@ -1,0 +1,90 @@
+
+open Core.Std
+open Async.Std
+open Jenga_lib.Api_v2
+let return = Depends.return
+let ( *>>| ) = Depends.map
+let ( *>>= ) = Depends.bind
+
+let simple_rule ~targets ~deps ~action =
+  Rule.create ~targets (
+    Depends.all_unit deps *>>| fun () ->
+    action)
+
+let bash ~dir command =
+  Action.shell ~dir ~prog:"bash" ~args:["-c"; command]
+
+let file_exists path =
+  (* simple version: wont work if basename contains glob-special chars *)
+  Depends.glob (Glob.create ~dir:(Path.dirname path) (Path.basename path)) *>>| function
+  | [] -> false | _::_ -> true
+
+
+let uncomment s =
+  match String.lsplit2 s ~on:'#' with None -> s | Some (s,_comment) -> s
+
+let non_blank s =
+  match String.strip s with "" -> false | _ -> true
+
+let split_into_non_blank_lines string =
+  List.filter ~f:non_blank (List.map ~f:uncomment (String.split ~on:'\n' string))
+
+let split_into_words string =
+  List.filter ~f:non_blank (String.split ~on:'\ ' string)
+
+let parse_simple_make_format path contents =
+  (* Construct a set of rules from the [contents] of [path]
+     where static rule triples are given in a simple make-stle format..
+
+        target1 target2 : dep1 dep2 dep3  # comments!
+            just-one-action
+  *)
+  let dir = Path.dirname path in
+  let file s = Path.relative ~dir s in
+  let need s = Depends.path (file s) in
+  let err n mes = failwithf "%s, rule# %d : %s"  (Path.to_string path) n mes () in
+  let rec loop n ~acc_targets ~acc_rules = function
+    | [_] -> err n "expected header/command line-pairs"
+    | [] ->
+      Rule.default ~dir (Depends.all_unit (List.map ~f:need acc_targets))
+      :: acc_rules
+    | header::command::rest ->
+      let targets,deps =
+        match String.split header ~on:':' with
+        | [before;after] -> split_into_words before, split_into_words after
+        | _ -> err n "expected exactly one ':' in header line"
+      in
+      let rule =
+        simple_rule
+          ~targets: (List.map ~f:file targets)
+          ~deps:    (List.map ~f:need deps)
+          ~action:  (bash ~dir (String.strip command))
+      in
+      loop (n+1) rest
+        ~acc_targets:(targets @ acc_targets)
+        ~acc_rules:(rule :: acc_rules)
+  in
+  return (loop 1 ~acc_targets:[] ~acc_rules:[] (split_into_non_blank_lines contents))
+
+let make_style_rules path =
+  file_exists path *>>= function
+  | true -> Depends.contents path *>>= parse_simple_make_format path
+  | false -> return []
+
+let recusive_default ~dir =
+  Depends.subdirs ~dir *>>| fun subs -> [
+  Rule.default ~dir (
+    Depends.all_unit (
+      List.map subs ~f:(fun sub -> Depends.alias (Alias.create ~dir:sub "DEFAULT"))))]
+
+let scheme =
+  Scheme.create ~tag:"the-scheme" (fun ~dir ->
+    let path = Path.relative ~dir "make.conf" in
+    Generator.create (
+      Depends.all [
+        make_style_rules path;
+        recusive_default ~dir;
+      ] *>>| List.concat))
+
+let env = Env.create ["**make.conf",None; "**",Some scheme]
+let setup () = Deferred.return env

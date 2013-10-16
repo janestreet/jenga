@@ -513,6 +513,7 @@ module Reason = struct
 
   type t =
   | Shutdown
+  | Error_in_sibling
   | Error_in_deps
   | Digest_error
   | Undigestable                      of Fs.Kind.t
@@ -522,7 +523,7 @@ module Reason = struct
   | No_source_at_abs_path
   | No_rule_or_source
   | Unexpected_directory
-  | Non_zero_status
+  | Non_zero_status                   of Message.Job_summary.t
   | No_directory_for_target           of string
   | Inconsistent_proxies              of Proxy_map.inconsistency
   | Duplicate_scheme_ids              of scheme_id list
@@ -532,10 +533,10 @@ module Reason = struct
   | Rule_failed_to_generate_targets   of Path.t list
   | Usercode_raised                   of exn
   (* | Cycle... *)
-  with sexp_of
 
   let to_string_one_line = function
     | Shutdown                          -> "Shutdown"
+    | Error_in_sibling                  -> "Unable to build sibling target"
     | Error_in_deps                     -> "Unable to build dependencies"
     | Digest_error                      -> "unable to digest file"
     | Glob_error s                      -> sprintf "glob error: %s" s
@@ -544,7 +545,7 @@ module Reason = struct
     | No_source_at_abs_path             -> "No source at absolute path"
     | No_rule_or_source                 -> "No rule or source found for target"
     | Unexpected_directory              -> "Unexpected directory found for target"
-    | Non_zero_status                   -> "External command has non-zero exit code"
+    | Non_zero_status _                 -> "External command has non-zero exit code"
     | No_directory_for_target s         -> sprintf "No directory for target: %s" s
     | Scheme_raised _                   -> "Generator scheme raised exception"
     | Running_job_raised _              -> "Running external job raised exception"
@@ -567,6 +568,7 @@ module Reason = struct
 
   let to_extra_lines = function
     | Shutdown
+    | Error_in_sibling
     | Error_in_deps
     | Digest_error
     | Undigestable _
@@ -576,7 +578,7 @@ module Reason = struct
     | No_rule_or_source
     | No_source_at_abs_path
     | Unexpected_directory
-    | Non_zero_status
+    | Non_zero_status _
     | No_directory_for_target _
     | Duplicate_scheme_ids _
     | Inconsistent_proxies _
@@ -593,7 +595,15 @@ module Reason = struct
 
   let messages ~tag t =
     Message.error "%s: %s" tag (to_string_one_line t);
-    List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s);
+    List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s)
+
+  let message_summary config goal t =
+    Message.error "(summary) %s: %s" (Goal.to_string goal) (to_string_one_line t);
+    if Config.full_error_summary config then (
+      match t with
+      | Non_zero_status summary -> Message.repeat_job_summary summary
+      | _ -> ()
+    )
 
 end
 
@@ -618,102 +628,44 @@ module Status = struct
 
   | Built of What.t
   | Error of Reason.t
-  with sexp_of
-
-  let to_string_one_line = function
-    | Error reason -> Reason.to_string_one_line reason
-    | status -> Sexp.to_string (sexp_of_t status)
 
 end
 
 module Progress : sig
 
   type t
-  val create : Fs.t -> t
+  val create : unit -> t
 
   val set_status : t -> key:Goal.t -> data:Status.t -> unit
-  val mask_unreachable : t -> DG.t -> unit
-  val message_errors : t -> unit
+  val message_errors : Config.t -> t -> unit
   val snap : t -> Mon.Progress.t
-  val dump : t -> unit
 
 end = struct
 
   type t = {
-    fs : Fs.t;
     status : Status.t Goal.Table.t;
-    mutable mask : Goal.Hash_set.t;
   }
 
-  let create fs = {
-    fs;
+  let create () = {
     status = Goal.Table.create();
-    mask = Goal.Hash_set.create () ;
   }
 
   let set_status t = Hashtbl.set t.status
 
-  let mask_unreachable t dg =
-    let mask_candidates = Goal.Hash_set.create () in
-    Hashtbl.iter t.status ~f:(fun ~key:goal ~data:_ ->
-      Hash_set.add mask_candidates goal; (* add goal as candiate for mask *)
-    );
-    DG.iter_reachable dg ~f:(fun node ->
-      match (DG.lookup_item dg node) with
-      | DG.Item.Goal goal ->
-        Hash_set.remove mask_candidates goal (* goal is reachable; dont remove *)
-      | _ -> ()
-    );
-    t.mask <- mask_candidates
-
-  let iter_unmasked t ~f =
-    Hashtbl.iter (t.status) ~f:(fun ~key ~data ->
-      if not (Hash_set.mem t.mask key) then
-        f ~key ~data
-    )
-
-  let message_errors t =
-    iter_unmasked t ~f:(fun ~key:goal ~data:status ->
+  let message_errors config t =
+    Hashtbl.iter (t.status) ~f:(fun ~key:goal ~data:status ->
       match (
         match status with
-        (* suppress shutdown/dep-errors errors *)
         | Status.Error Reason.Shutdown
         | Status.Error Reason.Error_in_deps
+        | Status.Error Reason.Error_in_sibling
           -> None
         | Status.Error reason -> Some reason
         | _ -> None
       ) with
       | None -> ()
-      | Some reason ->
-        Message.error "(summary) %s: %s" (Goal.to_string goal)
-          (Reason.to_string_one_line reason)
+      | Some reason -> Reason.message_summary config goal reason
     )
-
-  let is_going_still =
-    Status.(
-      function
-      | Checking
-      | Blocked
-      | Jwait
-      | Running
-      | Usercode -> true
-      | Built _
-      | Error _ -> false
-    )
-
-  let dump t =
-    Message.message "dumping working/blocked...";
-    Hashtbl.iter (t.status) ~f:(fun ~key:goal ~data:status ->
-      let masked = Hash_set.mem t.mask goal in
-      if is_going_still status then (
-        Message.message "- %s%s %s"
-          (if masked then "(MASKED) " else "")
-          (Status.to_string_one_line status)
-          (Goal.to_string goal)
-      )
-    );
-    Message.message "dumping working/blocked...done";
-    ()
 
   let snap t =
     let checking = ref 0 in
@@ -728,7 +680,7 @@ end = struct
     let glob = ref 0 in
     let error = ref 0 in
     let failure = ref 0 in
-    iter_unmasked t
+    Hashtbl.iter (t.status)
       ~f:(fun ~key:_ ~data:status ->
         let x =
           match status with
@@ -741,6 +693,7 @@ end = struct
           | Status.Built What.Target                -> target
           | Status.Built What.Alias                 -> alias
           | Status.Error Reason.Error_in_deps       -> failure
+          | Status.Error Reason.Error_in_sibling    -> failure
           | Status.Error _                          -> error
         in incr x
       );
@@ -792,6 +745,8 @@ module Builder : sig (* layer error monad within tenacious monad *)
   val sensitize : Heart.t -> unit t
 
   val before_redo : 'a t -> f:(unit -> unit) -> 'a t
+
+  val map_error : 'a t -> f:(Reason.t -> Reason.t) -> 'a t
 
 end = struct
 
@@ -862,6 +817,13 @@ end = struct
     in
     let f ~cancel sample = hook (); sample ~cancel in
     use (reify (Tenacious.with_tenacious t ~f))
+
+  let map_error t ~f =
+    Tenacious.map t ~f:(function
+    | Error e -> Error (f e)
+    | Ok x -> Ok x
+    )
+
 end
 
 let return   = Builder.return
@@ -897,7 +859,7 @@ module RR = struct
   | No_record_of_being_run_before   -> "initial"
   | Action_changed                  -> "action"
   | Deps_have_changed keys ->
-    if Config.run_reason_verbose config then
+    if Config.show_actions_run_verbose config then
       sprintf "deps: %s" (String.concat ~sep:" " (List.map keys ~f:Pm_key.to_string))
     else
       "deps"
@@ -1080,8 +1042,9 @@ let enqueue_external_job t f =
 let error t reason =
   let show_now =
     match reason with
-    | Reason.Non_zero_status (* we see the error message from the command *)
+    | Reason.Non_zero_status _(* we see the error message from the command *)
     | Reason.Error_in_deps
+    | Reason.Error_in_sibling
     | Reason.Shutdown
         -> false
     | _
@@ -1191,7 +1154,7 @@ let run_action_with_message :
         )
       ) *>>= function
       | Ok x                                -> return x
-      | Error `non_zero_status              -> error t Reason.Non_zero_status
+      | Error (`non_zero_status output)     -> error t (Reason.Non_zero_status output)
       | Error (`other_error Job.Shutdown)   -> error t Reason.Shutdown
       | Error (`other_error exn)            -> error t (Reason.Running_job_raised exn)
 
@@ -1617,6 +1580,13 @@ let expect_source : (t -> Path.t -> (What.t * Proxy_map.t) Builder.t) =
       return (What.Source, pm)
 
 
+let associate_error_only_to_head_target tr ~demanded builder =
+  let head_target = Target_rule.head_target tr in
+  if Path.equal demanded head_target
+  then builder
+  else Builder.map_error builder ~f:(fun _ -> Reason.Error_in_sibling)
+
+
 let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
   (* build a goal -- alias or path
      In either case, first get the ruleset applicable to the goal.
@@ -1649,6 +1619,7 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
         begin
           match (Ruleset.lookup_target ruleset demanded) with
           | Some tr ->
+(*
             (* Call build_deps here as well as in build_target_rule, so polling-rebuilds
                re-create the correct edges in the discovered_graph.
 
@@ -1663,8 +1634,10 @@ let build_goal : (t -> Goal.t -> (What.t * Proxy_map.t) Builder.t) =
               else return ()
             )
             *>>= fun () ->
-
-            build_target_rule t memo_ruling tr ~demanded *>>= fun tagged ->
+*)
+            associate_error_only_to_head_target tr ~demanded (
+              build_target_rule t memo_ruling tr ~demanded
+            ) *>>= fun tagged ->
             let (path,proxy) =
               List.find_exn tagged ~f:(fun (path,_) -> Path.equal path demanded)
             in
@@ -2006,13 +1979,13 @@ let build_once :
      And now we are just polling of file-system changes.
   *)
   let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-  fun config dg progress top_tenacious ->
+  fun config __dg progress top_tenacious ->
     let u = genU() in (* count of the times we reach polling *)
     let start_time = Time.now() in
     Tenacious.exec top_tenacious >>| fun ((),heart) ->
 
     (* to avoid reporting of stale errors etc... *)
-    Progress.mask_unreachable progress dg;
+    (*Progress.mask_unreachable progress dg;*)
 
     let counts = Progress.snap progress in
     let duration = Time.diff (Time.now()) start_time in
@@ -2045,12 +2018,7 @@ let build_once :
         Exit_code.build_failed
       )
     in
-    let quiet = Config.quiet config in
-    if not quiet then (
-      (*if Config.show_status_all config
-      then Progress.message_everything progress
-      else *)Progress.message_errors progress
-    );
+    Progress.message_errors config progress;
     heart, exit_code
 
 (*----------------------------------------------------------------------
@@ -2153,11 +2121,6 @@ let build_forever =
       | true ->
         (* -P *)
         Message.polling ();
-        if Config.show_sensitized config then (
-          List.iter (Heart.to_sensitivity_list heart) ~f:(fun desc ->
-            Message.sensitized_on ~desc
-          )
-        );
         (* wait here until something changes on the file-system *)
         let wait = Heart.when_broken heart in
         exit_code_upon_control_c := exit_code;

@@ -10,14 +10,11 @@ let trace fmt = ksprintf (fun string -> Message.trace "Run: %s" string) fmt
 let db_save_span = sec 60.0
 
 let run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path =
-  trace "----------------------------------------------------------------------";
-  trace "Root: %s" root_dir;
-  trace "Start: %s" (Path.to_string start_dir);
   Forker.init config;
   Persist.create_saving_periodically ~root_dir db_save_span >>= fun persist ->
   Fs.create (Persist.fs_persist persist) >>= fun fs ->
-  let progress = Build.Progress.create fs in
-  Rpc_server.go ~root_dir progress >>= fun () ->
+  let progress = Build.Progress.create () in
+  Rpc_server.go config ~root_dir progress >>= fun () ->
   For_user.install_fs_for_user_rules fs;
   let top_level_demands =
     match Config.demands config with
@@ -80,6 +77,10 @@ let main config =
     | Some x -> x
   in
 
+  trace "----------------------------------------------------------------------";
+  trace "Root: %s" root_dir;
+  trace "Start: %s" (Path.to_string start_dir);
+
   Core.Std.Sys.chdir root_dir;
 
   let pid_string () = Pid.to_string (Unix.getpid ()) in
@@ -89,7 +90,26 @@ let main config =
 
   (* Must do the chdir before Parallel.init is called, so that we have the same cwd when
      using parallel forkers or not *)
-  Async_parallel.Std.Parallel.init();
+
+  let config =
+    if Int.(Config.f_number config >= 0) then config else (
+      Message.error "Ignoring negative value to -f flag; treating as 0";
+      {config with Config. f_number = 0}
+    )
+  in
+
+  let config =
+    try
+      if Int.(Config.f_number config > 0) then (
+        Async_parallel.Std.Parallel.init();
+      );
+      config
+    with | exn ->
+      Message.error "Parallel.init (needed for forkers) threw exception:\n%s"
+        (Exn.to_string exn);
+      Message.message "INFO: Avoid separate forker processes with: '-f 0'";
+      {config with Config. f_number = 0}
+  in
 
   (* Only after Parallel.init is called may we start async *)
   don't_wait_for (

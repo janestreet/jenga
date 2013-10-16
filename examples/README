@@ -1,0 +1,27 @@
+
+hello-explicit
+
+    A first example of using the jenga API.
+    This is really an `anti' example showing how not to use jenga.
+
+make-style
+
+    Shows how jenga can be setup to read simple static rule triple
+    from a config file in a simple/terse make-style format.
+
+        target1 target2 : dep1 dep2 dep3
+            action
+
+    This kind of setup is useful to automate rebuilding a collection
+    of small projects, where you are happy to maintain explicitly all
+    the dependencies by hand.
+
+
+compile-and-link
+
+    And older example. Needs to be adapted to Api_v2.
+    
+
+simple-ocaml-build
+
+    An example to come soon...

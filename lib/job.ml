@@ -54,7 +54,9 @@ let run ~config ~need ~putenv ~xaction ~output =
     return (Error (`other_error Shutdown))
   | false ->
     let duration = Time.diff (Time.now()) start_time in
-    Message.job_finished job_start ~outcome ~duration ~stdout ~stderr;
+    let summary =
+      Message.job_finished job_start ~outcome ~duration ~stdout ~stderr
+    in
     match outcome with
     | `success -> return (Ok (get_result ~stdout))
-    | `error _ -> return (Error `non_zero_status)
+    | `error _ -> return (Error (`non_zero_status summary))

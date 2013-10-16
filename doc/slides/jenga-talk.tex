@@ -1,0 +1,611 @@
+\documentclass{beamer}
+
+\usepackage{helvet}
+\usepackage{textpos}
+\usepackage{setspace}
+
+\useinnertheme{circles}
+
+\definecolor{jswhite}{rgb}{0.9,0.9,0.9}
+\definecolor{jsyellow}{rgb}{0.9,0.7,0.1}
+\definecolor{jsblue}{rgb}{0,0,0.3}
+\definecolor{jslightblue}{rgb}{0,0.3,0.3}
+
+\setbeamercolor{normal text}{fg=black,bg=white}
+\setbeamercolor{structure}{fg=orange}
+\setbeamercolor*{separation line}{fg=jslightblue}
+\setbeamercolor*{fine separation line}{fg=jslightblue}
+\setbeamercolor*{frametitle}{fg=orange}
+
+\setbeamerfont{frametitle}{series=\bfseries}
+
+\begin{document}
+
+\title{\Huge{\bf Jenga}\vskip24pt\large\textcolor{black}{Towards a correct and scalable build system}}
+\date{
+\includegraphics[width=4cm]{new-jane-street-logo.pdf}
+}
+
+\addtobeamertemplate{frametitle}{}{%
+\begin{textblock*}{3cm}(.77\textwidth,5.4cm)
+\vskip26pt\hskip20pt
+\includegraphics[width=2cm]{new-jane-street-logo.pdf}
+\end{textblock*}\bf}
+
+\setbeamertemplate{navigation symbols}{}
+
+\let\oldframetitle\frametitle
+\renewcommand{\frametitle}[1]{%
+  \oldframetitle{\vskip4pt\hskip4pt#1}\setstretch{1.4}}
+
+\newcommand\gdb{{\tt gdb}}
+\newcommand\gap{\vskip18pt}
+\newcommand\highlight[1]{\colorbox{orange}{\textcolor{black}{#1}}}
+
+\begin{frame}
+\titlepage
+\end{frame}
+
+% This talk is about jenga.
+% - a new build tool developed a janestreet - 
+% And about the approach taken by jenga to the issues of scalability & correctness.
+
+% To be clear, jenga was very definitely developed with our needs at
+% janestreet as priority #1.
+
+% However, jenga is a general purpose build tool & we have made it
+% open source, in the hope that it may be of use to other people in
+% the ocaml community.
+% And so we can showcase some of the non-trading related work which goes on at JS.
+
+% I'm very definitely not here to sell jenga to you!
+% But to explain how a complex, real world build process is managed by jenga.
+
+
+\begin{frame}[fragile]
+\frametitle{Why a new build tool?}
+\begin{itemize}
+\item Already so many to choose from:
+\begin{itemize}
+\item make, omake, ocamlbuild, ninja, tup, redo, shake...
+\end{itemize}
+\item Jane Street workflow
+\begin{itemize}
+\item One big tree! (almost)
+\begin{itemize}
+\item 3500 dirs; 33k files; 2.2m lines OCaml
+\end{itemize}
+\item Two workflows
+\item Omake: solves many issues, but...
+\end{itemize}
+\item Can we do better?
+\end{itemize}
+\end{frame}
+
+% So, the first question is probably: why on earth did we feel the
+% need to develop yet another build tool. Does the world not have enough?
+%
+% To explain, why I need to briefly give some back ground to the way
+% our source repositories are handed at JS, and the development
+% workflow we use.
+
+% One tree; big - main advantage of a single tree. Can modify
+% interfaces to heavily shared common library (improve names/types)
+% and fix up all callers in one consistent change-set
+
+% Two flows...
+% Continuous integration
+% - remote box; full tree; guard bad commits; incremental but restarted
+% 
+% Individual development
+% - local box; own project subtree; incremental, polling
+%
+% Our build system has to handle both flow.
+
+% Before jenga, janestreet used omake
+% - (still uses - we have not finished our switch to jenga)
+%
+% Omake is pretty good!
+% Has lots of features we view as important.
+% And solves many issues newer tools fail on.
+% Brief list''
+% - one build instance for whole tree
+% - quick
+% - polling
+% - dynamic dependencies
+% - programmable rule generation
+%
+% Problems, increasing over time...
+% - at JS we have stretched it scalability to the limit
+% - more importantly: hard to program
+% 
+% Thing we dislike the most about omake, is the omake language itself.
+% - dynamic typing; dynamic scoping; scripting language not a programming language
+
+
+\begin{frame}[fragile]
+\frametitle{What is a build system?}
+\begin{center}
+\highlight{Build tool + build rules}
+\end{center}
+\begin{itemize}
+\item The tool is general purpose
+\item The rules are provided by the user
+\begin{itemize}
+\item targets; actions; {\em dependencies}
+\item shared framework (e.g. for a whole company)
+\item per-project config
+\end{itemize}
+\end{itemize}
+%\item Build process is demand driven
+%\item The {\em big} idea...
+%\begin{itemize}
+%\end{itemize}
+%\end{itemize}
+\end{frame}
+
+% Tool & rules:
+% - Rules provided by user; interpreted by the tool
+% - Specialise the build tool for a given project or set-of-projects (at a site)
+%
+% The build tool is responsible to orchestrate the minimal sequence of
+% actions necessary to bring a set of generated targets up to date.
+
+% General purpose tool
+% - no build in knowledge of specific languages or compilation tools
+% - no magic handling
+% - just a consistent general purpose build model
+
+% Rules state what actions must be run to generate which targets.
+% And give dependencies for the actions
+% - for example: linking stage might describes how some .o are linked into a .exe
+% - the .o's are the dependencies.
+% - if these are also generated targets (not sources) - likely
+% - then before the link is run the .os must be generated, or brought up to date
+% - by running whatever action is responsible for creating them
+%
+% The overall build process is demand driven.
+% We request the system to build some top level target, perhaps main.exe
+
+
+\begin{frame}[fragile]
+\frametitle{Rules are hard}
+\begin{itemize}
+\item Real-world dependencies are difficult
+\begin{itemize}
+\item Requires detailed knowledge of toolchain
+\item Dependencies are not always static
+\end{itemize}
+\item Our key idea:
+\begin{center}
+\highlight{Rules are coded in OCaml}
+\end{center}
+\item Jenga exposes an API
+\end{itemize}
+\end{frame}
+
+% The most important thing is dependencies.
+% Consistent builds REQUIRE accurate dependencies
+% Without accurate deps, there can be no hope of a correct incremental builds.
+% Developing \& maintaining a build system is a major engineering project.
+
+% Today's talk - scalability & correctness. But focus on correctness.
+%
+% Real world deps are not trivial, and very often dynamic.
+% - dont know what the deps are before the build starts 
+% - they are discovered during the build process
+% Often we dont even know what targets have rules before we start
+% - i.e. setting up a compile rule for all .ml in a directory
+%
+% We need our build tool to to offer a language rich enough to express
+% complex (& dynamic) dependencies for rules and rule generation,
+% which exists in the real world 
+%
+% Early design decision: Rules code in Ocmal, against an Ocaml API.
+% - avoiding jet another DSL with crazy syntax and bizarre semantics
+
+
+\begin{frame}[fragile]
+\frametitle{Programming interface}
+\begin{itemize}
+\item ...for dependencies, rules and rule generation
+\item Dynamic dependencies
+\begin{itemize}
+\item ``scanner dependencies''
+\item glob dependencies ({\tt ls *.ml})
+\end{itemize}
+\item Rule generation
+\begin{itemize}
+\item not a distinct phase (unlike {\tt ninja})
+\item may also have dependencies
+\end{itemize}
+\item {\tt jengaroot.ml} loaded using {\tt ocaml\_plugin}
+\end{itemize}
+\end{frame}
+
+% Come to heart of the talk.
+% Correctness REQUIRES accurate dependencies
+% jenga's approach is to express rules/deps via caml API
+% Allow dynamic deps & no sep rule gen phase.
+
+% ocaml plugin
+% - type safe dynamic loading of ocaml
+% - open sourced
+% - code against jenga API
+% - caches, so after first time the jengaroot is not recompiled
+
+% Dynamic dependencies are generalisation of what some build tools
+% call scanner dependencies. Simplest example: imagine a file which
+% contains a list of file names. This file is itself generated.
+% A target can be declared to depend on all files listed.
+%
+% In jenga, arbitrary conditional deps can be expressed
+%
+% Jenga introduces ``glob dependencies'' i.e. *.ml
+% Most commonly used during rule configuration
+% And this also works properly in polling mode where we can be
+% triggered as new files appear or exiting files disappear
+
+% Finally: rule generation. Not a distinct phase. Integrated with rest
+% of build system. For example, rules can be written to have a
+% per-directory config file (flags etc) which is consulted for rule-gen.
+% This config file could itself be a generated file.
+
+
+\begin{frame}[fragile]
+\frametitle{Rules {\tt make} style}
+\begin{itemize}
+\item Triple of: targets, dependencies and action
+{\footnotesize
+\begin{verbatim}
+  val rule : path list -> dep list -> act -> rule
+
+\end{verbatim}}
+\item Not expressive enough!
+\begin{itemize}
+\item Can't represent {\em dynamic dependencies}
+\item Action is fixed
+\end{itemize}
+\end{itemize}
+\end{frame}
+
+% The concept of a rule in classic make is a static triple.
+% Nice any simple.
+% Often is all we need
+% But in general - it is not expressive enough
+
+
+\begin{frame}[fragile]
+\frametitle{Dependencies}
+The fundamental notion is {\it a value and its dependencies}. \par
+This is represented by the type:
+\begin{center}\colorbox{orange}{$\alpha$\ {\tt dep}}\end{center}
+{\footnotesize
+\begin{verbatim}
+
+  val depends  : path list -> unit dep
+  val contents : path -> string dep
+  val glob     : dir:path -> string -> path list dep
+
+\end{verbatim}}
+\end{frame}
+
+% So ``dep'' is a parametrised type.
+% The simpler dep of the make rules triple, now becomes: unit dep.
+
+% What do values of this type mean?
+% Semantically, a value of type {\tt t dep} can be thought of
+% as taking different values of type {\tt t} at different times.
+%
+% These times might be:
+% - each time the build tool is restart (we re-evaluate the rules)
+% - we re-evaluate as necessary in response to being triggered by external events (inotify)
+
+% explain examples
+
+
+\begin{frame}[fragile]
+\frametitle{Rules {\tt jenga} style}
+\begin{itemize}
+\item Action is carried by the dependency
+{\footnotesize
+\begin{verbatim}
+  val rule : path list -> act dep -> rule
+  
+\end{verbatim}}
+\item Rule generation
+{\footnotesize
+\begin{verbatim}
+  val generate : (dir:path -> rule list dep) -> scheme
+
+\end{verbatim}}
+\item Recover simple rules
+{\footnotesize
+\begin{verbatim}
+  let simple_rule targets deps act =
+    rule targets (
+      all_unit deps >>= fun () ->
+      return act)
+\end{verbatim}}
+\end{itemize}
+\end{frame}
+
+% Action carried by the parametrised dependency type.
+% Rule generation fits in the scheme.
+% Simple rule type can be discovered.
+
+
+\begin{frame}[fragile]
+\frametitle{The ``{\tt M}'' word}
+{\footnotesize
+\begin{verbatim}
+  val return   : 'a -> 'a dep
+  val ( >>= )  : 'a dep -> ('a -> 'b dep) -> 'b dep (* bind *)
+
+  val ( >>| )  : 'a dep -> ('a -> 'b    ) -> 'b dep (* map *)
+
+  val all      : 'a dep list -> 'a list dep
+  val all_unit : unit dep list -> unit dep
+
+\end{verbatim}}
+\end{frame}
+
+%  Surprise its a monad!
+%  This is also the approach takes by shake
+%
+%  Early version attempted to avoid exposing the monad to the rules
+%  author - but this was a mistake.
+%
+%  Made the rule setup more tricky & much more fragile.
+
+
+\begin{frame}[fragile]
+\frametitle{Example 0: Dependencies}
+{\footnotesize
+\begin{verbatim}
+  val paths_from_file : dir:path -> path -> path list dep
+
+  let paths_from_file ~dir path =
+    contents path >>| fun string ->
+    let words = split_into_words string in
+    List.map words ~f:(fun word -> relative ~dir word)
+\end{verbatim}}
+\begin{verbatim}
+\end{verbatim}
+\end{frame}
+
+% Simple example, show monadic style of programming.
+% Very familiar to us at JS; rather like coding in the async monad.
+%
+% Example shows how we read a file using contents, containing a list of names
+% and convert this to a list of path w.r.t a give dir, using {\tt relative}
+% def of split_into_words is not given
+% 
+% Another rule would generate the file (e.g. using ocamldep).
+
+
+\begin{frame}[fragile]
+\frametitle{Example 1: Compilation}
+{\footnotesize
+\begin{verbatim}
+  val compile_ml: dir:path -> name:string -> rule
+  
+  let compile_ml ~dir ~name =
+    let p x = relative ~dir (name ^ x) in
+    rule [p".cmi"; p".cmx"; p".o"] (
+\end{verbatim}
+\vskip-16pt\hskip18pt
+\colorbox{orange}{\parbox[t][2.3cm][t]{8.7cm}{\ }}\vspace*{-2.5cm}
+\begin{verbatim}
+      let static = [p".ml"] in
+      paths_from_file ~dir (p".ml.d") >>= fun dynamic ->
+      depends (static @ dynamic) >>| fun () ->
+      bash ~dir (sprintf "ocamlopt -c %s.ml" name)
+\end{verbatim}
+\begin{verbatim}
+    )
+
+
+\end{verbatim}}
+\end{frame}
+
+% All leading up to this big example. I'll take a little time here.
+% Sorry about the rather visually disturbing orange rectangle!
+%
+% This is used to show the 2nd argument to ``rule'', having type ``action dep''
+% composed using the map/bind combinators
+% Ends in a call to ``bash''
+% In this case its static, but it need not be.
+% - In the case of linking the bash action would not be static
+%
+% But this example does how dynamic deps are represented.
+% - the call to ``depends'' make use of ``dynamic'', coming from paths_from_file
+% - but on RHS of the bind operator.
+% - if that file changes, this rule will reconfig itself to be dependant on the new names listed.
+
+
+\begin{frame}[fragile]
+\frametitle{Correctness}
+\begin{center}\colorbox{orange}{Incremental =?= Clean}\end{center}
+\begin{itemize}
+\item Accurate dependencies
+\item Single build instance
+\begin{itemize}
+\item {\em recursive make considered harmful} (P. Miller 1997)
+\end{itemize}
+\item Digests
+\begin{itemize}
+\item timestamps are unreliable
+\end{itemize}
+\item Stale build artifacts
+\end{itemize}
+\end{frame}
+
+% Single instance
+% - Recursive make considered harmful - Peter Miller 1997
+% - Build process can only operate correctly with knowledge of the complete dependency graph
+
+% Trying to use timestamps is fraught with difficulties
+% e.g. interacts poorly with revision control systems
+% And it's just wrong!
+% Argument against digest is that they are expensive.
+% Weak argument. Cost on restart is avoided by caching
+% Using digest can actually avoid rebuild work, by limiting the ripple effect of changes
+% - i.e add a comment to an ml.. recompile.. cmx/o are unchanged. no need to relink lib
+
+% Stale build artifacts
+% Problem not discussed much in the literature. Except ``tup'' make a deal about it
+% A generated file which persists after the rule which created it has been removed
+% Problem is can get incremental builds which work.. but from build fails from clean
+% - we had found this an issue
+% - we had a solution in our omake system + hg, but fits better if build into the build tool
+
+% Most important. Accurate dependencies. But this is the responsibility of the rule author
+% (probably the framework author)
+% - Again: We need our build tool to to offer a language rich enough to express
+% complex (& dynamic) dependencies for rules and rule generation,
+
+% Before move on.
+% Tests that our build system is consistent...
+%
+% (1) Incremental = From-clean
+% How many times have you heard - oh, just clean and build again
+% clear inditement that the build system is broken
+% Not acceptable when a full tree build takes 1--2 hours
+%
+% (2) Polling = Restart
+% not quite in omake - wanted to fix this in jenga
+
+
+\begin{frame}[fragile]
+\frametitle{Scalability}
+\begin{itemize}
+\item Incremental 
+\begin{itemize}
+\item {\em the} point of a build system
+\end{itemize}
+\item Persistence
+\begin{itemize}
+\item Actions cached by digest
+\item Digests cached by {\tt stat}
+\end{itemize}
+\item Parallel builds
+\item Polling (inotify)
+\item Per-directory rule generation (unlike {\tt omake})
+\end{itemize}
+\end{frame}
+
+% These are the features which we want from our build tool which
+% relate in some way to scalability.
+% Important, but will be brief here, because focus of this talk is jenga's API
+
+% 5 items here. First 4 we had with omake & we retain in jenga.
+% jenga adds the last
+
+% If not incremental. Your not a build system, but a script.
+
+% Use persistent store to record record of every action run.
+% - digest of deps & targets + the exact command executed.
+% so we can tell when we dont have to run again.
+
+% Parallel build: jenga extract maximum parallel as expressed in the rules
+% throttled by -j argument
+% Commonly choose to set this to number of cores. Or higher and let OS slice.
+
+% After the build has started, and the build tree has been checked & brought up to date
+% watches for changes in file using inotify
+% only reconsider that part of the build tree effected
+% easy to imagine using a different file watching subsystem on different OS
+% Goal: quick (enough) to restart, then runs in polling mode...
+% Actually, jenga doesn't only start watching files when its done building
+% But it watches all the time, even while still building
+% And will re-start triggered rebuilds at the earliest moment.
+% Call this: tenacious computation (part of core implementation of jenga)
+
+% Per-directory rule gen solves problem in omake, of slow startup, where it has to 
+% read & evaluate omakefiles throughout the entire tree, even if we only want to do
+% a limited subtree build.
+
+% One nice measure of the speed of a build system is time taken to do
+% the null build - where no actions are run
+
+
+\begin{frame}[fragile]
+\frametitle{Summary of Jenga}
+\begin{itemize}
+\item Key features
+\begin{itemize}
+\item Rule development in OCaml
+\item Expressive API for dynamic dependencies
+\item Incremental, parallel, polling builds
+\end{itemize}
+\item Now builds Jane Street's main tree
+\item Open source
+\begin{center}
+\highlight{\tt opam install jenga}
+\end{center}
+\vskip12pt
+\end{itemize}
+\end{frame}
+
+% Rules to build our tree completed (rewrite OMakeroot).
+% Used by many developers; not yet CI. (flip soon!)
+%
+% It's all about dependencies!
+%
+% If you want to play with jenga, easier way is to get it via use opam.
+
+
+\begin{frame}[fragile]
+\frametitle{More...}
+\begin{itemize}
+\item API summary
+\item Generation example
+\end{itemize}
+\end{frame}
+
+
+\begin{frame}[fragile]
+\frametitle{API summary}
+{\footnotesize
+\begin{verbatim}
+  val depends  : path list -> unit dep
+  val contents : path -> string dep
+  val glob     : dir:path -> string -> path list dep
+  val relative : dir:path -> string -> path
+  val bash     : dir:path -> string -> act
+  val rule     : path list -> act dep -> rule
+  val generate : (dir:path -> rule list dep) -> scheme
+  val ( >>| )  : 'a dep -> ('a -> 'b    ) -> 'b dep (* map *)
+  val ( >>= )  : 'a dep -> ('a -> 'b dep) -> 'b dep (* bind *)
+  val return   : 'a -> 'a dep
+  val all      : 'a dep list -> 'a list dep
+  val all_unit : unit dep list -> unit dep
+
+  
+\end{verbatim}}
+\end{frame}
+
+
+\begin{frame}[fragile]
+\frametitle{Example 2: Rule generation}
+{\footnotesize
+\begin{verbatim}
+  val generate : (dir:path -> rule list dep) -> scheme
+
+  let ocaml_rules : scheme =
+    generate (fun ~dir ->
+      glob ~dir "*.ml" >>= fun mls ->
+      glob ~dir "*.mli" >>| fun mlis ->
+      let exists_mli x = List.mem mlis (relative ~dir (x ^ ".mli")) in
+      List.concat_map mls ~f:(fun ml ->
+        let name = chop_suffix (basename ml) ".ml" in
+        if (exists_mli name)
+        then compile_ml_mli ~dir ~name
+        else compile_ml ~dir ~name))
+
+
+\end{verbatim}}
+\end{frame}
+
+\end{document}

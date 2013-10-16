@@ -30,5 +30,3 @@ val cancel : canceller option -> unit
 val unbreakable : t
 val is_broken : t -> bool
 val when_broken : t -> unit Deferred.t
-
-val to_sensitivity_list : t -> string list

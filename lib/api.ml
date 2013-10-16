@@ -178,7 +178,7 @@ let run_action_now_output ~output action =
     let need = "run_now" in
     let putenv = [] in
     Job.run ~config ~need ~putenv ~xaction ~output >>= function
-    | Error `non_zero_status     -> raise (Non_zero_status_from_action_run_now action)
+    | Error (`non_zero_status _) -> raise (Non_zero_status_from_action_run_now action)
     | Error (`other_error exn)   -> raise exn
     | Ok x                       -> Deferred.return x
 

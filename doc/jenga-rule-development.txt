@@ -1,0 +1,52 @@
+
+Here is a brief overview of writing jenga rules in a jengaroot.ml
+If you want to know how to run jenga, see: quick-start.txt
+
+
+The jengaroot.ml must provide a definition for the single function:
+
+  val setup : unit -> Env.t Deferred.t
+
+This should be coded using functions provided by the jenga API. See:
+Jenga is currently at API version 2 - monadic style.
+Version 1 of the API is deprecated and will be removed one day.
+
+Find the interface to the API in:
+
+    lib/Api_v2.mli
+
+The best way to proceed now is probably to look at some examples
+See: examples/README for an overview.
+
+
+Here follows a brief description of the types provided by the API.
+
+  'a Depends.t is the core monadic type which carries a value having
+  dependencies. These are composed using standard monadic operators:
+  return/bind/map and 'all' for parallel dependencies.
+
+  Dependencies can be created on a path (: unit depends), or by
+  reading the contents of a path (: string depends), or from a glob
+  expansion (: path list depends).
+
+  Rule.t is a pair of: targets:path list, together with an action
+  carried by the depends monad.
+
+  Action.t describes the command (prog+args) to run when the targets
+  become out of date w.r.t. their dependencies. Actions are explicit
+  about the directory in which to run the command.
+
+  An alias rule allows a symbolic name for a set of dependencies.  As
+  a special case the symbolic name ".DEFAULT" is used as the default
+  targets to build when jenga is run as the commands line without
+  specific targets being requested (this is the normal use case).
+
+  A generator is a rule list carried by the depends monad.
+
+  A Scheme.t is a function (from dir:Path.t) which constructs a
+  generator for a given directory; A scheme is tagged with a name.
+
+  An Env.t is a finite mapping between filename-(glob)patterns and
+  (optional) schemes. An option-scheme of None is the same as a scheme
+  which generates no rules, and is useful to declare that a specific
+  filename(pattern) is expected to be be a source file.

@@ -3,6 +3,7 @@ open Core.Std
 open Async.Std
 
 module Job_start : sig type t end
+module Job_summary : sig type t end
 
 val init_logging : Config.t -> log_filename:string -> unit
 
@@ -26,7 +27,9 @@ val job_finished :
   duration : Time.Span.t ->
   stdout : string ->
   stderr : string ->
-  unit
+  Job_summary.t (* returned for use in call to repeat_job_finished *)
+
+val repeat_job_summary : Job_summary.t -> unit
 
 val load_jenga_root : Path.X.t -> unit
 val load_jenga_root_done : Path.X.t -> Time.Span.t -> unit

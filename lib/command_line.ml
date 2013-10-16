@@ -53,32 +53,17 @@ let stop_on_first_error =
 let verbose =
   Spec.step (fun m x -> m ~verbose:x)
   +> Spec.flag "verbose" ~aliases:["--verbose"] Spec.no_arg
-    ~doc:" Verbose output"
-
-let run_reason_verbose =
-  Spec.step (fun m x -> m ~run_reason_verbose:x)
-  +> Spec.flag "rr-verbose" Spec.no_arg
-    ~doc:" Verbose run-reason output"
+    ~doc:" Show full command string, and stdout/stderr from every command run"
 
 let show_actions_run =
   Spec.step (fun m x -> m ~show_actions_run:x)
-  +> Spec.flag "show-actions-run" ~aliases:["act"] Spec.no_arg
-    ~doc:" Show actions being run, and why"
+  +> Spec.flag "show-actions-run" ~aliases:["act";"rr"] Spec.no_arg
+    ~doc:" Show actions being run; and the reason why"
 
-let show_generators_run =
-  Spec.step (fun m x -> m ~show_generators_run:x)
-  +> Spec.flag "show-generators-run" ~aliases:["gen"] Spec.no_arg
-    ~doc:" Show generators being run, and why"
-
-let show_scanners_run =
-  Spec.step (fun m x -> m ~show_scanners_run:x)
-  +> Spec.flag "show-scanners-run" ~aliases:["scan"] Spec.no_arg
-    ~doc:" Show scanners being run, and why"
-
-let show_run_reason =
-  Spec.step (fun m x -> m ~show_run_reason:x)
-  +> Spec.flag "show-run-reason" ~aliases:["rr"] Spec.no_arg
-    ~doc:" Show actions/scanners/generators being run, and why"
+let show_actions_run_verbose =
+  Spec.step (fun m x -> m ~show_actions_run_verbose:x)
+  +> Spec.flag "show-actions-run-verbose" ~aliases:["act-verbose";"rr-verbose"] Spec.no_arg
+    ~doc:" Be more verbose about the reason actions are run"
 
 let show_checked =
   Spec.step (fun m x -> m ~show_checked:x)
@@ -95,41 +80,21 @@ let show_reconsidering =
   +> Spec.flag "show-reconsidering" ~aliases:["recon"] Spec.no_arg
     ~doc:" Mainly for debug. Show when deps are re-considered"
 
-let show_status_all =
-  Spec.step (fun m x -> m ~show_status_all:x)
-  +> Spec.flag "show-status-all" ~aliases:["stall"] Spec.no_arg
-    ~doc:" Mainly for debug. Show status of all targets when reach polling"
 
-let quiet =
-  Spec.step (fun m x -> m ~quiet:x)
-  +> Spec.flag "quiet" Spec.no_arg
-    ~doc:" Dont show any commands run & their output, even when they fail"
-
-(* dev *)
-let debug =
-  Spec.step (fun m x -> m ~debug:x)
-  +> Spec.flag "debug" ~aliases:["D"] Spec.no_arg
-    ~doc:" show debug"
+let show_trace_messages =
+  Spec.step (fun m x -> m ~show_trace_messages:x)
+  +> Spec.flag "trace" Spec.no_arg
+    ~doc:" switch on some additional trace messages"
 
 let debug_discovered_graph =
   Spec.step (fun m x -> m ~debug_discovered_graph:x)
   +> Spec.flag "debug-discovered-graph" ~aliases:["dg"] Spec.no_arg
     ~doc:" debug when edges are added/removed in the discovered-graph"
 
-let time =
-  Spec.step (fun m x -> m ~time:x)
+let prefix_time =
+  Spec.step (fun m x -> m ~prefix_time:x)
   +> Spec.flag "time" Spec.no_arg
     ~doc:" prefix all messages with the time (since the build started)"
-
-let sequential_deps =
-  Spec.step (fun m x -> m ~sequential_deps:x)
-  +> Spec.flag "sequential-deps" Spec.no_arg
-    ~doc:" (for development) build multiple dependencies sequentially"
-
-let show_sensitized =
-  Spec.step (fun m x -> m ~show_sensitized:x)
-  +> Spec.flag "show-sensitized" ~aliases:["S"]  Spec.no_arg
-    ~doc:" (for development) show sensitized file when polling"
 
 let delay_for_dev =
   Spec.step (fun m x -> m ~delay_for_dev:x)
@@ -140,11 +105,6 @@ let report_long_cycle_times =
   Spec.step (fun m x -> m ~report_long_cycle_times:x)
   +> Spec.flag "report-long-cycle-times" ~aliases:["long"] (Spec.optional Spec.int)
     ~doc:"<ms> (for development) pass to Scheduler.report_long_cycle_times"
-
-let avoid_target_count_bug_very_slow =
-  Spec.step (fun m x -> m ~avoid_target_count_bug_very_slow:x)
-  +> Spec.flag "avoid-target-count-bug-very-slow" ~aliases:["tc"] Spec.no_arg
-    ~doc:" (for development) try out a bug fix (very slow)"
 
 (* compatability with omake - oamke-mode passes this *)
 let wflag =
@@ -172,6 +132,16 @@ let anon_demands =
   Spec.step (fun m demands -> m ~demands)
   +> Spec.anon (Spec.sequence ("DEMAND" %: Spec.string))
 
+let full_error_summary =
+  Spec.step (fun m x -> m ~full_error_summary:x)
+  +> Spec.flag "full-error-summary" Spec.no_arg
+    ~doc:" Repeat stdout/stderr from failing commands in error summary"
+
+let no_server =
+  Spec.step (fun m x -> m ~no_server:x)
+  +> Spec.flag "no-server" Spec.no_arg
+    ~doc:" Don't start jenga server (jem wont work)"
+
 
 let go_command =
   Command.basic (
@@ -180,28 +150,22 @@ let go_command =
     ++ poll_forever
     ++ stop_on_first_error
     ++ verbose
-    ++ run_reason_verbose
     ++ show_actions_run
-    ++ show_scanners_run
-    ++ show_generators_run
-    ++ show_run_reason
+    ++ show_actions_run_verbose
     ++ show_checked
     ++ show_considering
     ++ show_reconsidering
-    ++ show_status_all
-    ++ quiet
-    ++ debug
+    ++ show_trace_messages
     ++ debug_discovered_graph
-    ++ time
-    ++ sequential_deps
-    ++ show_sensitized
+    ++ prefix_time
     ++ delay_for_dev
     ++ report_long_cycle_times
-    ++ avoid_target_count_bug_very_slow
     ++ wflag
     ++ output_postpone
     ++ progress
     ++ external_jenga_root
+    ++ full_error_summary
+    ++ no_server
     ++ anon_demands
 
   )
@@ -209,22 +173,28 @@ let go_command =
     ~readme:(fun () -> String.concat ~sep:"\n" [
       "By default building the .DEFAULT target.";
     ])
-    (fun ~j_number ~f_number ~poll_forever ~stop_on_first_error
+    (fun
+      ~j_number
+      ~f_number
+      ~poll_forever
+      ~stop_on_first_error
       ~verbose
-      ~run_reason_verbose
       ~show_actions_run
-      ~show_scanners_run
-      ~show_generators_run
-      ~show_run_reason
-      ~show_checked ~show_considering ~show_reconsidering ~show_status_all
-      ~quiet ~debug ~debug_discovered_graph
-      ~time
-      ~sequential_deps ~show_sensitized
-      ~delay_for_dev ~report_long_cycle_times
-      ~avoid_target_count_bug_very_slow
-      ~wflag:_ ~output_postpone:_
+      ~show_actions_run_verbose
+      ~show_checked
+      ~show_considering
+      ~show_reconsidering
+      ~show_trace_messages
+      ~debug_discovered_graph
+      ~prefix_time
+      ~delay_for_dev
+      ~report_long_cycle_times
+      ~wflag:_
+      ~output_postpone:_
       ~progress
       ~external_jenga_root
+      ~full_error_summary
+      ~no_server
       ~demands
       () ->
         let config = {
@@ -234,26 +204,21 @@ let go_command =
           poll_forever;
           stop_on_first_error;
           verbose;
-          run_reason_verbose;
-          show_actions_run      = show_run_reason || show_actions_run;
-          show_generators_run   = show_run_reason || show_generators_run;
-          show_scanners_run     = show_run_reason || show_scanners_run;
+          show_actions_run = show_actions_run || show_actions_run_verbose;
+          show_actions_run_verbose;
           show_checked;
           show_considering;
           show_reconsidering;
-          show_status_all;
-          quiet;
-          debug;
+          show_trace_messages;
           debug_discovered_graph;
-          time;
-          sequential_deps;
-          show_sensitized;
+          prefix_time;
           delay_for_dev = Option.map delay_for_dev ~f:(fun x -> sec (float x));
           report_long_cycle_times =
             Option.map report_long_cycle_times ~f:(fun ms -> Time.Span.create ~ms ());
-          avoid_target_count_bug_very_slow;
           progress;
           external_jenga_root;
+          full_error_summary;
+          no_server;
           demands;
         }
         in

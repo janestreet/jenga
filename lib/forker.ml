@@ -141,7 +141,7 @@ let init config =
 let run request =
   let t = the_t () in
   match t.forkers with
-  | [] -> Fork_process.run request
+  | [] -> Fork_process.run request (* no forkers (-f 0), so process request here *)
   | forker1::forkers ->
     t.forkers <- forkers @ [forker1]; (* round-robin the forkers *)
     Forker_proc.run forker1 request

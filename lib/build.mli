@@ -14,9 +14,8 @@ end
 
 module Progress : sig
   type t
-  val create : Fs.t -> t
+  val create : unit -> t
   val snap : t -> Mon.Progress.t
-  val dump : t -> unit
 end
 
 val build_forever :
