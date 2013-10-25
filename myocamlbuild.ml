@@ -1,6 +1,13 @@
 (* OASIS_START *)
 (* OASIS_STOP *)
 # 4 "myocamlbuild.ml"
+ 
+let rec dedup ?(acc = []) = function
+  | [] ->
+    List.rev acc
+  | x :: xs -> 
+    let acc = if List.mem x acc then acc else x :: acc in 
+    dedup ~acc xs
 
 let dispatch = function
   | Before_options ->
@@ -44,11 +51,6 @@ let dispatch = function
           :: (stdlib / "threads")
           :: List.filter ((<>) stdlib) (List.map (fun pkg -> pkg.Findlib.location) deps)
         in
-        let rec dedup l =
-          match l with
-          | [] | [_] -> l
-          | a :: (b :: _ as l) -> if a = b then dedup l else a :: dedup l
-        in
         let directories = dedup directories in
         (* List of .cmi and .cmxs (for camlp4o.opt): *)
         let cmi_list, cmxs_list =
@@ -68,7 +70,7 @@ let dispatch = function
             directories ([], [])
         in
         List.iter print_endline cmxs_list;
-        let cmi_list = "lib/jenga_lib.cmi" :: cmi_list in
+        let cmi_list = dedup ("lib/jenga_lib.cmi" :: cmi_list) in
         let camlp4 =
           match cmxs_list with
           | [] ->
