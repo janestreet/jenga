@@ -12,11 +12,15 @@ module Item = struct
   | Root
   | Goal of Goal.t
   | Gen_key of Gen_key.t
+  | Target_rule of Path.t list
 
   let to_string = function
     | Root -> "ROOT"
     | Goal dep -> (*sprintf "DEP: %s"*) (Goal.to_string dep)
     | Gen_key g -> sprintf "GEN: %s" (Gen_key.to_string g)
+    | Target_rule targets ->
+      sprintf "RULE: %s : ..."
+        (String.concat ~sep:" " (List.map targets ~f:Path.to_string))
 
 end
 

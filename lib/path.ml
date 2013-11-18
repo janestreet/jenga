@@ -219,9 +219,9 @@ module Key = struct
 
   let create ~tag = {tag; cell = Deferred.unit}
   let tag t = t.tag
-  
+
   let locked t = not (Deferred.is_determined t.cell)
-  
+
   let wait t = t.cell
 end
 
@@ -234,14 +234,14 @@ let prevent_overlap
       'a Tenacious.t ->
       'a Tenacious.t
     ) =
-  fun ~keys 
+  fun ~keys
     ?(notify_wait = ignore)
-    ?(notify_add  = ignore) 
+    ?(notify_add  = ignore)
     ?notify_rem
     tenacious ->
   let ivar = Ivar.create () in
   let cell = Ivar.read ivar in
-  let wait_for_key key = 
+  let wait_for_key key =
     if Key.locked key
     then (notify_wait key.Key.tag; Some (Key.wait key))
     else None
@@ -250,7 +250,7 @@ let prevent_overlap
     (* Can't acquire a locked key *)
     assert (not (Key.locked key));
     key.Key.cell <- cell;
-    notify_add key.Key.tag 
+    notify_add key.Key.tag
   in
   let rec acquire () =
     match List.rev_filter_map keys ~f:wait_for_key with
@@ -260,13 +260,13 @@ let prevent_overlap
     | defer ->
       Deferred.all_unit defer >>= acquire
   in
-  let release result = 
+  let release result =
     Option.iter notify_rem ~f:(fun f -> List.iter keys
                                 ~f:(fun key -> f (Key.tag key)));
     Ivar.fill ivar ();
     result
   in
-  Tenacious.with_tenacious tenacious ~f:(fun ~cancel sample ->
+  Tenacious.with_semantics tenacious ~f:(fun sample ~cancel ->
     acquire () >>= fun () -> sample ~cancel >>| release)
 
 let get_key =

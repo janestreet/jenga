@@ -181,6 +181,11 @@ module Depends = struct
   let subdirs ~dir =
     glob (Glob.create ~dir ~kinds:(Some [`Directory]) ~glob_string:"*")
 
+
+  let file_exists path =
+    glob (Glob.create_from_path ~kinds:None path) (* any kind *)
+    *>>| function | [] -> false | _::_ -> true
+
   let read_sexp p =
     contents p *>>| fun s ->
     Sexp.scan_sexp (Lexing.from_string s)

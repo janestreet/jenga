@@ -19,15 +19,13 @@ let nfs_lock = ".nfs_lock"
 
 let lock_running_server ~root_dir  ~port =
   let lock_filename = root_dir ^/ Path.lock_basename in
-  In_thread.run (fun () ->
-    try (Core.Std.Lock_file.Nfs.create_exn lock_filename; true)
-    with _ -> false
-  ) >>= function
-  | false ->
+  In_thread.run (fun () -> Core.Std.Lock_file.Nfs.create lock_filename)
+  >>= function
+  | Error _ ->
     Message.error "jenga already running, lockfile = %s" (lock_filename ^ nfs_lock);
     Quit.quit Exit_code.server_locked;
     Deferred.never()
-  | true ->
+  | Ok () ->
     let server_filename = root_dir ^/ Path.server_basename in
     let info = Info.create ~port in
     Message.trace "server info: %s -> %s"

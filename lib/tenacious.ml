@@ -1,385 +1,275 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
-type 'a v = 'a Ten.v
+(*
+    The core semantics of Tenacious.t evaluation is handled by a function
+    of the following type:
 
-let (=) = Int.(=)
-let (>) = Int.(>)
-
-module T = struct
-
-  type 'a res = Res_none | Res_some of 'a * Heart.t | Res_return of 'a
-
-  type 'a running = {
-    mutable num_waiting : int;
-    glass : Heart.Glass.t;
-    def : 'a res Deferred.t
-  }
-
-  let incr_waiting r = r.num_waiting <- r.num_waiting + 1
-  let decr_waiting r = r.num_waiting <- r.num_waiting - 1
-  let zero_waiting r = r.num_waiting = 0
-  let some_waiting r = r.num_waiting > 0
-
-  type 'a state = Running of 'a running | Dormant of 'a res
-
-  type 'a runner = {
-    run : (cancel:Heart.t ->  'a res Deferred.t);
-    mutable state : 'a state
-  }
-
-  (*let string_of_res = function
-    | Res_none -> "N"
-    | Res_some _ -> "S"
-    | Res_return _ -> "R"*)
-
-  (*let string_of_state = function
-    | Running _ -> "Running"
-    | Dormant res -> sprintf "Dormant/%s" (string_of_res res)*)
-
-  let set_state runner state =
-    let ok =
-      match runner.state, state with
-      | Dormant _, Running _
-      | Running _, Dormant _
-        -> true
-      | Running _, Running _
-      | Dormant _, Dormant _
-        -> false
-    in
-    if ok then runner.state <- state else ()
-      (* think this is harmless, dont display it to screen *)
-      (*Message.trace "tenacious: invalid transition, %s -> %s"
-        (string_of_state runner.state) (string_of_state state)*)
-
-  let start runner : Heart.Glass.t * 'a res Deferred.t =
-    let glass = Heart.Glass.create ~desc:"tenacious/request" in
-    let heart = Heart.of_glass glass in
-    let rec again() =
-      runner.run ~cancel:heart >>= fun res ->
-      match res with
-      | Res_return _ -> Deferred.return res
-      | Res_none -> Deferred.return Res_none (* was cancelled *)
-      | Res_some (_,heart) ->
-        if Heart.is_broken heart then (
-          again()
-        ) else ( (* we have a valid result *)
-          set_state runner (Dormant res);
-          Deferred.return res
-        )
-    in
-    let def = again() in
-    glass,def
-
-  let request runner : 'a res Deferred.t =
-    match runner.state with
-    | Running r -> incr_waiting r; r.def
-    | Dormant res ->
-      let good =
-        match res with
-        | Res_return _ -> true
-        | Res_none -> false
-        | Res_some (_,heart) ->
-          if Heart.is_broken heart
-          then false
-          else true
-      in
-      if good
-      then Deferred.return res
-      else
-        let glass,def = start runner in
-        let running = { num_waiting = 1; glass; def; } in
-        set_state runner (Running running);
-        def
-
-  let unrequest runner : unit =
-    match runner.state with
-    | Dormant _ -> ()
-    | Running r ->
-      assert (some_waiting r);
-      decr_waiting r;
-      if (zero_waiting r) then (
-        Heart.Glass.break r.glass;
-        set_state runner (Dormant Res_none)
-      )
+        val sample :
+            'a Tenacious.t ->
+            cancel:Heart.t -> ('a * Heart.t) option Deferred.t
 
 
-  type 'a t =
-  | Run of 'a runner
-  (*| Return of 'a*)
+    When a tenacious computation is [sample]ed, a result is obtained
+    eventually (Deferred.t), that in the normal case is [Some(x,heart)],
+    where [x] is the value of the result; and [heart] is a certificate of
+    validity. If this heart is ever broken (triggered), then the result is
+    to be regarded as invalidated; the tenacious should be re-evaluated.
 
-  let get ~cancel t : 'a res Deferred.t =
-    match t with
-    (*| Return x -> Deferred.return (Res_return x)*)
-    | Run runner ->
-      (*let already_broken = Heart.is_broken cancel in
-      if already_broken then (
-      );*)
-      choose [
-        choice (Heart.when_broken cancel) (fun () ->
-          unrequest runner;
-          Res_none;
-        );
-        choice (request runner) (fun x -> x);
-      ]
+    The caller may express his disinterest in a result previously [sample]ed
+    by breaking the [cancel] heart. In this case (and only this case) may
+    the result become determined by None, (but None is not guaranteed).
 
-  let exec_cancelable t ~cancel : 'a v Deferred.t =
-    get ~cancel t >>= function
-    | Res_none -> Deferred.return None
-    | Res_some (x,heart) -> Deferred.return (Some (x, heart))
-    | Res_return x -> Deferred.return (Some (x, Heart.unbreakable))
+    The point of the tenacious monad is to manage the plumbing of the
+    cancel & invalidation hearts & perform the re-evaluation of invalided
+    computations.
 
-  let create ~run =
-    Run {
-      run;
-      state = Dormant Res_none;
-    }
+    The following invariant was not correctly maintained:
 
-  (*let return x = Return x*)
-  let return x =
-    let run ~cancel:_ =
-      Deferred.return (Res_return x)
-    in
-    create ~run
+        The deferred MUST always become determined, (even in the case that
+        the computation is cancelled.)
 
-  let lift_cancelable f =
-    let computed_but_unwanted = ref None in
-    let run ~cancel =
-      let res = !computed_but_unwanted in
-      match res with
-      | Some (x,heart) ->
-        computed_but_unwanted := None;
-        Deferred.return (Res_some (x,heart))
-      | None ->
-        f ~cancel >>= function
-        | None -> Deferred.return Res_none
-        | Some res ->
-        if Heart.is_broken cancel then (
-            computed_but_unwanted := Some res;
-            Deferred.return Res_none
-        ) else (
-            let x,heart = res in
-            Deferred.return (Res_some (x,heart))
-        )
-    in
-    create ~run
 
-  let bind t f =
-    let run ~cancel =
-      let rec stage1() =
-        get t ~cancel >>= function
-        | Res_none -> Deferred.return Res_none
-        | Res_return x -> (
-          get (f x) ~cancel >>= function
-            | Res_none -> Deferred.return Res_none
-            | Res_return y -> Deferred.return (Res_some (y, Heart.unbreakable))
-            | Res_some (y,heart2) -> Deferred.return (Res_some (y, heart2))
-          )
-        | Res_some (x,heart1) ->
-          get (f x) ~cancel:(Heart.combine2 heart1 cancel) >>= function
-          | Res_none ->
-            if Heart.is_broken cancel then (
-              Deferred.return Res_none
-            ) else (
-              assert (Heart.is_broken heart1);
-              stage1()
-            )
-          | Res_return y ->
-            Deferred.return (Res_some (y, heart1))
-          | Res_some (y,heart2) ->
-            Deferred.return (Res_some (y, Heart.combine2 heart1 heart2))
-      in
-      stage1()
-    in
-    create ~run
+    It's not immediately obvious why such an invariant is necessary: If
+    the caller cancels, then why would he wait on the deferred?  It is
+    necessary because a cancelled tenacious computation (which has not
+    actually been stopped) may become wanted again. In this case the new
+    caller would wait for the result of the cancelled-but-still-running
+    computation to become determined.
+*)
 
-  let all ts =
-    let count_todo = ref (List.length ts) in
-    let all_done = Ivar.create () in
-    let run ~cancel =
-      let for_each t =
-        let rec again () =
-          get ~cancel t >>= fun res ->
-          match res with
-          | Res_none -> Deferred.return Res_none
+type 'a result = ('a * Heart.t) option Deferred.t
+type 'a semantics = cancel:Heart.t -> 'a result
 
-          | Res_return _ ->
-            decr count_todo;
-            if (!count_todo = 0)
-            then (Ivar.fill all_done (); Deferred.return res)
-            else (
-              Ivar.read all_done >>= fun () ->
-              Deferred.return res
-            )
+module type Inner_sig = sig
 
-          | Res_some (_,heart) ->
-            decr count_todo;
-            if (!count_todo = 0 && not (Heart.is_broken heart))
-            then (Ivar.fill all_done (); Deferred.return res)
-            else
-              choose [
-                choice (Heart.when_broken heart) (fun () -> `again);
-                choice (Ivar.read all_done) (fun () -> `all_done);
-              ] >>= function
-              | `again -> incr count_todo; again()
-              | `all_done -> Deferred.return res
-        in
-        again()
-      in
-      let rec collect acc acc_hearts = function
-        | Res_none :: _ -> Res_none
-        | Res_return x :: rest -> collect (x::acc) acc_hearts rest
-        | Res_some (x,heart) :: rest -> collect (x::acc) (heart::acc_hearts) rest
-        | [] -> Res_some (List.rev acc, Heart.combine acc_hearts)
-      in
-      Deferred.List.map ~how:`Parallel ts ~f:for_each >>= fun xs ->
-      Deferred.return (collect [] [] xs)
-    in
-    create ~run
-
-  let reify x = x
-  let map m ~f = bind m (fun x -> return (f x))
-
-  (*let deferred x =
-    let run ~cancel:_ = x >>| fun x -> Res_return x in
-    create ~run*)
-  (*let defer dx = bind dx (fun x -> deferred x)*)
-
-  (*let filter t ~f =
-    lift_cancelable (fun ~cancel ->
-      exec_cancelable t ~cancel >>| function
-      | _, None as res -> res
-      | a, Some heart ->
-        let g = Heart.Glass.create ~desc:"ten/filter" in
-        let rec check () =
-          exec_cancelable t ~cancel >>> function
-          | b, Some heart when not (Heart.is_broken cancel) && f a b ->
-            ignore (Heart.upon heart check)
-          | _, Some _ ->
-            Heart.Glass.break g
-          (* heart == None, the computation suddenly become unbreakable,
-           * that's not normally possible, invalidate current result *)
-          | _, None ->
-            Heart.Glass.break g
-        in
-        Heart.upon heart check;
-        a, Some (Heart.of_glass g))*)
-
-  let with_tenacious t ~f =
-    lift_cancelable (fun ~cancel -> f ~cancel (exec_cancelable t))
-end
-
-(*include T*)
-
-(*----------------------------------------------------------------------
-tenacious select...
-----------------------------------------------------------------------*)
-
-module type Ten_sig = sig
   type 'a t
+
+  val sample : 'a t -> cancel:Heart.t -> 'a result
+  val embed : (cancel:Heart.t -> 'a result) -> 'a t
+
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
   val all : 'a t list -> 'a list t
-  val exec_cancelable : 'a t -> cancel:Heart.t -> 'a v Deferred.t
-  val lift_cancelable :        (cancel:Heart.t -> 'a v Deferred.t) -> 'a t
-
   val map : 'a t -> f:('a -> 'b) -> 'b t
   val reify : 'a t -> 'a t
-  val with_tenacious
-    :  'a t
-    ->  f:(cancel:Heart.t
-       -> (cancel:Heart.t -> ('a * Heart.t) option Deferred.t)
-       -> ('b * Heart.t) option Deferred.t)
-    -> 'b t
+
+  val with_semantics : 'a t -> f:('a semantics -> 'b semantics) -> 'b t
+
+end
+
+module Inner : Inner_sig = struct
+
+  module Shared_glass = struct
+
+    type t = {mutable users: int; mutable glass: Heart.Glass.t}
+
+    let share glass = {users = 0; glass}
+    let is_broken t = Heart.Glass.is_broken t.glass
+    let restart t g = t.glass <- g
+
+    let use t =
+      t.users <- t.users + 1
+
+    let release t =
+      assert (Int.(t.users > 0));
+      t.users <- t.users - 1;
+      if Int.(t.users = 0) then Heart.Glass.break t.glass
+
+  end
+
+  type 'a state = {
+    shared_glass : Shared_glass.t;
+    mutable value : 'a result;
+  }
+
+  type _ t =
+  | Return          : 'a -> 'a t
+  | Embed           : (cancel:Heart.t -> 'a result) -> 'a t
+  | Map             : 'a t * ('a -> 'b) -> 'b t
+  | All             : 'a t list -> 'a list t
+  | Reified         : 'a t * 'a state -> 'a t
+  | Bind            : 'a t * ('a -> 'b t) -> 'b t
+  | With_semantics  : 'a t * ('a semantics -> 'b semantics) -> 'b t
+
+  let or_cancel ~cancel ~shared_glass d =
+    Shared_glass.use shared_glass;
+    Deferred.create (fun ivar ->
+      let fill_if_empty v =
+        if Ivar.is_empty ivar then
+          (Shared_glass.release shared_glass; Ivar.fill ivar v)
+      in
+      let on_cancel () = fill_if_empty None in
+      let canceller = Heart.upon cancel ~f:on_cancel in
+      d >>> fun r ->
+      Heart.cancel canceller;
+      fill_if_empty r
+    )
+
+  let rec sample : 'a. 'a t -> cancel:Heart.t -> 'a result =
+    fun (type a) (t : a t) ~cancel -> match t with
+
+    | Return a -> Deferred.return (Some (a, Heart.unbreakable))
+
+    | Embed f -> f ~cancel
+
+    | Map (t,f) -> sample t ~cancel >>|
+        begin function
+        | None -> None
+        | Some (a,h) -> Some (f a, h)
+        end
+
+    | Bind (m, f) ->
+      begin sample ~cancel m >>= function
+      | None -> Deferred.return None
+      | Some (a,h1) ->
+        sample ~cancel:(Heart.combine2 h1 cancel) (f a) >>= function
+        | None when Heart.is_broken cancel ->
+          Deferred.return None
+        | None -> sample ~cancel t
+        | Some (a,h2) ->
+          Deferred.return (Some (a,Heart.combine2 h1 h2))
+      end
+
+    | Reified (t,st) ->
+      let shared_glass = st.shared_glass in
+      let resample () =
+        let glass = Heart.Glass.create ~desc:"Ten.Reified" in
+        Shared_glass.restart shared_glass glass;
+        st.value <- sample t ~cancel:(Heart.of_glass glass);
+        st.value
+      in
+      begin match Deferred.peek st.value with
+      (* Computation has finished, result is still valid *)
+      | Some (Some (_d,h)) when not (Heart.is_broken h) -> st.value
+      (* Computation has finished, result is invalid *)
+      | Some _ -> or_cancel ~cancel ~shared_glass (resample ())
+      (* Computation is running and was not cancelled *)
+      | None when not (Shared_glass.is_broken st.shared_glass) ->
+        or_cancel ~cancel ~shared_glass st.value
+      (* Computation is running and was cancelled.
+       * - wait for a potential result
+       * - restart if needed, make sure not to restart multiple times *)
+      | _ ->
+        or_cancel ~cancel ~shared_glass begin st.value >>= function
+        (* We have a hesult *)
+        | Some (_d,h) as result when not (Heart.is_broken h) ->
+          Deferred.return result
+        (* No longer interested in the result *)
+        | _ when Heart.is_broken cancel ->
+          Deferred.return None
+        (* No result or invalid one *)
+        | _ when Shared_glass.is_broken st.shared_glass ->
+          resample ()
+        (* Current result is invalid, but a new computation was started
+         * and value got mutated. *)
+        | _ -> st.value
+        end
+      end
+
+    | All ts ->
+      Deferred.create
+        begin fun ivar ->
+          let final_glass = Heart.Glass.create_with_deps [cancel] ~desc:"Ten.All" in
+          let shared_glass = Shared_glass.share final_glass in
+          let none = Deferred.return None in
+          let sample_one t =
+            let cell = ref none and canceller = ref None in
+            let rec resample () =
+              if Heart.Glass.is_broken final_glass then () else
+                begin
+                  Shared_glass.use shared_glass;
+                  cell :=
+                    begin sample t ~cancel >>| function
+                    | None ->
+                      (*assert (Heart.is_broken cancel);*)
+                      (* asserting no longer valid, following change:
+
+                         -      let never = Deferred.never () in
+                         +      let none = Deferred.return None in
+                      *)
+                      None (* Normally not possible unless cancel broken!!*)
+
+                    | Some (_,h) as result ->
+                      Heart.cancel !canceller;
+                      canceller := Heart.upon h ~f:resample;
+                      Shared_glass.release shared_glass;
+                      result
+                    end
+                end
+            in
+            resample ();
+            cell, canceller
+          in
+          let results = List.map ts ~f:sample_one in
+          ignore (Heart.upon (Heart.of_glass final_glass) ~f:
+                    begin fun () ->
+                      let fetch (cell,canceller) =
+                        Heart.cancel !canceller;
+                        !cell
+                      in
+                      Deferred.all (List.map ~f:fetch results) >>> fun results ->
+                      try
+                        let extract = function
+                          | Some (r, h) when not (Heart.is_broken h) -> r, h
+                          | _ -> raise Not_found
+                        in
+                        let rs, hs = List.unzip (List.map ~f:extract results) in
+                        Ivar.fill ivar (Some (rs, Heart.combine hs))
+                      with Not_found -> Ivar.fill ivar None
+                    end)
+        end
+
+    | With_semantics (a,f) ->
+      let cb ~cancel = sample a ~cancel in
+      let rec aux = function
+        | None when not (Heart.is_broken cancel) -> f cb ~cancel >>= aux
+        | result -> Deferred.return result
+      in
+      f cb ~cancel >>= aux
+
+  let return x  = Return x
+  let embed f   = Embed f
+  let bind m f  = Bind (m,f)
+  let all l     = All l
+
+  let map m ~f  = match m with
+    | Return x -> Return (f x)
+    | Map (m,f') -> Map (m, fun x -> f (f' x))
+    | _ -> Map (m,f)
+
+  let with_semantics t ~f = With_semantics (t, f)
+
+  let reify d =
+    match d with
+    | Reified _ -> d
+    | _ ->
+      let glass = Heart.Glass.create ~desc:"Ten.Reify" in
+      let shared_glass = Shared_glass.share glass in
+      let value = sample d ~cancel:(Heart.of_glass glass) in
+      Reified (d, {shared_glass; value})
+
 end
 
 
-
-module Ten_dummy = struct
-  type 'a t = 'a Deferred.t
-
-  let return = Deferred.return
-  let bind = Deferred.bind
-  let all = Deferred.all
-
-  let exec_cancelable t ~cancel:_ =
-    Deferred.map t ~f:(fun x -> Some (x,Heart.unbreakable))
-
-  let lift_cancelable f =
-    f ~cancel:Heart.unbreakable
-    >>| function
-      | None -> assert false
-      | Some (x,_) -> x
-
-  let map = Deferred.map
-  let reify x = x
-
-  let with_tenacious t ~f =
-    lift_cancelable (fun ~cancel -> f ~cancel (exec_cancelable t))
-end
-
-module Ten_ten = struct
-  type 'a t = 'a Ten.t
-
-  let return   = Ten.pure
-  let bind m f = Ten.bind m f
-  let all l    = Ten.all l
-  let map m ~f = Ten.map m ~f
-  let reify    = Ten.reify
-
-  let exec_cancelable t = Ten.sample t
-  let lift_cancelable f = Ten.lift f
-   
-  let with_tenacious t ~f = Ten.with_ten t ~f
-end
-
-let monad, monad_name =
-  match Core.Std.Sys.getenv "DUMMY_TEN" with
-  | None       -> `Ten, None
-  | Some "old" -> `Tenacious, Some "old-tenacious"
-  | Some _     -> `Ten_dummy, Some "dummy"
-
-let m =
-  match monad with
-  | `Tenacious -> ( module T         : Ten_sig )
-  | `Ten       -> ( module Ten_ten   : Ten_sig )
-  | `Ten_dummy -> ( module Ten_dummy : Ten_sig )
-
-let () =
-  match monad_name with
-  | None -> ()
-  | Some monad_name -> Printf.eprintf "tenacious monad = %s\n%!" monad_name
-
-module M = ( val m : Ten_sig )
-
-include M
-type 'a node = 'a t
-
-let use x = x
-
-(*----------------------------------------------------------------------
-
-----------------------------------------------------------------------*)
-
-(* non primitive ops... *)
-
-let ( *>>= ) = bind
+include Inner
 
 let all = function
   | [] -> return []
-  | [x] -> x *>>= fun v -> return [v]
+  | [x] -> map x ~f:(fun v -> [v])
   | xs -> all xs
 
 let all_unit ts =
-  all ts *>>= fun (_:unit list) ->
-  return ()
+  map (all ts) ~f:(fun (_:unit list) -> ())
 
 let exec t =
-  let d = exec_cancelable t ~cancel:Heart.unbreakable in
-  d >>| function
+  sample t ~cancel:Heart.unbreakable >>| function
   | None -> assert false
   | Some v -> v
 
-let lift f = lift_cancelable (fun ~cancel:_ -> f () >>| Option.some)
+let lift f =
+  embed (fun ~cancel:_ ->
+    f () >>| Option.some
+  )

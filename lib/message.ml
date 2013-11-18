@@ -136,6 +136,7 @@ end
 module Event = struct
   type t =
   | Tagged_message of Tag.t * string
+  | Transient of string
   | Load_jenga_root of Path.X.t
   | Load_jenga_root_done of Path.X.t * Time.Span.t
   | Load_sexp_error of Path.t * [`loc of int * int] * exn
@@ -144,7 +145,6 @@ module Event = struct
   | Job_summary of Job_summary.t
   | Build_done of Time.Span.t * [`u of int] * int * string
   | Build_failed of Time.Span.t * [`u of int] * (int*int) * string
-  | Progress of (int*int)
   | Polling
   | Sensitized_on of string
   | File_changed of string
@@ -193,6 +193,19 @@ let verbose fmt = tagged_message Tag.V fmt
 let trace fmt   = tagged_message Tag.T fmt
 let unlogged fmt= tagged_message Tag.U fmt
 
+
+let last_transient_message = ref None
+
+let transient fmt =
+  ksprintf (fun string ->
+    last_transient_message := Some string;
+    let event = Event.Transient string in
+    T.dispatch the_log event
+  ) fmt
+
+let clear_transient () = last_transient_message := None
+
+
 let load_jenga_root path =
   T.dispatch the_log (Event.Load_jenga_root path)
 
@@ -227,10 +240,8 @@ let build_done ~duration ~u ~total s =
 let build_failed ~duration ~u ~fraction s =
   T.dispatch the_log (Event.Build_failed (duration, `u u,fraction,s))
 
-let progress ~fraction =
-  T.dispatch the_log (Event.Progress fraction)
-
 let polling () =
+  clear_transient();
   T.dispatch the_log (Event.Polling)
 
 let sensitized_on ~desc =
@@ -277,33 +288,58 @@ let omake_style_logger config event =
       sprintf "%s " (fixed_span_for_message_prefix duration)
   in
 
-  let put fmt =
-    ksprintf (fun s -> Printf.printf "%s%s\n%!" elapsed s) fmt
+  let dont_emit_kill_line () =
+    Config.dont_emit_kill_line config
   in
-  let jput fmt =
-    ksprintf (fun s -> Printf.printf "%s%s: %s\n%!" elapsed build_system_message_tag s) fmt
+
+  let put_trans s =
+    if dont_emit_kill_line()
+    then Printf.printf "%s%s\r%!" elapsed s
+    else Printf.printf "\027[K%s%s\r%!" elapsed s
   in
+
+  let redisplay_transient() =
+    match (!last_transient_message) with
+    | None -> ()
+    | Some s -> put_trans s
+  in
+
+  let put s =
+    if dont_emit_kill_line()
+    then Printf.printf "%s%s\n%!" elapsed s
+    else Printf.printf "\027[K%s%s\n%!" elapsed s
+  in
+  let jput s =
+    (if dont_emit_kill_line()
+    then Printf.printf "%s%s: %s\n%!" elapsed build_system_message_tag s
+    else Printf.printf "\027[K%s%s: %s\n%!" elapsed build_system_message_tag s);
+    redisplay_transient()
+  in
+
   match event with
   (* jput -- with leading triple stars *)
-  | Event.Tagged_message (Tag.E,s) -> jput "ERROR: %s" s
-  | Event.Tagged_message (Tag.M,s) -> jput "%s" s
-  | Event.Tagged_message (Tag.V,s) -> if verbose then jput "%s" s
-  | Event.Tagged_message (Tag.T,s) -> if show_trace_messages then jput "%s" s
+  | Event.Tagged_message (Tag.E,s) -> jput (sprintf "ERROR: %s" s)
+  | Event.Tagged_message (Tag.M,s) -> jput s
+  | Event.Tagged_message (Tag.V,s) -> if verbose then jput s
+  | Event.Tagged_message (Tag.T,s) -> if show_trace_messages then jput s
   (*put*)
-  | Event.Tagged_message (Tag.U,s) -> put "%s" s
+  | Event.Tagged_message (Tag.U,s) -> put s
+
+  (* progress style message - wll be overwritten by next transient or normal message *)
+  | Event.Transient s -> put_trans s
 
   | Event.Load_jenga_root path ->
     if verbose then (
       let where = Path.X.to_string (Path.X.dirname path) in
       let need = Path.X.basename path in
-      put "- build %s %s" where need;
+      put (sprintf "- build %s %s" where need);
     );
-    jput "reading %s" (Path.X.to_string path)
+    jput (sprintf "reading %s" (Path.X.to_string path))
 
   | Event.Load_jenga_root_done (path,duration) ->
-    jput "finished reading %s (%s)"
+    jput (sprintf "finished reading %s (%s)"
       (Path.X.to_string path)
-      (pretty_span duration)
+      (pretty_span duration))
 
   | Event.Load_sexp_error (path,`loc (line,col),exn) ->
     let where = Path.to_string (Path.dirname path) in
@@ -311,13 +347,14 @@ let omake_style_logger config event =
       (* hack on .cmx suffix for benefit of omake-server *)
     let need = file ^ ".cmx" in
     if verbose then (
-      put "- build %s %s" where need;
+      put (sprintf "- build %s %s" where need);
     );
-    put "File \"%s\", line %d, characters %d-%d:" file line col col;
-    put "Error: sexp_conversion failed\n%s" (Exn.to_string exn);
+    put (sprintf"File \"%s\", line %d, characters %d-%d:" file line col col);
+    put (sprintf "Error: sexp_conversion failed\n%s" (Exn.to_string exn));
     if verbose then (
-      put "- exit %s %s" where need;
+      put (sprintf "- exit %s %s" where need);
     );
+    redisplay_transient()
 
   | Event.Job_started _ -> () (* used to print the "- build" line here *)
 
@@ -336,34 +373,30 @@ let omake_style_logger config event =
     in
     let show_something = job_failed  || has_stderr_or_unexpected_stdout || verbose in
     if show_something then (
-      Job_summary.output_with summary ~put:(fun line -> put "%s" line)
+      Job_summary.output_with summary ~put
     )
 
   | Event.Job_summary summary ->
     Job_summary.output_with summary
-      ~put:(fun line -> put "      %s" line) (* six spaces matches omake *)
+      ~put:(fun line -> put (sprintf "      %s" line)) (* six spaces matches omake *)
 
   | Event.Build_done (duration,`u u,total,s) ->
-    jput "%d/%d targets are up to date" total total;
-    jput "done (#%d, %s, %s, %s) -- HURRAH" u (pretty_span duration) (pretty_mem_usage()) s
+    jput (sprintf "%d/%d targets are up to date" total total);
+    jput (sprintf "done (#%d, %s, %s, %s) -- HURRAH" u (pretty_span duration) (pretty_mem_usage()) s)
 
   | Event.Build_failed (duration, `u u,(num,den),s) -> (
-    jput "%d/%d targets are up to date" num den;
-    jput "failed (#%d, %s, %s, %s)" u (pretty_span duration) (pretty_mem_usage()) s;
-  )
-
-  | Event.Progress (num,den) -> (
-    put "\r[= ] %d / %d" num den;
+    jput (sprintf "%d/%d targets are up to date" num den);
+    jput (sprintf "failed (#%d, %s, %s, %s)" u (pretty_span duration) (pretty_mem_usage()) s);
   )
 
   | Event.Polling ->
     jput "polling for filesystem changes"
 
   | Event.File_changed desc ->
-    jput "%s changed" desc
+    jput (sprintf "%s changed" desc)
 
   | Event.Sensitized_on desc ->
-    jput "- sensitized to: %s" desc
+    jput (sprintf "- sensitized to: %s" desc)
 
   | Event.Rebuilding ->
     jput "rebuilding--------------------------------------------------"

@@ -2,6 +2,11 @@
 open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
+let terminal_type =
+  match Core.Std.Sys.getenv "TERM" with
+  | None -> ""
+  | Some x -> x
+
 module Spec = Command.Spec
 let (+>) = Spec.(+>)
 let (++) = Spec.(++)
@@ -27,7 +32,11 @@ let j_default = Int.max (cpus-1) 1
 let f_formula = "(#cpus-1)/4 + 1"
 let f_default = (cpus - 1) / 4 + 1
 
-(* user *)
+(* set d-number usings same defaults as j-number *)
+let d_formula = j_formula
+let d_default = j_default
+
+
 let j_number =
   Spec.step (fun m x -> m ~j_number:x)
   +> Spec.flag "j" (Spec.optional_with_default j_default Spec.int)
@@ -39,6 +48,12 @@ let f_number =
   +> Spec.flag "f" (Spec.optional_with_default f_default Spec.int)
     ~doc:(sprintf "<forkers> num forker procs, def: %d = %s"
             f_default f_formula)
+
+let d_number =
+  Spec.step (fun m x -> m ~d_number:x)
+  +> Spec.flag "max-par-digest" (Spec.optional_with_default d_default Spec.int)
+    ~doc:(sprintf "<digests> maximum number parallel digests, def: %d = %s"
+            d_default d_formula)
 
 let poll_forever =
   Spec.step (fun m x -> m ~poll_forever:x)
@@ -80,7 +95,6 @@ let show_reconsidering =
   +> Spec.flag "show-reconsidering" ~aliases:["recon"] Spec.no_arg
     ~doc:" Mainly for debug. Show when deps are re-considered"
 
-
 let show_trace_messages =
   Spec.step (fun m x -> m ~show_trace_messages:x)
   +> Spec.flag "trace" Spec.no_arg
@@ -106,21 +120,20 @@ let report_long_cycle_times =
   +> Spec.flag "report-long-cycle-times" ~aliases:["long"] (Spec.optional Spec.int)
     ~doc:"<ms> (for development) pass to Scheduler.report_long_cycle_times"
 
-(* compatability with omake - oamke-mode passes this *)
-let wflag =
-  Spec.step (fun m x -> m ~wflag:x)
-  +> Spec.flag "w" Spec.no_arg
-    ~doc:" Ignored (omake compatability)"
+let omake_server =
+  Spec.step (fun m x -> m ~omake_server:x)
+  +> Spec.flag "w" ~aliases:["-omake-server"] Spec.no_arg
+    ~doc:" Omake compatability; declare omake-server is caller"
 
 let output_postpone =
   Spec.step (fun m x -> m ~output_postpone:x)
   +> Spec.flag "--output-postpone" Spec.no_arg
-    ~doc:" Ignored (omake compatability)"
+    ~doc:" Omake compatability; ignored"
 
 let progress =
   Spec.step (fun m x -> m ~progress:x)
   +> Spec.flag "progress" ~aliases:["--progress"] Spec.no_arg
-    ~doc:" Show periodic progress report"
+    ~doc:" Show periodic progress report (omake style)"
 
 let external_jenga_root =
   Spec.step (fun m x -> m ~external_jenga_root:x)
@@ -132,10 +145,10 @@ let anon_demands =
   Spec.step (fun m demands -> m ~demands)
   +> Spec.anon (Spec.sequence ("DEMAND" %: Spec.string))
 
-let full_error_summary =
-  Spec.step (fun m x -> m ~full_error_summary:x)
-  +> Spec.flag "full-error-summary" Spec.no_arg
-    ~doc:" Repeat stdout/stderr from failing commands in error summary"
+let brief_error_summary =
+  Spec.step (fun m x -> m ~brief_error_summary:x)
+  +> Spec.flag "brief-error-summary" Spec.no_arg
+    ~doc:" Don't repeat stdout/stderr from failing commands in error summary"
 
 let no_server =
   Spec.step (fun m x -> m ~no_server:x)
@@ -147,6 +160,7 @@ let go_command =
   Command.basic (
     j_number
     ++ f_number
+    ++ d_number
     ++ poll_forever
     ++ stop_on_first_error
     ++ verbose
@@ -160,11 +174,11 @@ let go_command =
     ++ prefix_time
     ++ delay_for_dev
     ++ report_long_cycle_times
-    ++ wflag
+    ++ omake_server
     ++ output_postpone
     ++ progress
     ++ external_jenga_root
-    ++ full_error_summary
+    ++ brief_error_summary
     ++ no_server
     ++ anon_demands
 
@@ -176,6 +190,7 @@ let go_command =
     (fun
       ~j_number
       ~f_number
+      ~d_number
       ~poll_forever
       ~stop_on_first_error
       ~verbose
@@ -189,11 +204,11 @@ let go_command =
       ~prefix_time
       ~delay_for_dev
       ~report_long_cycle_times
-      ~wflag:_
+      ~omake_server
       ~output_postpone:_
       ~progress
       ~external_jenga_root
-      ~full_error_summary
+      ~brief_error_summary
       ~no_server
       ~demands
       () ->
@@ -201,6 +216,7 @@ let go_command =
           Config.
           j_number;
           f_number;
+          d_number;
           poll_forever;
           stop_on_first_error;
           verbose;
@@ -215,9 +231,18 @@ let go_command =
           delay_for_dev = Option.map delay_for_dev ~f:(fun x -> sec (float x));
           report_long_cycle_times =
             Option.map report_long_cycle_times ~f:(fun ms -> Time.Span.create ~ms ());
-          progress;
+
+          progress =
+            if progress then
+              if omake_server
+              then Some `omake_style
+              else Some `jem_style
+            else None;
+
+          dont_emit_kill_line = String.(terminal_type = "dumb");
+
           external_jenga_root;
-          full_error_summary;
+          brief_error_summary;
           no_server;
           demands;
         }
@@ -227,4 +252,3 @@ let go_command =
 
 let main () =
   Command.run go_command
-

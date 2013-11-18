@@ -2,6 +2,10 @@
 open Core.Std
 open Async.Std
 
+module Digester : sig
+  val init : Config.t -> unit (* just once *)
+end
+
 (* Module supporting interface to file-system -- stat, digest, glob.
    Services: Digest caching & inotify wrapping (as hearts).
 *)
@@ -26,6 +30,7 @@ module Glob : sig (* glob specification *)
   type t with sexp, bin_io, compare
   val to_string : t -> string
   val create : dir:Path.t -> kinds:Kind.t list option -> glob_string:string -> t
+  val create_from_path : kinds:Kind.t list option -> Path.t -> t
 end
 
 module Listing : sig (* result of globbing *)

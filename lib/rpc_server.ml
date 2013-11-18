@@ -28,23 +28,13 @@ let really_go ~root_dir progress =
     Rpc.Pipe_rpc.implement Rpc_intf.progress_stream
       (fun () () ~aborted ->
         make_periodic_pipe_writer progress_report_span ~aborted ~f:(fun () ->
-          {Mon.
-           progress = Build.Progress.snap progress;
-           effort = Build.snap_all_effort();
-          }
+          Mon.snap progress
         )
       )
-  in
-  let dump_progress_state =
-    Rpc.Rpc.implement Rpc_intf.dump_progress_state (fun () () ->
-      Message.message "dumping not supported";
-      Deferred.unit
-    )
   in
   let implementations =
     Rpc.Implementations.create ~on_unknown_rpc:`Ignore ~implementations: [
       progress_stream;
-      dump_progress_state;
     ]
   in
   match implementations with

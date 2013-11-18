@@ -9,6 +9,7 @@ module Kind = Fs.Kind
 module Glob = struct
   include Fs.Glob
   let create ~dir ?kinds glob_string = Fs.Glob.create ~dir ~kinds ~glob_string
+  let create_from_path ?kinds path = Fs.Glob.create_from_path ~kinds path
 end
 
 module Alias = Description.Alias

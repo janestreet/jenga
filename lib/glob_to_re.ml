@@ -90,4 +90,4 @@ let globre ~path s =
     failwith "unclosed { in glob";
   Buffer.contents res
 
-let convert glob = "^" ^ globre ~path:true glob ^ "$"
+let convert_unachored glob = globre ~path:true glob

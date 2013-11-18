@@ -5,6 +5,7 @@ open No_polymorphic_compare let _ = _squelch_unused_module_warning_ let _ = _squ
 type t = {
   j_number : int;
   f_number : int;
+  d_number : int;
   stop_on_first_error : bool;
   poll_forever : bool;
   verbose : bool;
@@ -18,9 +19,10 @@ type t = {
   prefix_time : bool;
   delay_for_dev : Time.Span.t option;
   report_long_cycle_times : Time.Span.t option;
-  progress : bool;
+  progress : [`omake_style | `jem_style] option;
+  dont_emit_kill_line : bool;
   external_jenga_root : string option;
-  full_error_summary : bool;
+  brief_error_summary : bool;
   no_server : bool;
   demands : string list;
 } with fields

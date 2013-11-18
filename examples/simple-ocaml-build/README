@@ -1,0 +1,7 @@
+
+Simple rules for building exe from bunch of .ml and .mli files.
+- no libraries
+- compilation rule setup for all .ml/.mli in directory
+- dependancies between files determined using ocamldep
+- handle with: just .ml OR .ml and .mli
+- .exe & link order configured by the user

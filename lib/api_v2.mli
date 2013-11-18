@@ -30,6 +30,7 @@ end
 module Glob : sig
   type t with sexp
   val create : dir:Path.t -> ?kinds: Kind.t list -> string -> t
+  val create_from_path : ?kinds: Kind.t list -> Path.t -> t
 end
 
 module Alias : sig
@@ -62,6 +63,7 @@ module Depends : sig (* The jenga monad *)
   val contents : Path.t -> string t
   val contents_absolute : path:string -> string t
   val subdirs : dir:Path.t -> Path.t list t
+  val file_exists : Path.t -> bool t
 end
 
 module Rule : sig

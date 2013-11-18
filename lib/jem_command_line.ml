@@ -7,71 +7,17 @@ open Async.Std
 
 let retry_span = sec 0.5
 
-module Finish_time_estimator : sig
+let terminal_type =
+  match Core.Std.Sys.getenv "TERM" with
+  | None -> ""
+  | Some x -> x
 
-  type t
-  val create : decay_factor_per_second:float -> t
-  val push_todo : t -> int -> unit
-  val estimated_finish_time_string : t -> string
+let dont_emit_kill_line = String.(terminal_type = "dumb")
 
-end = struct
-
-  type t = {
-    decay_factor_per_second : float;
-    mutable rate : float; (* latest estimate of targets/sec *)
-    mutable last_push_time : Time.t;
-    mutable last_todo : int;
-  }
-
-  let create ~decay_factor_per_second = {
-    decay_factor_per_second;
-    rate = 0.0;
-    last_push_time = Time.epoch;
-    last_todo = 0;
-  }
-
-  let calc_new_rate t ~now ~todo =
-    let duration = Time.diff now t.last_push_time in
-    let seconds = Time.Span.to_sec duration in
-    assert (Float.(seconds >= 0.0));
-    let progress = t.last_todo - todo in (* might be negative *)
-    let current_rate = float progress /. seconds in
-    let decay = t.decay_factor_per_second ** seconds in
-    (decay *. t.rate) +. ((1.0 -. decay) *. current_rate)
-
-  let push_todo t todo =
-    let now = Time.now () in
-    let new_rate = calc_new_rate t ~now ~todo in
-    (
-      t.last_todo      <- todo;
-      t.last_push_time <- now;
-      t.rate           <- new_rate
-    )
-
-  let to_min_string_no_date time =
-    let ofday = Time.to_local_ofday time in
-    let span = Time.Ofday.to_span_since_start_of_day ofday in
-    let parts = Time.Span.to_parts span in
-    let module P = Time.Span.Parts in
-    sprintf "%02d:%02d" parts.P.hr parts.P.min
-
-  (*let to_sec_string_no_date t = Time.Ofday.to_sec_string (Time.to_local_ofday t)*)
-
-  let estimated_finish_time_string t =
-    if Int.(t.last_todo <= 0) then ", finished"
-    else
-      (* will never finish with a negative or zero rate *)
-      if Float.(t.rate <= 0.0) then ""
-      else
-        let duration = Time.Span.scale (sec 1.0) (float t.last_todo /. t.rate) in
-        (* pointless to show a duration which is silly big *)
-        if Time.Span.(duration > Time.Span.of_hr 12.) then ""
-        else
-          ", finish: " ^ to_min_string_no_date (Time.add (Time.now()) duration)
-
-end
-
-let message fmt = ksprintf (fun s -> Printf.printf "\027[2K%s\r%!" s) fmt
+let message =
+  if dont_emit_kill_line
+  then fun fmt -> ksprintf (fun s -> Printf.printf "%s\r%!" s) fmt
+  else fun fmt -> ksprintf (fun s -> Printf.printf "\027[2K%s\r%!" s) fmt
 
 let run ~root_dir ~string_of_mon =
 
@@ -112,7 +58,7 @@ let run ~root_dir ~string_of_mon =
     Pipe.iter_without_pushback reader ~f:(fun mon ->
       last_mon := Some mon;
       fresh := true;
-      let todo = Mon.Progress.todo mon.Mon.progress in
+      let todo = Progress.Snapped.todo (Mon.progress mon) in
       Finish_time_estimator.push_todo estimator todo;
       message "%s" (string_of_mon mon);
     ) >>= fun () ->
@@ -177,7 +123,6 @@ let good_breakdown =
   +> Spec.flag "good" Spec.no_arg
     ~doc:" display breakdown for 'good' counts"
 
-
 let show_work =
   Spec.step (fun m x -> m ~show_work:x)
   +> Spec.flag "work" Spec.no_arg
@@ -185,11 +130,11 @@ let show_work =
 
 let error fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt
 
-let command_line () =
+let main () =
   Command.run (
     Command.basic (todo_breakdown ++ good_breakdown ++ show_work)
       ~summary:"Jenga monitor - monitor jenga running in the current repo."
-      ~readme:Mon.readme
+      ~readme:Progress.readme
       (fun ~todo_breakdown ~good_breakdown ~show_work  () ->
 
         match Path.Root.discover() with | `cant_find_root ->
@@ -200,13 +145,14 @@ let command_line () =
           Misc.in_async ~f:(fun () ->
 
             let string_of_mon mon =
-              let {Mon.progress;effort} = mon in
+              let progress = Mon.progress mon in
+              let effort = Mon.effort mon in
               let eff_string ~switch =
                 if not switch then "" else
                   sprintf " [ %s ]" (Effort.Snapped.to_string effort)
               in
 
-              Mon.Progress.to_string ~todo_breakdown ~good_breakdown progress
+              Progress.Snapped.to_string ~todo_breakdown ~good_breakdown progress
               ^ eff_string ~switch:show_work
             in
             run ~root_dir ~string_of_mon

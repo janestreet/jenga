@@ -161,6 +161,50 @@ let ensure_directory ~dir =
     | Ok () -> return `ok
     | Error _ -> return `failed
 
+
+(*----------------------------------------------------------------------
+ Digester (throttle)
+----------------------------------------------------------------------*)
+
+module Digester : sig
+
+  val init: Config.t -> unit
+  val throttle : (unit -> 'a Deferred.t) -> 'a Deferred.t
+
+end = struct
+
+  type t = {
+    (* Throttle for external digest jobs.
+       Independent from user's -j job throttle. *)
+    throttle : unit Throttle.t;
+  }
+
+  let create config =
+    let throttle =
+      let max_concurrent_jobs = Config.d_number config in
+      Throttle.create ~continue_on_error:true ~max_concurrent_jobs
+    in
+    { throttle }
+
+  let t_opt_ref = ref None
+
+  let the_t () = match !t_opt_ref with | None -> assert false | Some t -> t
+
+  let init config =
+    match !t_opt_ref with
+    | Some _ -> failwith "Fs.init called more than once"
+    | None -> t_opt_ref := Some (create config)
+
+  let throttle f =
+    let t = the_t() in
+    Throttle.enqueue t.throttle (fun () ->
+      f () >>= fun res ->
+      Deferred.return res
+    )
+
+end
+
+
 (*----------------------------------------------------------------------
  Compute_digest (count!)
 ----------------------------------------------------------------------*)
@@ -222,7 +266,8 @@ module External__Compute_digest : Compute_digest_sig = struct
     Effort.track digest_counter (fun () ->
       let args = [Path.X.to_absolute_string path] in
       let request = Forker.Request.create ~putenv ~dir ~prog ~args in
-      Forker.run request >>= fun {Forker.Reply. stdout;stderr=_;outcome} ->
+      Digester.throttle (fun () -> Forker.run request)
+      >>= fun {Forker.Reply. stdout;stderr=_;outcome} ->
       match outcome with
       | `error s -> return (Error (Error.of_string s))
       | `success ->
@@ -266,7 +311,7 @@ module Listing : sig
 
   module Restriction : sig
     type t with sexp, bin_io
-    val create : kinds:Kind.t list option -> glob_string:string -> t
+    val create : kinds:Kind.t list option -> Pattern.t -> t
     val to_string : t -> string
     val compare : t -> t -> int
   end
@@ -350,15 +395,12 @@ end = struct
   let equal = equal_using_compare compare
 
   module Restriction = struct
-
     type t = {
       kinds : Kind.t list option; (* None means any kind *)
       pat : Pattern.t;
     } with sexp, bin_io, compare
 
-    let create ~kinds ~glob_string =
-      let pat = Pattern.create_from_glob_string glob_string in
-      { kinds; pat; }
+    let create ~kinds pat = { kinds; pat; }
 
     let to_string t =
       sprintf "%s %s"
@@ -535,7 +577,7 @@ module Stat_memo : sig
 
 end = struct
 
-  type computation = Stats.t Or_error.t Tenacious.node
+  type computation = Stats.t Or_error.t Tenacious.t
   type t = {
     watcher : Watcher.t;
     file_watch_cache : computation Path.X.Table.t;
@@ -554,8 +596,7 @@ end = struct
       | `file -> t.file_watch_cache
       | `dir -> t.dir_watch_cache
     in
-    Tenacious.use
-    (match (Hashtbl.find cache path) with
+    match (Hashtbl.find cache path) with
     | Some tenacious -> tenacious
     | None ->
       let tenacious =
@@ -572,7 +613,7 @@ end = struct
       in
       let tenacious = Tenacious.reify tenacious in
       Hashtbl.add_exn cache ~key:path ~data:tenacious;
-      tenacious)
+      tenacious
 
 end
 
@@ -722,7 +763,7 @@ end = struct
               );
               Tenacious.return (`listing new_listing)
     in
-    Tenacious.(use (reify tenacious))
+    Tenacious.reify tenacious
 
 
 end
@@ -784,19 +825,18 @@ module Digest_memo : sig
 
 end = struct
 
-  type computation = Digest_result.t Tenacious.node
+  type computation = Digest_result.t Tenacious.t
   type t = {
     cache : computation Path.X.Table.t;
   }
 
   let digest_file t dp sm ~file =
-    Tenacious.use
-    (match (Hashtbl.find t.cache file) with
+    match (Hashtbl.find t.cache file) with
     | Some tenacious -> tenacious
     | None ->
       let tenacious = Tenacious.reify (Persist.digest_file dp sm ~file) in
       Hashtbl.add_exn t.cache ~key:file ~data:tenacious;
-      tenacious)
+      tenacious
 
   let create () = {
     cache = Path.X.Table.create ();
@@ -822,19 +862,18 @@ module Listing_memo : sig
 
 end = struct
 
-  type computation = Listing_result.t Tenacious.node
+  type computation = Listing_result.t Tenacious.t
   type t = {
     cache : computation Path.Table.t;
   }
 
   let list_dir t dp sm ~dir =
-    Tenacious.use
-    (match (Hashtbl.find t.cache dir) with
+    match (Hashtbl.find t.cache dir) with
     | Some tenacious -> tenacious
     | None ->
       let tenacious = Tenacious.reify (Persist.list_dir dp sm ~dir) in
       Hashtbl.add_exn t.cache ~key:dir ~data:tenacious;
-      tenacious)
+      tenacious
 
   let create () = {
     cache = Path.Table.create ();
@@ -853,6 +892,7 @@ module Glob : sig
   include Hashable with type t := t
 
   val create : dir:Path.t -> kinds: Kind.t list option -> glob_string:string -> t
+  val create_from_path : kinds: Kind.t list option -> Path.t -> t
   val to_string : t -> string
   val compare : t -> t -> int
 
@@ -868,7 +908,7 @@ end = struct
     module T = struct
       type t = {
         dir : Path.t;
-        glob_string : string;
+        pat : Pattern.t;
         kinds : Kind.t list option;
       } with sexp, bin_io, compare
       let hash = Hashtbl.hash
@@ -893,8 +933,8 @@ end = struct
       (Path.to_string t.dir)
       (Listing.Restriction.to_string t.restriction)
 
-  let raw_create ~dir ~kinds ~glob_string =
-    let restriction = Listing.Restriction.create ~kinds ~glob_string in
+  let raw_create ~dir ~kinds pat =
+    let restriction = Listing.Restriction.create ~kinds pat in
     let t = { dir ; restriction } in
     (*Message.message "Glob.create: %s" (to_string t);*)
     t
@@ -902,15 +942,26 @@ end = struct
   (* cache glob construction *)
   let the_cache : (Key.t, t) Hashtbl.t = Key.Table.create()
 
-  let create ~dir ~kinds ~glob_string =
-    let key = {Key. dir; kinds; glob_string} in
+  let cached_create key =
     match (Hashtbl.find the_cache key) with
     | Some glob -> glob
     | None ->
-      let glob = raw_create ~dir ~kinds ~glob_string in
+      let {Key.dir;kinds;pat} = key in
+      let glob = raw_create ~dir ~kinds pat in
       Hashtbl.add_exn the_cache ~key ~data:glob;
       glob
 
+  let create ~dir ~kinds ~glob_string =
+    let pat = Pattern.create_from_glob_string glob_string in
+    let key = {Key. dir; kinds; pat} in
+    cached_create key
+
+  let create_from_path ~kinds path =
+    create ~dir:(Path.dirname path) ~kinds ~glob_string:(Path.basename path) (*OLD *)
+    (*let dir = Path.dirname path in
+    let pat = Pattern.create_from_literal_string (Path.basename path) in
+    let key = {Key. dir; kinds; pat} in
+    cached_create key*)
 
   let exec_no_cutoff glob lm per sm  =
     Listing_memo.list_dir lm per sm ~dir:glob.dir *>>= function
@@ -962,19 +1013,18 @@ module Glob_memo : sig
 
 end = struct
 
-  type computation = Listing_result.t Tenacious.node
+  type computation = Listing_result.t Tenacious.t
   type t = {
     cache : computation Glob.Table.t;
   }
 
   let list_glob t lm per sm glob =
-    Tenacious.use
-    (match (Hashtbl.find t.cache glob) with
+    match (Hashtbl.find t.cache glob) with
     | Some tenacious -> tenacious
     | None ->
       let tenacious = Tenacious.reify (Glob.exec glob lm per sm) in
       Hashtbl.add_exn t.cache ~key:glob ~data:tenacious;
-      tenacious)
+      tenacious
 
   let create () = {
     cache = Glob.Table.create ();
@@ -1070,7 +1120,7 @@ end = struct
       ||
       match (Path.create_from_absolute path) with
       | None -> false
-      | Some path -> Path.Key.locked (Path.get_key path) 
+      | Some path -> Path.Key.locked (Path.get_key path)
     in
 
     Watcher.create ~ignore ~expect >>= fun watcher ->

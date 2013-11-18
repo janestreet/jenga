@@ -12,12 +12,6 @@ module Persist : sig
   val cat_build_script : t -> Path.t list -> unit
 end
 
-module Progress : sig
-  type t
-  val create : unit -> t
-  val snap : t -> Mon.Progress.t
-end
-
 val build_forever :
   Config.t ->
   Progress.t ->

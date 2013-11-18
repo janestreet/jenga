@@ -9,7 +9,7 @@ open Async.Std
 
        unit -> ('a * Heart.t) Deferred.t
 
-   Leaf computations are `lifted' into the tenacious-compuation type, and then composed
+   Leaf computations are `lifted' into the tenacious-computation type, and then composed
    sequentially, using monadic [bind], or in parallel, with [all].
 
    While running, tenacious computations detect "as early as possible" if they have become
@@ -34,62 +34,36 @@ open Async.Std
    Lifted leaf computations are not stopped once started. But no further leaf computations
    will be started if they are only referenced from a tenacious computation which is no
    longer required.
+
+   Note: lift/exec.  Sadly these DON'T have the nice semantic equality:
+        t == lift (fun () -> exec t)     (* NOT TRUE *)
+   because the RHS forms a barrier to cancels.
+
+   Use with_semantics to get a hook into when a computation is evaluated/re-evaluated
+
+   Note. Only reified computations have identity.
+
 *)
 
 type 'a t
-type 'a node
 
-(* lift/exec
-   Unlike the cancelable versions below, these DON'T have the nice semantic equality:
+val return      : 'a -> 'a t
+val map         : 'a t -> f:('a -> 'b) -> 'b t
+val bind        : 'a t -> ('a -> 'b t) -> 'b t
+val all         : 'a t list -> 'a list t
+val all_unit    : unit t list -> unit t
 
-        t == lift_uncancelable (fun () -> exec t)     (* NOT TRUE *)
+val reify       : 'a t -> 'a t
 
-   because the RHS forms a barrier to cancels.
-   However, these version are more useful, and the more commonly used.
-*)
-
-val exec : 'a t -> ('a * Heart.t) Deferred.t
-val lift : (unit -> ('a * Heart.t) Deferred.t) -> 'a t
-
-val with_tenacious
-  :  'a t
-  ->  f:( cancel:Heart.t
-     -> (cancel:Heart.t -> ('a * Heart.t) option Deferred.t)
-     -> ('b * Heart.t) option Deferred.t)
-  -> 'b t
-
-(* standard combinators *)
-
-val return : 'a -> 'a t
-val map    : 'a t -> f:('a -> 'b) -> 'b t
-val bind   : 'a t -> ('a -> 'b t) -> 'b t
-val all    : 'a t list -> 'a list t
-val reify  : 'a t -> 'a node
-val use    : 'a node -> 'a t
-
-(*
-  lift_cancelable / exec_cancelable
-
-  The following semantic equality should hold...
-    t == lift_cancelable (fun ~cancel -> exec_cancelable t ~cancel)
-
-  [lift_cancelable] allows lifted computation to know they are cancelled.
-
-  [exec_cancelable t ~cancel >>= fun res -> ... ] allows the caller to notify his
-  disinterest in the exec'ed tenacious by means of the [cancel] heart being broken,
-  in which case [res] may be [None].
-
-  If the caller cancels, he has no way of knowing when computations run as part of the
-  tenacious finish - they may not even be cancelled if there are other uses.
-
-  The caller MAY assume the result will only be [None] if he cancels.
-*)
-
-val exec_cancelable : 'a t -> cancel:Heart.t -> ('a * Heart.t) option Deferred.t
-val lift_cancelable :        (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> 'a t
+val lift        :  (unit -> ('a * Heart.t) Deferred.t) -> 'a t
+val exec        : 'a t -> ('a * Heart.t) Deferred.t
 
 
-(* non primitive ops... *)
+(* Use of with_semantics is tricky & discouraged, unless you
+   really understand what you are doing! *)
 
-val all_unit : unit t list -> unit t
+type 'a result = ('a * Heart.t) option Deferred.t
+type 'a semantics = cancel:Heart.t -> 'a result
+
+val with_semantics : 'a t -> f:('a semantics -> 'b semantics) -> 'b t
 
