@@ -73,6 +73,26 @@ module Goal = struct
 
 end
 
+module Need = struct
+
+  module T = struct
+    type t = Jengaroot | Goal of Goal.t
+    with sexp, bin_io, compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make_binable(T)
+  include Comparable.Make_binable(T)
+
+  let goal x = Goal x
+  let jengaroot = Jengaroot
+
+  let to_string = function
+    | Jengaroot -> Misc.jenga_root_basename
+    | Goal x -> Goal.to_string x
+
+end
+
 module Xaction = struct
 
   type t = {
@@ -127,6 +147,8 @@ module Depends = struct
   | Absolute : Path.Abs.t -> unit t
   | Alias : Alias.t -> unit t
   | Glob : Glob.t -> Path.t list t
+  | Contents : Path.t -> string t
+  | Contents_abs : Path.Abs.t -> string t
   | Stdout : Action.t t -> string t (* special -- arg nested in t gives scoping *)
 
   let return x = Return x
@@ -142,12 +164,14 @@ module Depends = struct
   let glob t = Glob t
   let deferred t = Deferred t
 
+  let contents p = Contents p
+  let contents_absolute ~path = Contents_abs (Path.Abs.create path)
+
   (* non primitive... *)
 
   let map t f = bind t (fun x -> return (f x))
   let all_unit ts = map (all ts) (fun (_:unit list) -> ())
 
-  let ( *>>= ) = bind
   let ( *>>| ) = map
 
   let both : ('a t -> 'b t -> ('a * 'b) t) =
@@ -161,26 +185,8 @@ module Depends = struct
 
   let action a = action_stdout a *>>| fun (_:string) -> ()
 
-  let bash ~dir command_string =
-    Action.shell ~dir ~prog:"bash" ~args:["-c"; command_string]
-
-  let contents p =
-    path p *>>= fun () ->
-    deferred (fun () ->
-      File_access.enqueue (fun () ->
-        Reader.file_contents (Path.to_string p)
-      )
-    )
-
-  let contents_absolute ~path =
-    action_stdout (
-      absolute ~path *>>= fun () ->
-      return (bash ~dir:Path.the_root (sprintf "cat %s" path))
-    )
-
   let subdirs ~dir =
     glob (Glob.create ~dir ~kinds:(Some [`Directory]) ~glob_string:"*")
-
 
   let file_exists path =
     glob (Glob.create_from_path ~kinds:None path) (* any kind *)

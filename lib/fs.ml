@@ -20,6 +20,7 @@ let mkdir_counter = Effort.Counter.create "mkdir"
 module External_digest = Digest
 
 let ( *>>= ) = Tenacious.bind
+let ( *>>| ) t f = Tenacious.map t ~f
 
 let do_trace =
   match Core.Std.Sys.getenv "JENGA_TRACE_FS" with
@@ -544,7 +545,7 @@ end = struct
     unlogged "watch: %s (dir: %s)" path dir;
     match (Hashtbl.find glass_cache path) with
     | Some glass ->
-      assert (not (Heart.Glass.is_broken glass));
+      (*assert (not (Heart.Glass.is_broken glass));*)
       return (Ok (Heart.of_glass glass))
     | None ->
       let absolute_dir = dir in (* do we need absolute dir ??? *)
@@ -621,6 +622,14 @@ end
  Digest/Listing result types
 ----------------------------------------------------------------------*)
 
+module Contents_result = struct
+  type t = [
+  | `file_read_error of Error.t
+  | `is_a_dir
+  | `contents of string
+  ]
+end
+
 module Digest_result = struct
   type t = [
   | `stat_error of Error.t
@@ -648,6 +657,24 @@ module Listing_result = struct
     | _,_-> false
 
 end
+
+(*----------------------------------------------------------------------
+ contents_file (without persistence)
+----------------------------------------------------------------------*)
+
+let contents_file ~file =
+  Tenacious.lift (fun () ->
+    File_access.enqueue (fun () ->
+      try_with (fun () ->
+        Reader.file_contents (Path.X.to_absolute_string file)
+      )
+      >>| (function Ok x -> Ok x | Error exn -> Error (Error.of_exn exn))
+    )
+    >>| unbreakable
+  ) *>>| function
+  | Error e -> `file_read_error e
+  | Ok new_contents -> `contents new_contents
+
 
 (*----------------------------------------------------------------------
  Digest_persist - w.r.t stat->digest mapping
@@ -804,6 +831,41 @@ end = struct
   let digest_file t sm ~file = Digest_persist.digest_file t.digests sm ~file
 
   let list_dir t sm ~dir = Listing_persist.list_dir t.listings sm ~dir
+
+end
+
+(*----------------------------------------------------------------------
+ Contents_memo
+----------------------------------------------------------------------*)
+
+module Contents_memo : sig
+
+  type t
+  val create : unit -> t
+
+  val contents_file :
+    t ->
+    file:Path.X.t ->
+    Contents_result.t Tenacious.t
+
+end = struct
+
+  type computation = Contents_result.t Tenacious.t
+  type t = {
+    cache : computation Path.X.Table.t;
+  }
+
+  let contents_file t ~file =
+    match (Hashtbl.find t.cache file) with
+    | Some tenacious -> tenacious
+    | None ->
+      let tenacious = Tenacious.reify (contents_file ~file) in
+      Hashtbl.add_exn t.cache ~key:file ~data:tenacious;
+      tenacious
+
+  let create () = {
+    cache = Path.X.Table.create ();
+  }
 
 end
 
@@ -1041,6 +1103,11 @@ module Memo : sig
   type t
   val create : Watcher.t -> t
 
+  val contents_file :
+    t ->
+    file:Path.X.t ->
+    Contents_result.t Tenacious.t
+
   val digest_file :
     t ->
     Persist.t ->
@@ -1057,6 +1124,7 @@ end = struct
 
   type t = {
     sm : Stat_memo.t;
+    cm : Contents_memo.t;
     dm : Digest_memo.t;
     lm : Listing_memo.t;
     gm : Glob_memo.t;
@@ -1064,10 +1132,13 @@ end = struct
 
   let create watcher = {
     sm = Stat_memo.create watcher;
+    cm = Contents_memo.create();
     dm = Digest_memo.create();
     lm = Listing_memo.create();
     gm = Glob_memo.create();
   }
+
+  let contents_file t ~file = Contents_memo.contents_file t.cm ~file
 
   let digest_file t per ~file = Digest_memo.digest_file t.dm per t.sm ~file
 
@@ -1083,6 +1154,11 @@ module Fs : sig
 
   type t
   val create : Persist.t -> t Deferred.t
+
+  val contents_file :
+    t ->
+    file:Path.X.t ->
+    Contents_result.t Tenacious.t
 
   val digest_file :
     t ->
@@ -1127,6 +1203,8 @@ end = struct
     let memo = Memo.create watcher in
     let t = { watcher; memo; persist; } in
     return t
+
+  let contents_file t ~file = Memo.contents_file t.memo ~file
 
   let digest_file t ~file = Memo.digest_file t.memo t.persist ~file
 

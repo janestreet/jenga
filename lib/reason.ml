@@ -4,10 +4,37 @@ open Description
 
 include Error_reason_type
 
+let filesystem_related = function
+  (* filesystem related errors which might resolve, and so we choose not to count as
+     errors when considering [-stop-on-first-error] *)
+  | File_read_error _
+  | Digest_error _
+  | Undigestable _
+  | Glob_error _
+  | Unexpected_directory
+  | No_directory_for_target _
+    -> true
+
+  | Shutdown
+  | Error_in_deps
+  | Jenga_root_problem _
+  | No_definition_for_alias
+  | No_source_at_abs_path
+  | No_rule_or_source
+  | Non_zero_status _
+  | Inconsistent_proxies
+  | Duplicate_scheme_ids _
+  | Scheme_raised _
+  | Running_job_raised _
+  | Multiple_rules_for_paths _
+  | Rule_failed_to_generate_targets _
+  | Usercode_raised _
+    -> false
+
 let to_string_one_line = function
   | Shutdown                          -> "Shutdown"
-  | Error_in_sibling                  -> "Unable to build sibling target"
   | Error_in_deps                     -> "Unable to build dependencies"
+  | File_read_error _                 -> "file read error"
   | Digest_error _                    -> "unable to digest file"
   | Glob_error (g,s)                  -> sprintf "%s %s" (Fs.Glob.to_string g) s
   | Jenga_root_problem s              -> sprintf "Problem with %s: %s" (Misc.jenga_root_basename) s
@@ -36,7 +63,6 @@ let to_string_one_line = function
 
 let to_extra_lines = function
   | Shutdown
-  | Error_in_sibling
   | Error_in_deps
   | Undigestable _
   | Glob_error _
@@ -56,6 +82,7 @@ let to_extra_lines = function
   | Running_job_raised exn
     -> [Exn.to_string exn]
 
+  | File_read_error  error
   | Digest_error error
     -> [Error.to_string_hum error]
 
@@ -67,8 +94,9 @@ let messages ~tag t =
   Message.error "%s: %s" tag (to_string_one_line t);
   List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s)
 
-let message_summary config goal t =
-  Message.error "(summary) %s: %s" (Goal.to_string goal) (to_string_one_line t);
+let message_summary config need t =
+  Message.error "(summary) %s: %s" (Need.to_string need) (to_string_one_line t);
+  List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s);
   if not (Config.brief_error_summary config) then (
     match t with
     | Non_zero_status summary -> Message.repeat_job_summary summary

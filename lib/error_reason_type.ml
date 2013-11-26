@@ -4,8 +4,8 @@ open Description
 
 type t =
 | Shutdown
-| Error_in_sibling
 | Error_in_deps
+| File_read_error                   of Error.t
 | Digest_error                      of Error.t
 | Undigestable                      of Fs.Kind.t
 | Glob_error                        of Fs.Glob.t * string
@@ -23,4 +23,3 @@ type t =
 | Multiple_rules_for_paths          of Gen_key.t * Path.t list
 | Rule_failed_to_generate_targets   of Path.t list
 | Usercode_raised                   of exn
-(* | Cycle... *)

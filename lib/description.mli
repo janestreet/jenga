@@ -20,6 +20,15 @@ module Goal : sig
   val parse_string : dir:Path.t -> string -> t
 end
 
+module Need : sig
+  type t
+  val goal : Goal.t -> t
+  val jengaroot : t
+  include Hashable_binable with type t := t
+  include Comparable_binable with type t := t
+  val to_string : t -> string
+end
+
 module Xaction : sig
   type t = {dir : Path.t; prog : string; args : string list;} with sexp, bin_io, compare
   val to_string : t -> string
@@ -50,6 +59,8 @@ module Depends : sig
   | Absolute : Path.Abs.t -> unit t
   | Alias : Alias.t -> unit t
   | Glob : Fs.Glob.t -> Path.t list t
+  | Contents : Path.t -> string t
+  | Contents_abs : Path.Abs.t -> string t
   | Stdout : Action.t t -> string t
 
   val return : 'a -> 'a t

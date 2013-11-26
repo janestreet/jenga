@@ -64,6 +64,10 @@ module Depends : sig (* The jenga monad *)
   val contents_absolute : path:string -> string t
   val subdirs : dir:Path.t -> Path.t list t
   val file_exists : Path.t -> bool t
+
+  val read_sexp : Path.t -> Sexp.t t
+  val read_sexps : Path.t -> Sexp.t list t
+
 end
 
 module Rule : sig

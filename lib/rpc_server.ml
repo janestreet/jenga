@@ -28,7 +28,7 @@ let really_go ~root_dir progress =
     Rpc.Pipe_rpc.implement Rpc_intf.progress_stream
       (fun () () ~aborted ->
         make_periodic_pipe_writer progress_report_span ~aborted ~f:(fun () ->
-          Mon.snap progress
+          Progress.snap progress
         )
       )
   in

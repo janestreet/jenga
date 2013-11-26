@@ -4,7 +4,7 @@ open Async.Std
 
 exception Shutdown
 
-val external_jobs_run : Effort.Counter.t
+(*val external_jobs_run : Effort.Counter.t*)
 
 module Output : sig
 

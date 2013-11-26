@@ -5,7 +5,7 @@ open Async.Std
 
 open Description
 
-let external_jobs_run = Effort.Counter.create "job"
+(*let external_jobs_run = Effort.Counter.create "job"*)
 
 module Output = struct
 
@@ -41,7 +41,7 @@ let run ~config ~need ~putenv ~xaction ~output =
     Message.job_started ~need ~stdout_expected ~where ~prog ~args
   in
   let start_time = Time.now() in
-  Effort.track external_jobs_run (fun () ->
+  (*Effort.track external_jobs_run (fun () ->*) (
     (match Config.delay_for_dev config with
     | None -> return ()
     | Some seconds -> Clock.after seconds

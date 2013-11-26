@@ -46,6 +46,14 @@ end
 type t (* handle to the file-system *)
 val create : Persist.t -> t Deferred.t
 
+module Contents_result : sig
+  type t = [
+  | `file_read_error of Error.t
+  | `is_a_dir
+  | `contents of string
+  ]
+end
+
 module Digest_result : sig
   type t = [
   | `stat_error of Error.t
@@ -69,6 +77,7 @@ module Ensure_directory_result : sig
   type t = [`ok | `failed | `not_a_dir]
 end
 
+val contents_file : t -> file:Path.X.t -> Contents_result.t Tenacious.t
 val digest_file : t -> file:Path.X.t -> Digest_result.t Tenacious.t
 val list_glob : t -> Glob.t -> Listing_result.t Tenacious.t
 val ensure_directory : t -> dir:Path.X.t -> Ensure_directory_result.t Tenacious.t

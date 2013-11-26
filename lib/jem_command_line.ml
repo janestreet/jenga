@@ -19,26 +19,20 @@ let message =
   then fun fmt -> ksprintf (fun s -> Printf.printf "%s\r%!" s) fmt
   else fun fmt -> ksprintf (fun s -> Printf.printf "\027[2K%s\r%!" s) fmt
 
-let run ~root_dir ~string_of_mon =
+let run ~root_dir =
 
-  let last_mon = ref None in
-  let estimator =
-    (* The bigger the decay-factor, the more stable the estimate *)
-    Finish_time_estimator.create ~decay_factor_per_second:0.95
+  let string_of_snap snap =
+    Progress.Snap.to_string snap `jem_style
   in
 
-  let string_of_mon mon =
-    string_of_mon mon
-    ^ Finish_time_estimator.estimated_finish_time_string estimator
-  in
-
-  let string_of_last_mon () =
-    match !last_mon with
+  let last_snap = ref None in
+  let string_of_last_snap () =
+    match !last_snap with
     | None -> "no progress seen!"
-    | Some mon -> string_of_mon mon
+    | Some snap -> string_of_snap snap
   in
 
-  let suck_mon_pipe conn =
+  let suck_snap_pipe conn =
     let stop = ref false in
     let fresh = ref false in
     don't_wait_for (
@@ -49,18 +43,16 @@ let run ~root_dir ~string_of_mon =
           if !fresh then (fresh := false; loop 1)
           else (
             let qmes = String.concat (List.init q ~f:(fun _ -> "?")) in
-            message "%s %s" (string_of_last_mon ()) qmes;
+            message "%s %s" (string_of_last_snap ()) qmes;
             loop (q+1);
           )
       in loop 1
     );
     Rpc.Pipe_rpc.dispatch_exn Rpc_intf.progress_stream conn () >>= fun (reader,_id) ->
-    Pipe.iter_without_pushback reader ~f:(fun mon ->
-      last_mon := Some mon;
+    Pipe.iter_without_pushback reader ~f:(fun snap ->
+      last_snap := Some snap;
       fresh := true;
-      let todo = Progress.Snapped.todo (Mon.progress mon) in
-      Finish_time_estimator.push_todo estimator todo;
-      message "%s" (string_of_mon mon);
+      message "%s" (string_of_snap snap);
     ) >>= fun () ->
     stop := true;
     return ()
@@ -69,7 +61,7 @@ let run ~root_dir ~string_of_mon =
   let poll_for_connection ~retry =
     Server_lock.server_location ~root_dir >>= function
     | `server_not_running ->
-      message "%s (not running)" (string_of_last_mon ()); (*root_dir*)
+      message "%s (not running)" (string_of_last_snap ()); (*root_dir*)
       retry()
     | `info info ->
       let host = Server_lock.Info.host info in
@@ -77,7 +69,7 @@ let run ~root_dir ~string_of_mon =
       let host = if String.(host = Unix.gethostname()) then "localhost" else host in
       match port with
       | 0 ->
-        message "%s (jenga running in -no-server mode)" (string_of_last_mon ());
+        message "%s (jenga running in -no-server mode)" (string_of_last_snap ());
         retry();
 
       | _ ->
@@ -91,7 +83,7 @@ let run ~root_dir ~string_of_mon =
             message "with_rpc_connection: %s\n%s" server_name (Exn.to_string exn);
             return false
           | Ok conn ->
-            suck_mon_pipe conn >>= fun () ->
+            suck_snap_pipe conn >>= fun () ->
             (*message "lost connection with: %s" server_name;*)
             return true
         )
@@ -108,54 +100,21 @@ let run ~root_dir ~string_of_mon =
   in
   poll_for_connection ~retry
 
-
-module Spec = Command.Spec
-let (+>) = Spec.(+>)
-let (++) = Spec.(++)
-
-let todo_breakdown =
-  Spec.step (fun m x -> m ~todo_breakdown:x)
-  +> Spec.flag "todo" Spec.no_arg
-    ~doc:" display breakdown for 'todo' counts"
-
-let good_breakdown =
-  Spec.step (fun m x -> m ~good_breakdown:x)
-  +> Spec.flag "good" Spec.no_arg
-    ~doc:" display breakdown for 'good' counts"
-
-let show_work =
-  Spec.step (fun m x -> m ~show_work:x)
-  +> Spec.flag "work" Spec.no_arg
-    ~doc:" display counts for 'work' done: stat/digest/ls/external-jobs/db-saves"
-
 let error fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt
 
 let main () =
   Command.run (
-    Command.basic (todo_breakdown ++ good_breakdown ++ show_work)
+    Command.basic (Command.Spec.empty)
       ~summary:"Jenga monitor - monitor jenga running in the current repo."
       ~readme:Progress.readme
-      (fun ~todo_breakdown ~good_breakdown ~show_work  () ->
-
+      (fun () ->
         match Path.Root.discover() with | `cant_find_root ->
           error "Cant find '%s' in start-dir or any ancestor dir"
             Misc.jenga_root_basename
         | `ok ->
           let root_dir = Path.to_absolute_string Path.the_root in
           Misc.in_async ~f:(fun () ->
-
-            let string_of_mon mon =
-              let progress = Mon.progress mon in
-              let effort = Mon.effort mon in
-              let eff_string ~switch =
-                if not switch then "" else
-                  sprintf " [ %s ]" (Effort.Snapped.to_string effort)
-              in
-
-              Progress.Snapped.to_string ~todo_breakdown ~good_breakdown progress
-              ^ eff_string ~switch:show_work
-            in
-            run ~root_dir ~string_of_mon
+            run ~root_dir
           )
       )
   )

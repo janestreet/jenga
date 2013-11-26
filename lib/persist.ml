@@ -68,7 +68,7 @@ end = struct
         return (empty())
 
   let save_db t ~db_filename =
-    Effort.track Build.persist_saves_done (fun () ->
+    Effort.track Progress.persist_saves_done (fun () ->
       Writer.with_file_atomic db_filename ~f:(fun w ->
         Writer.write_bin_prot w bin_writer_t t;
         Misc.set_persist_is_saved();
