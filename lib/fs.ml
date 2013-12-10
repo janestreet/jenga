@@ -662,18 +662,21 @@ end
  contents_file (without persistence)
 ----------------------------------------------------------------------*)
 
-let contents_file ~file =
-  Tenacious.lift (fun () ->
-    File_access.enqueue (fun () ->
-      try_with (fun () ->
-        Reader.file_contents (Path.X.to_absolute_string file)
+let contents_file sm ~file =
+  Stat_memo.lstat sm ~what:`file file *>>= function
+  | Error e -> Tenacious.return (`file_read_error e)
+  | Ok __stats ->
+    Tenacious.lift (fun () ->
+      File_access.enqueue (fun () ->
+        try_with (fun () ->
+          Reader.file_contents (Path.X.to_absolute_string file)
+        )
+        >>| (function Ok x -> Ok x | Error exn -> Error (Error.of_exn exn))
       )
-      >>| (function Ok x -> Ok x | Error exn -> Error (Error.of_exn exn))
-    )
-    >>| unbreakable
-  ) *>>| function
-  | Error e -> `file_read_error e
-  | Ok new_contents -> `contents new_contents
+      >>| unbreakable
+    ) *>>| function
+    | Error e -> `file_read_error e
+    | Ok new_contents -> `contents new_contents
 
 
 (*----------------------------------------------------------------------
@@ -845,6 +848,7 @@ module Contents_memo : sig
 
   val contents_file :
     t ->
+    Stat_memo.t ->
     file:Path.X.t ->
     Contents_result.t Tenacious.t
 
@@ -855,11 +859,11 @@ end = struct
     cache : computation Path.X.Table.t;
   }
 
-  let contents_file t ~file =
+  let contents_file t sm ~file =
     match (Hashtbl.find t.cache file) with
     | Some tenacious -> tenacious
     | None ->
-      let tenacious = Tenacious.reify (contents_file ~file) in
+      let tenacious = Tenacious.reify (contents_file sm ~file) in
       Hashtbl.add_exn t.cache ~key:file ~data:tenacious;
       tenacious
 
@@ -1138,7 +1142,7 @@ end = struct
     gm = Glob_memo.create();
   }
 
-  let contents_file t ~file = Contents_memo.contents_file t.cm ~file
+  let contents_file t ~file = Contents_memo.contents_file t.cm t.sm ~file
 
   let digest_file t per ~file = Digest_memo.digest_file t.dm per t.sm ~file
 
