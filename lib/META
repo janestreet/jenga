@@ -1,6 +1,6 @@
 # OASIS_START
-# DO NOT EDIT (digest: 99f233823be675531288297558ff8f47)
-version = "109.55.02"
+# DO NOT EDIT (digest: e9e10ade1bbcbc8f8da983d0229973b0)
+version = "109.55.03"
 description = "Build system"
 requires =
 "sexplib fieldslib comparelib core core_extended async async_shell async_inotify async_parallel pcre ocaml_plugin str threads"
