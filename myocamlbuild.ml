@@ -6,6 +6,8 @@ let dispatch = function
   | Before_options ->
     Options.make_links := false
   | After_rules ->
+    let env = BaseEnvLight.load () in
+    let stdlib = BaseEnvLight.var_get "standard_library" env in
     rule "standalone"
       ~deps:["lib/jenga_lib.cmi"]
       ~prod:"bin/jenga_archive.c"
@@ -14,7 +16,8 @@ let dispatch = function
         let ocamlopt = Command.search_in_path "ocamlopt.opt" in
         let camlp4o = Command.search_in_path "camlp4o.opt" in
         let cmi_list =
-          "lib/jenga_lib.cmi"
+          stdlib / "pervasives.cmi"
+          :: "lib/jenga_lib.cmi"
           :: List.map (fun pkg -> (Findlib.query pkg).Findlib.location / pkg ^ ".cmi") [
             "core";
             "core_kernel";
