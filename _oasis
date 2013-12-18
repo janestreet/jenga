@@ -95,7 +95,6 @@ Library jenga_archive
   CSources:           jenga_archive.c
 
 Executable jenga
-  Install:            false
   Path:               bin
   MainIs:             jenga.ml
   CompiledObject:     best
@@ -103,8 +102,7 @@ Executable jenga
                       jenga_archive,
                       threads
 
-Executable jenga_offline
-  Install:            false
+Executable "jenga-offline"
   Path:               bin
   MainIs:             jenga_offline.ml
   CompiledObject:     best

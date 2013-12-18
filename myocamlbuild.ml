@@ -26,6 +26,7 @@ let dispatch = function
             "async_unix";
             "sexplib";
             "fieldslib";
+            "ocaml_plugin";
           ]
         in
         let cmxs_list =
