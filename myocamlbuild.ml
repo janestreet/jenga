@@ -22,7 +22,7 @@ let dispatch = function
             "core";
             "core_kernel";
             "async";
-            "async_core";
+            "async_kernel";
             "async_unix";
             "sexplib";
             "fieldslib";

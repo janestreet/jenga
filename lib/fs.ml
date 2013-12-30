@@ -469,6 +469,7 @@ end = struct
         [path; dir]
     in
     function
+    | Inotify.Event.Queue_overflow -> []
     | Inotify.Event.Modified s -> [s] (* just the filename *)
     | Inotify.Event.Unlinked s -> paths s
     | Inotify.Event.Created s -> paths s
@@ -1252,6 +1253,16 @@ let unless_shutting_down ~f =
   | `Yes _ -> return ()
   | `No -> f ()
 
+
+let tmp_jenga =
+  let user = Core.Std.Unix.getlogin() in
+  sprintf "/tmp/jenga-%s" user
+
+let () =
+  don't_wait_for (
+    Unix.mkdir ~p:() tmp_jenga
+  )
+
 let sync_inotify_delivery
     : (t -> sync_contents:string -> 'a Tenacious.t -> 'a Tenacious.t) =
 
@@ -1274,7 +1285,7 @@ let sync_inotify_delivery
     let genU2 = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
     Tenacious.lift (fun () ->
       let u2 = genU2 () in
-      let path = sprintf "/tmp/jenga-%s-%d-%d.sync" pid_string u1 u2 in
+      let path = sprintf "%s/jenga-%s-%d-%d.sync" tmp_jenga pid_string u1 u2 in
 
       (* Setup watcher for sync-file *)
       watch_sync_file t ~path >>= fun created_heart ->

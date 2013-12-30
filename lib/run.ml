@@ -5,9 +5,27 @@ open Async.Std
 
 module Build_state = Build.Persist
 
+let max_num_threads = 50
+
+let max_num_threads =
+  match Core.Std.Sys.getenv "JENGA_MAX_NUM_THREADS" with
+  | None -> max_num_threads
+  | Some s ->
+    let n = Int.of_string s in
+    Printf.eprintf "max_num_threads = %d\n%!" n;
+    n
+
 let trace fmt = ksprintf (fun string -> Message.trace "Run: %s" string) fmt
 
 let db_save_span = sec 60.0
+
+let db_save_span =
+  match Core.Std.Sys.getenv "JENGA_DB_SAVE_SPAN" with
+  | None -> db_save_span
+  | Some s ->
+    let int = Int.of_string s in
+    Printf.eprintf "db_save_span = %d sec\n%!" int;
+    sec (float int)
 
 let run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path =
   Forker.init config;
@@ -113,17 +131,22 @@ let main config =
   in
 
   (* Only after Parallel.init is called may we start async *)
-  don't_wait_for (
-    Deferred.unit >>= fun () ->
-    Quit.ignore_exn_while_quitting (fun () ->
-      run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path;
-    )
-  );
-  (
-    match config.Config.report_long_cycle_times with
-    | None -> ()
-    | Some cutoff -> Scheduler.report_long_cycle_times ~cutoff ()
-  );
-  install_signal_handlers();
+  let main () =
+    don't_wait_for (
+      Deferred.unit >>= fun () ->
+      Quit.ignore_exn_while_quitting (fun () ->
+        run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path;
+      )
+    );
+    (
+      match config.Config.report_long_cycle_times with
+      | None -> ()
+      | Some cutoff -> Scheduler.report_long_cycle_times ~cutoff ()
+    );
+    install_signal_handlers()
+  in
 
-  never_returns (Scheduler.go ~raise_unhandled_exn:true ())
+
+  never_returns (
+    Scheduler.go_main ~max_num_threads ~raise_unhandled_exn:true ~main ()
+  )

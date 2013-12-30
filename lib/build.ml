@@ -651,6 +651,8 @@ let build_all_in_sequence xs ~f = (* stopping on first error *)
   in
   loop [] xs
 
+let builder_with_semantics builder ~wrap =
+  Builder.wrap (Tenacious.with_semantics (Builder.expose builder) ~f:wrap)
 
 (*----------------------------------------------------------------------
  RR - Run_reason
@@ -1286,9 +1288,7 @@ let check_targets :
     | [] -> return (`ok good)
 
 
-let prevent_action_overlap
-    : (targets:Path.t list -> unit Builder.t -> unit Builder.t) =
-  (* Prevent running overlapping actions for the same targets *)
+let prevent_action_overlap =
   fun ~targets builder ->
     Builder.wrap (
       Path.prevent_overlap
@@ -1307,6 +1307,10 @@ let prevent_action_overlap
         (Builder.expose builder)
     )
 
+let uncancellable builder =
+  builder_with_semantics builder ~wrap:(fun sample ~cancel:__ ->
+    sample ~cancel:Heart.unbreakable
+  )
 
 let build_target_rule :
   (* run a rule/action, iff:
@@ -1322,75 +1326,73 @@ let build_target_rule :
     let need = Path.basename demanded in
     let targets = Target_rule.targets tr in
     build_depends t (Target_rule.action_depends tr) *>>= fun (action,deps_proxy_map) ->
-    (* The persistent caching is keyed of the [head_target] *)
-    let head_target,other_targets = Target_rule.head_target_and_rest tr in
-    jenga_root t *>>= fun env1 ->
-    let action_proxy = Action_proxy.create action in
-    let run_and_cache rr =
-      prevent_action_overlap ~targets (
-        run_action_for_targets t rr env1 action action_proxy ~targets ~need
-      ) *>>= fun () ->
-      check_targets t targets *>>= function
-      | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
-      | `ok path_tagged_proxys ->
-        match (Proxy_map.create_by_path path_tagged_proxys) with
-        | `err _inconsistency -> error Reason.Inconsistent_proxies
-        | `ok targets_proxy_map ->
-          let rule_proxy = {
-            Rule_proxy.
-            targets = targets_proxy_map;
-            deps = deps_proxy_map;
-            action = action_proxy;
-          }
-          in
-          Hashtbl.set (Misc.mod_persist (ruled t)) ~key:head_target ~data:rule_proxy;
-          (* We remove data associated with the [other_targets]. Its not essential for
-             correctness, but it avoid cruft from building up in the persistent state *)
-          List.iter other_targets ~f:(fun other -> Hashtbl.remove (ruled t) other);
-          return path_tagged_proxys
-    in
-    match (Hashtbl.find (ruled t) head_target) with
-    | None -> run_and_cache RR.No_record_of_being_run_before
-    | Some prev ->
-      match (Action_proxy.diff prev.Rule_proxy.action action_proxy ) with
-      | Some `action_changed -> run_and_cache RR.Action_changed
-      | None ->
-        match (Proxy_map.diff prev.Rule_proxy.deps deps_proxy_map) with
-        | Some keys -> run_and_cache (RR.Deps_have_changed keys)
-        | None ->
-          (* de-sensitize to the pre-action state of targets...
-             in case we have to run the action
-          *)
-          Builder.desensitize (check_targets t targets) *>>= fun (opt,heart) ->
-          match opt with
-          | `missing paths -> run_and_cache (RR.Targets_missing paths)
+    prevent_action_overlap ~targets (
+      (* The persistent caching is keyed of the [head_target] *)
+      let head_target,other_targets = Target_rule.head_target_and_rest tr in
+      jenga_root t *>>= fun env1 ->
+      let action_proxy = Action_proxy.create action in
+      let run_and_cache rr =
+        uncancellable (
+          run_action_for_targets t rr env1 action action_proxy ~targets ~need *>>= fun () ->
+          check_targets t targets *>>= function
+          | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
           | `ok path_tagged_proxys ->
             match (Proxy_map.create_by_path path_tagged_proxys) with
             | `err _inconsistency -> error Reason.Inconsistent_proxies
             | `ok targets_proxy_map ->
-              match (Proxy_map.diff prev.Rule_proxy.targets targets_proxy_map) with
-              | Some keys ->
-                let paths = List.map keys ~f:Pm_key.to_path_exn in
-                run_and_cache (RR.Targets_not_as_expected paths)
-              | None ->
-                (* Everything is as it should be! re-sensitize to the targets. *)
-                if Config.show_checked t.config then  (
-                  Message.message "NOT RUNNING: %s" (Action_proxy.to_string action_proxy);
-                );
-                Builder.sensitize heart *>>= fun () ->
-                return path_tagged_proxys
+              let rule_proxy = {
+                Rule_proxy.
+                targets = targets_proxy_map;
+                deps = deps_proxy_map;
+                action = action_proxy;
+              }
+              in
+              Hashtbl.set (Misc.mod_persist (ruled t)) ~key:head_target ~data:rule_proxy;
+              (* We remove data associated with the [other_targets]. Its not essential for
+                 correctness, but it avoid cruft from building up in the persistent state *)
+              List.iter other_targets ~f:(fun other -> Hashtbl.remove (ruled t) other);
+              return path_tagged_proxys
+        )
+      in
+      match (Hashtbl.find (ruled t) head_target) with
+      | None -> run_and_cache RR.No_record_of_being_run_before
+      | Some prev ->
+        match (Action_proxy.diff prev.Rule_proxy.action action_proxy ) with
+        | Some `action_changed -> run_and_cache RR.Action_changed
+        | None ->
+          match (Proxy_map.diff prev.Rule_proxy.deps deps_proxy_map) with
+          | Some keys -> run_and_cache (RR.Deps_have_changed keys)
+          | None ->
+            (* de-sensitize to the pre-action state of targets...
+               in case we have to run the action
+            *)
+            Builder.desensitize (check_targets t targets) *>>= fun (opt,heart) ->
+            match opt with
+            | `missing paths -> run_and_cache (RR.Targets_missing paths)
+            | `ok path_tagged_proxys ->
+              match (Proxy_map.create_by_path path_tagged_proxys) with
+              | `err _inconsistency -> error Reason.Inconsistent_proxies
+              | `ok targets_proxy_map ->
+                match (Proxy_map.diff prev.Rule_proxy.targets targets_proxy_map) with
+                | Some keys ->
+                  let paths = List.map keys ~f:Pm_key.to_path_exn in
+                  run_and_cache (RR.Targets_not_as_expected paths)
+                | None ->
+                  (* Everything is as it should be! re-sensitize to the targets. *)
+                  if Config.show_checked t.config then  (
+                    Message.message "NOT RUNNING: %s" (Action_proxy.to_string action_proxy);
+                  );
+                  Builder.sensitize heart *>>= fun () ->
+                  return path_tagged_proxys
+    )
 
 
+(* NO LONGER USES share_and_check_for_cycles *)
 
 let build_target_rule :
     (t -> memo_ruling_t -> Target_rule.t -> demanded:Path.t -> PPs.t Builder.t) =
-  fun t memo_ruling tr ~demanded ->
-    (* memo! *)
-    share_and_check_for_cycles t
-      ~key: (Target_rule.head_target tr)
-      ~memo: memo_ruling
-      ~item: (DG.Item.Target_rule (Target_rule.targets tr))
-      ~f: (fun t -> build_target_rule t tr ~demanded)
+  fun t _memo_ruling tr ~demanded ->
+    build_target_rule t tr ~demanded
 
 
 let expect_source : (t -> Path.t -> Proxy_map.t Builder.t) =
@@ -1519,6 +1521,7 @@ let build_one_root_goal :
       Persist.t ->
       Memo.t ->
       DG.t ->
+      dg_root:DG.Node.t ->
       Config.t ->
       Progress.t ->
       demanded:Goal.t ->
@@ -1529,9 +1532,8 @@ let build_one_root_goal :
      And here we break out of the Builder monad, and revert to the plain
      tenacious monad - ignoring the proxy map or any errors.
   *)
-  fun ~jenga_root_path fs persist memo discovered_graph
+  fun ~jenga_root_path fs persist memo discovered_graph ~dg_root
     config progress ~demanded ->
-    let node = DG.create_root discovered_graph in
     let t = {
       config;
       fs;
@@ -1541,7 +1543,7 @@ let build_one_root_goal :
       jenga_root_path;
       recurse_build_goal = build_goal;
       discovered_graph;
-      node;
+      node = dg_root;
     } in
     build_goal t demanded
     *>>| fun (_ :Proxy_map.t) -> ()
@@ -1553,12 +1555,12 @@ let get_env_option :
       Persist.t ->
       Memo.t ->
       DG.t ->
+      dg_root:DG.Node.t ->
       Config.t ->
       Progress.t ->
       Env1.t option Tenacious.t
     ) =
-  fun ~jenga_root_path fs persist memo discovered_graph config progress ->
-    let node = DG.create_root discovered_graph in
+  fun ~jenga_root_path fs persist memo discovered_graph ~dg_root config progress ->
     let t = {
       config;
       fs;
@@ -1568,7 +1570,7 @@ let get_env_option :
       jenga_root_path;
       recurse_build_goal = build_goal;
       discovered_graph;
-      node;
+      node = dg_root;
     } in
     let builder = jenga_root t
     in
@@ -1698,8 +1700,8 @@ let message_cycle_path dg ~cycle_path_with_repeated_nub =
     (String.concat (
       List.map cycle_path_with_repeated_nub ~f:(fun node ->
         let item = DG.lookup_item dg node in
-        (*sprintf "\n- [%s] %s" (DG.id_string node)*)
-        sprintf "\n- %s"
+        sprintf "\n- [%s] %s" (DG.id_string node)
+        (*sprintf "\n- %s"*)
           (DG.Item.to_string item))))
 
 let message_to_inform_omake_server_we_are_quitting () =
@@ -1813,9 +1815,6 @@ let build_once :
     in
     Message.message "%s" (Progress.Snap.to_string snap `jem_style);
     Progress.message_errors config progress;
-
-    Progress.reset_effort();
-
     heart, exit_code
 
 (*----------------------------------------------------------------------
@@ -1845,10 +1844,12 @@ let build_forever =
     let memo = Memo.create () in
     let discovered_graph = DG.create config in
 
+    let dg_root = DG.create_root discovered_graph in
+
     let get_env_opt () =
       get_env_option
         ~jenga_root_path
-        fs persist memo discovered_graph
+        fs persist memo discovered_graph ~dg_root
         config progress
     in
 
@@ -1858,7 +1859,7 @@ let build_forever =
         List.map top_level_demands ~f:(fun demanded ->
           build_one_root_goal
             ~jenga_root_path
-            fs persist memo discovered_graph
+            fs persist memo discovered_graph ~dg_root
             config progress ~demanded
         )
       )
@@ -1874,6 +1875,8 @@ let build_forever =
     in
 
     let rec build_and_poll ()  = (* never finishes if polling *)
+
+      Progress.reset_effort();
 
       (* start up various asyncronous writers/dumpers *)
       let fin = ref false in
