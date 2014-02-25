@@ -50,8 +50,8 @@ let verbose() = Config.verbose (For_user.config ())
 let load_sexp_for_jenga = For_user.load_sexp_for_jenga
 let load_sexps_for_jenga = For_user.load_sexps_for_jenga
 
-exception Run_now_of_internal_action_not_supported
-exception Non_zero_status_from_action_run_now of Action.t
+exception Run_now_of_internal_action_not_supported with sexp
+exception Non_zero_status_from_action_run_now of Action.t with sexp
 
 let run_action_now_output ~output action =
   match Action.case action with

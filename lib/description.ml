@@ -117,7 +117,7 @@ module Iaction = struct
   type t = {
     tag : Sexp.t;
     func : (unit -> unit Deferred.t);
-  } with fields
+  } with fields, sexp_of
 
   let create ~tag ~func = { tag; func; }
 
@@ -125,7 +125,7 @@ end
 
 module Action = struct
 
-  type t = X of Xaction.t | I of Iaction.t
+  type t = X of Xaction.t | I of Iaction.t with sexp_of
 
   let case = function
     | X x -> `xaction x

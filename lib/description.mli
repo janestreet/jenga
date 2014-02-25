@@ -42,7 +42,7 @@ module Iaction : sig
 end
 
 module Action : sig
-  type t
+  type t with sexp_of
   val case : t -> [ `xaction of Xaction.t | `iaction of Iaction.t ]
   val shell : dir:Path.t -> prog:string -> args:string list -> t
   val internal : tag:Sexp.t -> func:(unit -> unit Deferred.t) -> t
