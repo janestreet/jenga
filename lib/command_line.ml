@@ -141,10 +141,6 @@ let external_jenga_root =
     ~doc:(sprintf " Specify path to %s; The repo_root is taken to be CWD."
             Misc.jenga_root_basename)
 
-let anon_demands =
-  Spec.step (fun m demands -> m ~demands)
-  +> Spec.anon (Spec.sequence ("DEMAND" %: Spec.string))
-
 let brief_error_summary =
   Spec.step (fun m x -> m ~brief_error_summary:x)
   +> Spec.flag "brief-error-summary" Spec.no_arg
@@ -155,6 +151,32 @@ let no_server =
   +> Spec.flag "no-server" Spec.no_arg
     ~doc:" Don't start jenga server (jem wont work)"
 
+let minor_heap_size =
+  let default = 50 in
+  Spec.step (fun m x -> m ~minor_heap_size:x)
+  +> Spec.flag "minor-heap-size" (Spec.optional_with_default default Spec.int)
+    ~doc:(sprintf "<Mb> (default = %d Mb)" default)
+
+let major_heap_increment =
+  let default = 200 in
+  Spec.step (fun m x -> m ~major_heap_increment:x)
+  +> Spec.flag "major-heap-increment" (Spec.optional_with_default default Spec.int)
+    ~doc:(sprintf "<Mb> (default = %d Mb)" default)
+
+let space_overhead =
+  let default = 100 in
+  Spec.step (fun m x -> m ~space_overhead:x)
+  +> Spec.flag "space-overhead" (Spec.optional_with_default default Spec.int)
+    ~doc:(sprintf "<percent> (default = %d)" default)
+
+let no_notifiers =
+  Spec.step (fun m x -> m ~no_notifiers:x)
+  +> Spec.flag "no-notifiers" ~aliases:["nono"] Spec.no_arg
+    ~doc:" Disable filesystem notifiers (inotify); polling wont work"
+
+let anon_demands =
+  Spec.step (fun m demands -> m ~demands)
+  +> Spec.anon (Spec.sequence ("DEMAND" %: Spec.string))
 
 let go_command =
   Command.basic (
@@ -180,6 +202,10 @@ let go_command =
     ++ external_jenga_root
     ++ brief_error_summary
     ++ no_server
+    ++ minor_heap_size
+    ++ major_heap_increment
+    ++ space_overhead
+    ++ no_notifiers
     ++ anon_demands
 
   )
@@ -210,6 +236,10 @@ let go_command =
       ~external_jenga_root
       ~brief_error_summary
       ~no_server
+      ~minor_heap_size
+      ~major_heap_increment
+      ~space_overhead
+      ~no_notifiers
       ~demands
       () ->
         let config = {
@@ -244,9 +274,16 @@ let go_command =
           external_jenga_root;
           brief_error_summary;
           no_server;
+          no_notifiers;
           demands;
         }
         in
+        let words_per_mb = 1024 * 1024 / 8 in
+        Gc.tune
+          ~minor_heap_size: (words_per_mb * minor_heap_size)
+          ~major_heap_increment: (words_per_mb * major_heap_increment)
+          ~space_overhead: space_overhead
+         ();
         Run.main config
     )
 

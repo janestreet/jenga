@@ -31,7 +31,7 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path =
   Forker.init config;
   Fs.Digester.init config;
   Persist.create_saving_periodically ~root_dir db_save_span >>= fun persist ->
-  Fs.create (Persist.fs_persist persist) >>= fun fs ->
+  Fs.create config (Persist.fs_persist persist) >>= fun fs ->
   let progress = Progress.create config in
   Rpc_server.go config ~root_dir progress >>= fun () ->
   For_user.install_fs_for_user_rules fs;

@@ -53,26 +53,34 @@ module Depends : sig
   type _ t =
   | Return : 'a -> 'a t
   | Bind : 'a t * ('a -> 'b t) -> 'b t
+  | Cutoff : ('a -> 'a -> bool) * 'a t -> 'a t
   | All : 'a t list -> 'a list t
   | Deferred : (unit -> 'a Deferred.t) -> 'a t
   | Path : Path.t -> unit t
+  | Source_if_it_exists : Path.t -> unit t
   | Absolute : Path.Abs.t -> unit t
   | Alias : Alias.t -> unit t
-  | Glob : Fs.Glob.t -> Path.t list t
+  | Glob : Fs.Glob.t -> Path.t list t (*deprecated*)
+  | Glob_listing : Fs.Glob.t -> Path.t list t
+  | Glob_change : Fs.Glob.t -> unit t
   | Contents : Path.t -> string t
   | Contents_abs : Path.Abs.t -> string t
   | Stdout : Action.t t -> string t
 
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
+  val cutoff : equal:('a -> 'a -> bool) -> 'a t -> 'a t
   val map : 'a t -> ('a -> 'b) -> 'b t
   val both : 'a t -> 'b t -> ('a * 'b) t
   val all : 'a t list -> 'a list t
   val all_unit : unit t list -> unit t
   val path : Path.t -> unit t
+  val source_if_it_exists : Path.t -> unit t
   val absolute : path:string -> unit t
   val alias : Alias.t -> unit t
-  val glob : Fs.Glob.t -> Path.t list t
+  val glob : Fs.Glob.t -> Path.t list t (*deprecated*)
+  val glob_listing : Fs.Glob.t -> Path.t list t
+  val glob_change : Fs.Glob.t -> unit t
   val action : Action.t t -> unit t
   val action_stdout : Action.t t -> string t
   val deferred : (unit -> 'a Deferred.t) -> 'a t

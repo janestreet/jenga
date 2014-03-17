@@ -10,6 +10,8 @@ module Counter : sig
 end
 
 val track : Counter.t -> (unit -> 'a) -> 'a
+val incr : Counter.t -> unit
+val get : Counter.t -> int
 
 type t
 type counter_set = t

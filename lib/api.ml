@@ -63,7 +63,7 @@ module Dep = struct
     ref (fun _ -> failwith "scanner_lookup not installed")
 
   let path x = Depends.path x
-  let glob x = Depends.glob x *>>| fun (_:Path.t list) -> ()
+  let glob x = Depends.glob_change x
   let alias x = Depends.alias x
   let absolute ~path = Depends.absolute ~path
 

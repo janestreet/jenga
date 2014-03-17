@@ -273,3 +273,19 @@ let lift f =
   embed (fun ~cancel:_ ->
     f () >>| Option.some
   )
+
+let cutoff ~equal ten =
+  lift (fun () ->
+    let my_glass = Heart.Glass.create ~desc:"cutoff" in
+    exec ten >>| fun (res,heart) ->
+    let rec loop heart =
+      Heart.when_broken heart >>> fun () ->
+      exec ten >>> fun (res2,heart) ->
+      if (equal res res2)
+      then loop heart
+      else Heart.Glass.break my_glass
+    in
+    loop heart;
+    let my_heart = Heart.of_glass my_glass in
+    (res, my_heart)
+  )

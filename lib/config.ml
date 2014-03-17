@@ -25,4 +25,5 @@ type t = {
   brief_error_summary : bool;
   no_server : bool;
   demands : string list;
+  no_notifiers : bool;
 } with fields

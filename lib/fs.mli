@@ -44,7 +44,7 @@ module Persist : sig
 end
 
 type t (* handle to the file-system *)
-val create : Persist.t -> t Deferred.t
+val create : Config.t -> Persist.t -> t Deferred.t
 
 module Contents_result : sig
   type t = [

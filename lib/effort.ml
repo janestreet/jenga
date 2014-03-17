@@ -44,6 +44,11 @@ let track counter f =
   incr counter.Counter.start;
   f()
 
+let incr counter =
+  incr counter.Counter.start
+
+let get counter = ! (counter.Counter.start)
+
 type t = {
   counters : Counter.t list;
 }

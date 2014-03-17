@@ -68,14 +68,8 @@ module Key : sig
   val tag    : 'a t -> 'a
   val locked : 'a t -> bool
   val wait   : 'a t -> unit Deferred.t
+  val set_cell : 'a t -> unit Deferred.t -> unit
 end
 
 val get_key : t -> t Key.t
 
-val prevent_overlap
-  :  keys: 'k Key.t list
-  -> ?notify_wait: ('k -> unit)
-  -> ?notify_add:  ('k -> unit)
-  -> ?notify_rem:  ('k -> unit)
-  -> 'a Tenacious.t
-  -> 'a Tenacious.t

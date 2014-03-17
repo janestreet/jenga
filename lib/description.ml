@@ -141,27 +141,35 @@ module Depends = struct
   type _ t =
   | Return : 'a -> 'a t
   | Bind : 'a t * ('a -> 'b t) -> 'b t
+  | Cutoff : ('a -> 'a -> bool) * 'a t -> 'a t
   | All : 'a t list -> 'a list t
   | Deferred : (unit -> 'a Deferred.t) -> 'a t
   | Path : Path.t -> unit t
+  | Source_if_it_exists : Path.t -> unit t
   | Absolute : Path.Abs.t -> unit t
   | Alias : Alias.t -> unit t
-  | Glob : Glob.t -> Path.t list t
+  | Glob : Glob.t -> Path.t list t (*deprecated*)
+  | Glob_listing : Glob.t -> Path.t list t
+  | Glob_change : Glob.t -> unit t
   | Contents : Path.t -> string t
   | Contents_abs : Path.Abs.t -> string t
   | Stdout : Action.t t -> string t (* special -- arg nested in t gives scoping *)
 
   let return x = Return x
   let bind t f = Bind (t,f)
+  let cutoff ~equal x = Cutoff (equal,x)
 
   let all ts = All ts
 
   let path p = Path p
+  let source_if_it_exists p = Source_if_it_exists p
   let absolute ~path = Absolute (Path.Abs.create path)
   let alias x = Alias x
 
   let action_stdout t = Stdout t
   let glob t = Glob t
+  let glob_listing t = Glob_listing t
+  let glob_change t = Glob_change t
   let deferred t = Deferred t
 
   let contents p = Contents p
@@ -189,7 +197,8 @@ module Depends = struct
     glob (Glob.create ~dir ~kinds:(Some [`Directory]) ~glob_string:"*")
 
   let file_exists path =
-    glob (Glob.create_from_path ~kinds:None path) (* any kind *)
+    (* change in semantics: previously used [glob] instead of [glob_listing] *)
+    glob_listing (Glob.create_from_path ~kinds:None path) (* any kind *)
     *>>| function | [] -> false | _::_ -> true
 
   let read_sexp p =

@@ -268,13 +268,23 @@ let fixed_span_for_message_prefix span =
   sprintf "%02d:%02d.%03d" (60 * parts.P.hr + parts.P.min) parts.P.sec parts.P.ms
 
 
+let major_collections_since_last_checked =
+  let last = ref 0 in
+  fun () ->
+    let stat = Gc.stat () in
+    let n = stat.Gc.Stat.major_collections in
+    let res = n - (!last) in
+    last := n;
+    res
+
 let pretty_mem_usage =
   let words_per_kb = 1024 / 8 in
   fun () ->
     let stat = Gc.stat () in
     let live = stat.Gc.Stat.live_words / words_per_kb in
     let heap = stat.Gc.Stat.heap_words / words_per_kb in
-    sprintf "heap(Kb)= %d/%d" live heap
+    let major = major_collections_since_last_checked() in
+    sprintf "heap(Kb)= %d/%d, major=%d" live heap major
 
 
 let omake_style_logger config event =

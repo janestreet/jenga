@@ -350,7 +350,8 @@ module Proxy_map : sig (* need to be keyed on Path/Glob *)
   val create_by_path : PPs.t -> [`ok of t | `err of inconsistency]
   val merge : t list -> [ `ok of t | `err of inconsistency]
 
-  val diff : t -> t -> Pm_key.t list option
+  val equal : t -> t -> bool
+  val diff : before:t -> after:t -> Pm_key.t list option
 
   val to_path_keys : t -> Path.t list
 
@@ -399,19 +400,22 @@ end = struct
 
   let equal = equal_using_compare compare
 
-  let diff t1 t2 =
-    if equal t1 t2 then None
+  let diff ~before ~after =
+    if equal before after then None
     else
-      Some (
+      match (
         List.filter_map
-          (Map.symmetric_diff t1 t2 ~data_equal:Proxy.equal)
+          (Map.symmetric_diff before after ~data_equal:Proxy.equal)
           ~f:(fun (k,comp) ->
             match comp with
             | `Left _ -> None
             | `Right _ -> Some k (* additional *)
             | `Unequal _ -> Some k (* changed *)
           )
-      )
+      ) with
+      | [] -> None (* deps only went away, which is not regarded as a difference *)
+      | _::_ as xs -> Some xs
+
 
   let to_path_keys t =
     List.filter_map (Map.keys t) ~f:Pm_key.to_path_opt
@@ -537,6 +541,8 @@ module Builder : sig (* layer error monad within tenacious monad *)
   val bind : 'a t -> ('a -> 'b t) -> 'b t
   val map : 'a t -> ('a -> 'b) -> 'b t
 
+  val cutoff : equal:('a -> 'a -> bool) -> 'a t -> 'a t
+
   val reify : 'a t -> 'a t
 
   val error : Reason.t -> 'a t
@@ -556,6 +562,18 @@ module Builder : sig (* layer error monad within tenacious monad *)
 end = struct
 
   type 'a t = ('a, Problem.t) Result.t Tenacious.t
+
+  let cutoff ~equal x =
+    Tenacious.cutoff
+      ~equal:(fun res1 res2 ->
+        match res1,res2 with
+        | Ok x1, Ok x2 -> equal x1 x2
+        (* never cutoff errors *)
+        | Ok _, Error _
+        | Error _, Ok _
+        | Error _, Error _
+          -> false
+      ) x
 
   let wrap t = t
   let expose t = t
@@ -665,7 +683,7 @@ module RR = struct
   | Deps_have_changed               of Pm_key.t list
   | Targets_missing                 of Path.t list
   | Targets_not_as_expected         of Path.t list
-  with sexp
+  with sexp_of
 
   (*let to_string t = Sexp.to_string (sexp_of_t t)*)
 
@@ -1018,12 +1036,17 @@ let build_considering_needed : (t -> Need.t -> 'a Builder.t -> 'a Builder.t) =
   fun t need builder ->
     Builder.subgoal need (
       builder_report_for_need t need (
-        (* Report considering/re-considering *)
+        (* Report considering/re-considering; count as: check/recheck *)
         if Config.show_considering t.config
         then (
           Message.message "Considering: %s" (Need.to_string need);
         );
         set_status t need Progress.Status.Todo;
+        let builder =
+          builder *>>| fun res ->
+          let () = Effort.incr Progress.considerations_run in
+          res
+        in
         Builder.before_redo builder ~f:(fun () ->
           if Config.show_considering t.config || Config.show_reconsidering t.config
           then  (
@@ -1139,7 +1162,7 @@ let run_action_for_stdout_if_necessary
     match (Hashtbl.find (actioned t) action_proxy) with
     | None -> run_and_cache RR.No_record_of_being_run_before
     | Some prev ->
-        match (Proxy_map.diff prev.Output_proxy.deps deps) with
+        match (Proxy_map.diff ~before:prev.Output_proxy.deps ~after:deps) with
         | Some keys -> run_and_cache (RR.Deps_have_changed keys)
         | None ->
           (* Nothing has changed, use cached stdout *)
@@ -1182,6 +1205,11 @@ let build_depends : (t -> 'a Depends.t -> ('a * Proxy_map.t) Builder.t) =
         build_merged_proxy_maps [pm1;pm2] *>>= fun pm ->
         return (v2, pm)
 
+      | Depends.Cutoff (equal,body) ->
+        Builder.cutoff
+          ~equal:(fun (x1,pm1) (x2,pm2) -> equal x1 x2 && Proxy_map.equal pm1 pm2)
+          (exec body)
+
       | Depends.All xs ->
         Builder.all (List.map ~f:exec xs) *>>= fun xs ->
         let vs,pms = List.unzip xs in
@@ -1195,19 +1223,42 @@ let build_depends : (t -> 'a Depends.t -> ('a * Proxy_map.t) Builder.t) =
       | Depends.Path path ->
         build_sub_goal t (Goal.Path path) *>>| fun pm -> ((), pm)
 
+      | Depends.Source_if_it_exists path ->
+        look_for_source t path *>>| fun proxy_opt ->
+        let pm =
+          match proxy_opt with
+          | None -> Proxy_map.empty
+          | Some proxy -> Proxy_map.single (Pm_key.of_path path) proxy
+        in
+        ((),pm)
+
       | Depends.Absolute path ->
         need_abs_path t path *>>| fun pm -> ((), pm)
 
       | Depends.Alias alias ->
         build_sub_goal t (Goal.Alias alias) *>>| fun pm -> ((), pm)
 
+      | Depends.Glob_listing glob ->
+        (* CARRY the glob listing; dont put into the proxy-map *)
+        need_glob t glob *>>| fun listing ->
+        let pm  = Proxy_map.empty in
+        (Fs.Listing.paths listing, pm)
+
+      | Depends.Glob_change glob ->
+        (* Dont carry the glob listing; do put into the PROXY-MAP *)
+        need_glob t glob *>>| fun listing ->
+        let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing) in
+        ((), pm)
+
       | Depends.Glob glob ->
+        (* deprecated old semantics: glob listing CARRIED and put into the PROXY-MAP *)
         need_glob t glob *>>| fun listing ->
         let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing) in
         (Fs.Listing.paths listing, pm)
 
       | Depends.Contents path ->
-        build_sub_goal t (Goal.Path path) *>>= fun pm ->
+        build_sub_goal t (Goal.Path path) *>>= fun __ignored__pm ->
+        let pm  = Proxy_map.empty in
         get_contents t (Path.X.of_relative path) *>>| fun contents ->
         (contents, pm)
 
@@ -1287,11 +1338,67 @@ let check_targets :
     | _::_ -> return (`missing bad)
     | [] -> return (`ok good)
 
+module P : sig
+
+  val prevent_overlap
+    :  keys: 'k Path.Key.t list
+    -> ?notify_wait: ('k -> unit)
+    -> ?notify_add:  ('k -> unit)
+    -> ?notify_rem:  ('k -> unit)
+    -> 'a Tenacious.t
+    -> 'a Tenacious.t
+end = struct
+
+  let prevent_overlap
+      : (
+        keys: 'k Path.Key.t list ->
+        ?notify_wait: ('k -> unit) ->
+        ?notify_add:  ('k -> unit) ->
+        ?notify_rem:  ('k -> unit) ->
+        'a Tenacious.t ->
+        'a Tenacious.t
+      ) =
+    fun ~keys
+      ?(notify_wait = ignore)
+      ?(notify_add  = ignore)
+      ?notify_rem
+      tenacious ->
+        let ivar = Ivar.create () in
+        let cell = Ivar.read ivar in
+        let wait_for_key key =
+          if Path.Key.locked key
+          then (notify_wait (Path.Key.tag key); Some (Path.Key.wait key))
+          else None
+        in
+        let acquire_key key =
+          (* Can't acquire a locked key *)
+          assert (not (Path.Key.locked key));
+          Path.Key.set_cell key cell;
+          notify_add (Path.Key.tag key)
+        in
+        let rec acquire () =
+          match List.rev_filter_map keys ~f:wait_for_key with
+          | [] ->
+            List.iter ~f:acquire_key keys;
+            Deferred.unit
+          | defer ->
+            Deferred.all_unit defer >>= acquire
+        in
+        let release result =
+          Option.iter notify_rem ~f:(fun f -> List.iter keys
+            ~f:(fun key -> f (Path.Key.tag key)));
+          Ivar.fill ivar ();
+          result
+        in
+        Tenacious.with_semantics tenacious ~f:(fun sample ~cancel ->
+          acquire () >>= fun () -> sample ~cancel >>| release)
+
+end
 
 let prevent_action_overlap =
   fun ~targets builder ->
     Builder.wrap (
-      Path.prevent_overlap
+      P.prevent_overlap
         ~keys:(List.map ~f:Path.get_key targets)
         (*~notify_wait:(fun key ->
           Message.message "waiting for action to complete for: %s"
@@ -1360,7 +1467,7 @@ let build_target_rule :
         match (Action_proxy.diff prev.Rule_proxy.action action_proxy ) with
         | Some `action_changed -> run_and_cache RR.Action_changed
         | None ->
-          match (Proxy_map.diff prev.Rule_proxy.deps deps_proxy_map) with
+          match (Proxy_map.diff ~before:prev.Rule_proxy.deps ~after:deps_proxy_map) with
           | Some keys -> run_and_cache (RR.Deps_have_changed keys)
           | None ->
             (* de-sensitize to the pre-action state of targets...
@@ -1373,7 +1480,7 @@ let build_target_rule :
               match (Proxy_map.create_by_path path_tagged_proxys) with
               | `err _inconsistency -> error Reason.Inconsistent_proxies
               | `ok targets_proxy_map ->
-                match (Proxy_map.diff prev.Rule_proxy.targets targets_proxy_map) with
+                match (Proxy_map.diff ~before:prev.Rule_proxy.targets ~after:targets_proxy_map) with
                 | Some keys ->
                   let paths = List.map keys ~f:Pm_key.to_path_exn in
                   run_and_cache (RR.Targets_not_as_expected paths)
@@ -1846,25 +1953,6 @@ let build_forever =
 
     let dg_root = DG.create_root discovered_graph in
 
-    let get_env_opt () =
-      get_env_option
-        ~jenga_root_path
-        fs persist memo discovered_graph ~dg_root
-        config progress
-    in
-
-    (* construct the top-level tenacious builder only once *)
-    let top_builder =
-      Builder.all_unit (
-        List.map top_level_demands ~f:(fun demanded ->
-          build_one_root_goal
-            ~jenga_root_path
-            fs persist memo discovered_graph ~dg_root
-            config progress ~demanded
-        )
-      )
-    in
-
     let deadlock_found = Ivar.create () in
     let () =
       don't_wait_for (
@@ -1888,7 +1976,25 @@ let build_forever =
 
       show_progress_reports config ~fin progress;
 
-      Tenacious.exec (get_env_opt()) >>= fun (env_opt,__heart) ->
+      let get_env_opt =
+        get_env_option
+          ~jenga_root_path
+          fs persist memo discovered_graph ~dg_root
+          config progress
+      in
+
+      let top_builder =
+        Builder.all_unit (
+          List.map top_level_demands ~f:(fun demanded ->
+            build_one_root_goal
+              ~jenga_root_path
+              fs persist memo discovered_graph ~dg_root
+              config progress ~demanded
+          )
+        )
+      in
+
+      Tenacious.exec get_env_opt >>= fun (env_opt,__heart) ->
 
       (* call user build_begin function *)
       run_user_function_from_env_opt env_opt "build_begin" ~f:Env1.build_begin >>= fun () ->

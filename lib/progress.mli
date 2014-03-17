@@ -5,6 +5,7 @@ open Description
 
 val persist_saves_done : Effort.Counter.t
 val actions_run : Effort.Counter.t
+val considerations_run : Effort.Counter.t
 
 module Status : sig
   type t =

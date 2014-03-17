@@ -45,7 +45,7 @@ let to_re_string t =
   match t with
   | Literal x -> Regexp.quote x
   | Regexp r -> r
-  | Glob g -> Glob_to_re.convert_unachored g
+  | Glob g -> Glob_to_re.convert_unanchored g
 
 let to_anchored_re_string t = "^" ^ to_re_string t ^ "$"
 

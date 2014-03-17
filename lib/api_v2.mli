@@ -49,14 +49,24 @@ module Depends : sig (* The jenga monad *)
   type 'a t
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
+  val cutoff : equal:('a -> 'a -> bool) -> 'a t -> 'a t
   val map : 'a t -> ('a -> 'b) -> 'b t
   val both : 'a t -> 'b t -> ('a * 'b) t
   val all : 'a t list -> 'a list t
   val all_unit : unit t list -> unit t
   val path : Path.t -> unit t
+
+  val source_if_it_exists :
+    (* Dont treat path as a goal (i.e. don't force it to be built)
+       Just depend on its contents, if it exists.
+       And it's ok it doesn't exists. *)
+    Path.t -> unit t
+
   val absolute : path:string -> unit t
   val alias : Alias.t -> unit t
-  val glob : Glob.t -> Path.t list t
+  val glob : Glob.t -> Path.t list t (*deprecated*)
+  val glob_listing : Glob.t -> Path.t list t
+  val glob_change : Glob.t -> unit t
   val action : Action.t t -> unit t
   val action_stdout : Action.t t -> string t
   val deferred : (unit -> 'a Deferred.t) -> 'a t

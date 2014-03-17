@@ -57,6 +57,7 @@ val reify       : 'a t -> 'a t
 
 val lift        :  (unit -> ('a * Heart.t) Deferred.t) -> 'a t
 val exec        : 'a t -> ('a * Heart.t) Deferred.t
+val cutoff      : equal:('a -> 'a -> bool) -> 'a t -> 'a t
 
 
 (* Use of with_semantics is tricky & discouraged, unless you

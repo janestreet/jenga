@@ -3,6 +3,21 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
+(* memoization of tenacious computations.. unless we are running without notifers *)
+
+let yes_memo ht ~key f =
+    match (Hashtbl.find ht key) with
+    | Some tenacious -> tenacious
+    | None ->
+      let tenacious = f () in
+      let tenacious = Tenacious.reify tenacious in
+      Hashtbl.add_exn ht ~key ~data:tenacious;
+      tenacious
+
+let no_memo _ht ~key:_ f = f ()
+
+let memoize ~nono = if nono then no_memo else yes_memo
+
 let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
 let unbreakable x = x,Heart.unbreakable
 
@@ -434,7 +449,7 @@ end
  Watcher (inotify wrapper) - works on absolute path strings
 ----------------------------------------------------------------------*)
 
-module Watcher : sig
+module Watcher_real : sig
 
   type t
   val create :
@@ -469,7 +484,8 @@ end = struct
         [path; dir]
     in
     function
-    | Inotify.Event.Queue_overflow -> []
+    | Inotify.Event.Queue_overflow ->
+      Message.error "Inotify.Event.Queue_overflow"; [] (* at least log an error *)
     | Inotify.Event.Modified s -> [s] (* just the filename *)
     | Inotify.Event.Unlinked s -> paths s
     | Inotify.Event.Created s -> paths s
@@ -562,6 +578,40 @@ end = struct
         let glass = Hashtbl.find_or_add glass_cache path ~default in
         Ok (Heart.of_glass glass)
 
+end
+
+(*----------------------------------------------------------------------
+ Watcher -- adding support for no-notifiers
+----------------------------------------------------------------------*)
+
+module Watcher : sig
+
+  type t
+  val create :
+    nono: bool ->
+    ignore:(path:string -> bool) ->
+    expect:(path:string -> bool) ->
+    t Deferred.t
+
+  val watch_file_or_dir : t ->
+    what:[`file|`dir] ->
+    path:string ->
+    desc:string ->
+    Heart.t Or_error.t Deferred.t
+
+end = struct
+
+  type t = Watcher_real.t option
+
+  let create ~nono ~ignore ~expect =
+    if nono
+    then return None
+    else Watcher_real.create ~ignore ~expect >>| fun w -> Some w
+
+  let watch_file_or_dir t ~what ~path ~desc =
+    match t with
+    | None -> return (Ok Heart.unbreakable)
+    | Some w -> Watcher_real.watch_file_or_dir w ~what ~path ~desc
 
 end
 
@@ -572,7 +622,7 @@ end
 module Stat_memo : sig
 
   type t
-  val create : Watcher.t -> t
+  val create : nono:bool -> Watcher.t -> t
   (* Caller must declare what the lstat is expected to be for,
      so that the correct kind of watcher can be set up *)
   val lstat : t -> what:[`file|`dir] -> Path.X.t -> Stats.t Or_error.t Tenacious.t
@@ -581,12 +631,14 @@ end = struct
 
   type computation = Stats.t Or_error.t Tenacious.t
   type t = {
+    nono : bool;
     watcher : Watcher.t;
     file_watch_cache : computation Path.X.Table.t;
     dir_watch_cache : computation Path.X.Table.t;
   }
 
-  let create watcher = {
+  let create ~nono watcher = {
+    nono;
     watcher;
     file_watch_cache = Path.X.Table.create ();
     dir_watch_cache = Path.X.Table.create ();
@@ -598,9 +650,7 @@ end = struct
       | `file -> t.file_watch_cache
       | `dir -> t.dir_watch_cache
     in
-    match (Hashtbl.find cache path) with
-    | Some tenacious -> tenacious
-    | None ->
+    memoize ~nono:t.nono cache ~key:path (fun () ->
       let tenacious =
         Tenacious.lift (fun () ->
           Watcher.watch_file_or_dir t.watcher ~what
@@ -613,9 +663,8 @@ end = struct
             Stats.lstat path >>| fun res -> (res,heart)
         )
       in
-      let tenacious = Tenacious.reify tenacious in
-      Hashtbl.add_exn cache ~key:path ~data:tenacious;
       tenacious
+    )
 
 end
 
@@ -794,7 +843,8 @@ end = struct
               );
               Tenacious.return (`listing new_listing)
     in
-    Tenacious.reify tenacious
+    (*Tenacious.reify*) (* reify without memoize is pointless! *)
+    tenacious
 
 
 end
@@ -845,7 +895,7 @@ end
 module Contents_memo : sig
 
   type t
-  val create : unit -> t
+  val create : nono:bool -> t
 
   val contents_file :
     t ->
@@ -857,18 +907,17 @@ end = struct
 
   type computation = Contents_result.t Tenacious.t
   type t = {
+    nono : bool;
     cache : computation Path.X.Table.t;
   }
 
   let contents_file t sm ~file =
-    match (Hashtbl.find t.cache file) with
-    | Some tenacious -> tenacious
-    | None ->
-      let tenacious = Tenacious.reify (contents_file sm ~file) in
-      Hashtbl.add_exn t.cache ~key:file ~data:tenacious;
-      tenacious
+    memoize ~nono:t.nono t.cache ~key:file (fun () ->
+      contents_file sm ~file
+    )
 
-  let create () = {
+  let create ~nono = {
+    nono;
     cache = Path.X.Table.create ();
   }
 
@@ -881,7 +930,7 @@ end
 module Digest_memo : sig
 
   type t
-  val create : unit -> t
+  val create : nono:bool -> t
 
   val digest_file :
     t ->
@@ -894,18 +943,17 @@ end = struct
 
   type computation = Digest_result.t Tenacious.t
   type t = {
+    nono: bool;
     cache : computation Path.X.Table.t;
   }
 
   let digest_file t dp sm ~file =
-    match (Hashtbl.find t.cache file) with
-    | Some tenacious -> tenacious
-    | None ->
-      let tenacious = Tenacious.reify (Persist.digest_file dp sm ~file) in
-      Hashtbl.add_exn t.cache ~key:file ~data:tenacious;
-      tenacious
+    memoize ~nono:t.nono t.cache ~key:file (fun () ->
+      Persist.digest_file dp sm ~file
+    )
 
-  let create () = {
+  let create ~nono = {
+    nono;
     cache = Path.X.Table.create ();
   }
 
@@ -918,7 +966,7 @@ end
 module Listing_memo : sig
 
   type t
-  val create : unit -> t
+  val create : nono:bool -> t
 
   val list_dir :
     t ->
@@ -931,18 +979,17 @@ end = struct
 
   type computation = Listing_result.t Tenacious.t
   type t = {
+    nono: bool;
     cache : computation Path.Table.t;
   }
 
   let list_dir t dp sm ~dir =
-    match (Hashtbl.find t.cache dir) with
-    | Some tenacious -> tenacious
-    | None ->
-      let tenacious = Tenacious.reify (Persist.list_dir dp sm ~dir) in
-      Hashtbl.add_exn t.cache ~key:dir ~data:tenacious;
-      tenacious
+    memoize ~nono:t.nono t.cache ~key:dir (fun () ->
+      Persist.list_dir dp sm ~dir
+    )
 
-  let create () = {
+  let create ~nono = {
+    nono;
     cache = Path.Table.create ();
   }
 
@@ -1068,7 +1115,7 @@ end
 module Glob_memo : sig
 
   type t
-  val create : unit -> t
+  val create : nono:bool -> t
 
   val list_glob :
     t ->
@@ -1082,18 +1129,17 @@ end = struct
 
   type computation = Listing_result.t Tenacious.t
   type t = {
+    nono : bool;
     cache : computation Glob.Table.t;
   }
 
   let list_glob t lm per sm glob =
-    match (Hashtbl.find t.cache glob) with
-    | Some tenacious -> tenacious
-    | None ->
-      let tenacious = Tenacious.reify (Glob.exec glob lm per sm) in
-      Hashtbl.add_exn t.cache ~key:glob ~data:tenacious;
-      tenacious
+    memoize ~nono:t.nono t.cache ~key:glob (fun () ->
+      Glob.exec glob lm per sm
+    )
 
-  let create () = {
+  let create ~nono = {
+    nono;
     cache = Glob.Table.create ();
   }
 
@@ -1106,7 +1152,7 @@ end
 module Memo : sig
 
   type t
-  val create : Watcher.t -> t
+  val create : nono:bool -> Watcher.t -> t
 
   val contents_file :
     t ->
@@ -1135,12 +1181,12 @@ end = struct
     gm : Glob_memo.t;
   }
 
-  let create watcher = {
-    sm = Stat_memo.create watcher;
-    cm = Contents_memo.create();
-    dm = Digest_memo.create();
-    lm = Listing_memo.create();
-    gm = Glob_memo.create();
+  let create ~nono watcher = {
+    sm = Stat_memo.create ~nono watcher ;
+    cm = Contents_memo.create ~nono;
+    dm = Digest_memo.create ~nono;
+    lm = Listing_memo.create ~nono;
+    gm = Glob_memo.create ~nono;
   }
 
   let contents_file t ~file = Contents_memo.contents_file t.cm t.sm ~file
@@ -1158,7 +1204,7 @@ end
 module Fs : sig
 
   type t
-  val create : Persist.t -> t Deferred.t
+  val create : Config.t -> Persist.t -> t Deferred.t
 
   val contents_file :
     t ->
@@ -1176,17 +1222,19 @@ module Fs : sig
     Listing_result.t Tenacious.t
 
   val watch_sync_file : t -> path:string -> Heart.t Deferred.t
+  val nono : t -> bool
 
 end = struct
 
   type t = {
+    nono : bool;
     watcher : Watcher.t;
     memo : Memo.t;
     persist : Persist.t;
-  }
+  } with fields
 
-  let create persist =
-
+  let create config persist =
+    let nono = Config.no_notifiers config in
     let ignore ~path =
       match (Path.create_from_absolute path) with
       | None -> false
@@ -1203,10 +1251,9 @@ end = struct
       | None -> false
       | Some path -> Path.Key.locked (Path.get_key path)
     in
-
-    Watcher.create ~ignore ~expect >>= fun watcher ->
-    let memo = Memo.create watcher in
-    let t = { watcher; memo; persist; } in
+    Watcher.create ~nono ~ignore ~expect >>= fun watcher ->
+    let memo = Memo.create ~nono watcher in
+    let t = { nono; watcher; memo; persist; } in
     return t
 
   let contents_file t ~file = Memo.contents_file t.memo ~file
@@ -1263,6 +1310,12 @@ let () =
     Unix.mkdir ~p:() tmp_jenga
   )
 
+let heart_broken ~timeout heart =
+  choose [
+    choice (Heart.when_broken heart) (fun () -> `broken);
+    choice (Clock.after timeout) (fun () -> `timeout);
+  ]
+
 let sync_inotify_delivery
     : (t -> sync_contents:string -> 'a Tenacious.t -> 'a Tenacious.t) =
 
@@ -1281,6 +1334,7 @@ let sync_inotify_delivery
      - a counter (unique to a synced tenacious), incremented for each rerun.
   *)
   fun t ~sync_contents tenacious ->
+    if Fs.nono t then tenacious else (* no notifiers, so cant/dont sync *)
     let u1 = genU1 () in
     let genU2 = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
     Tenacious.lift (fun () ->
@@ -1292,15 +1346,21 @@ let sync_inotify_delivery
 
       (* setup remove()... *)
       let remove () =
-        (* esnure creation event has happenned.. *)
-        Heart.when_broken created_heart >>= fun () ->
+        (* ensure creation event has happened.. *)
+        begin heart_broken ~timeout:(sec 10.) created_heart >>| function
+        | `broken -> ()
+        | `timeout -> Message.error "lost inotify event for creation of: %s" path
+        end >>= fun () ->
+
         (* Setup new watcher; unlink the file; wait for the event *)
         watch_sync_file t ~path >>= fun deleted_heart ->
         File_access.enqueue (fun () ->
           Sys.remove path
         ) >>= fun () ->
-        Heart.when_broken deleted_heart >>= fun () ->
-        return ()
+        begin heart_broken ~timeout:(sec 10.) deleted_heart >>| function
+        | `broken -> ()
+        | `timeout -> Message.error "lost inotify event for unlink of: %s" path
+        end
       in
 
       (* create the sync-file *)
