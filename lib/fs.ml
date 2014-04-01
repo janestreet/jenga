@@ -3,6 +3,9 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
+module Heart = Tenacious.Heart
+module Glass = Tenacious.Glass
+
 (* memoization of tenacious computations.. unless we are running without notifers *)
 
 let yes_memo ht ~key f =
@@ -462,7 +465,6 @@ module Watcher_real : sig
   val watch_file_or_dir : t ->
     what:[`file|`dir] ->
     path:string ->
-    desc:string ->
     Heart.t Or_error.t Deferred.t
 
 end = struct
@@ -473,8 +475,8 @@ end = struct
     ignore : (path:string -> bool);
     expect : (path:string -> bool);
     notifier : Inotify.t ;
-    file_glass : Heart.Glass.t String.Table.t;
-    dir_glass : Heart.Glass.t String.Table.t;
+    file_glass : Glass.t String.Table.t;
+    dir_glass : Glass.t String.Table.t;
   }
 
   let paths_of_event t =
@@ -508,15 +510,16 @@ end = struct
           begin match (Hashtbl.find t.dir_glass path) with
           | None -> ()
           | Some glass ->
-            assert (not (Heart.Glass.is_broken glass));
-            Heart.Glass.break glass;
+            assert (not (Glass.is_broken glass));
+            (* remove glass from HT *before* breaking it *)
             Hashtbl.remove t.dir_glass path;
+            Glass.break glass;
           end;
 
           begin match (Hashtbl.find t.file_glass path) with
           | None -> ()
           | Some glass ->
-            assert (not (Heart.Glass.is_broken glass));
+            assert (not (Glass.is_broken glass));
             (*
               Show path events to which we are sensitized...
 
@@ -528,10 +531,16 @@ end = struct
 
             *)
             if not (t.expect ~path) then (
-              Message.file_changed ~desc:(Heart.Glass.desc glass)
+              let desc =
+                match (Path.create_from_absolute path) with
+                | Some path -> Path.to_string path
+                | None -> path
+              in
+              Message.file_changed ~desc
             );
-            Heart.Glass.break glass;
+            (* remove glass from HT *before* breaking it *)
             Hashtbl.remove t.file_glass path;
+            Glass.break glass;
           end
 
         );
@@ -549,7 +558,7 @@ end = struct
     suck_notifier_pipe t (Inotify.pipe notifier);
     return t
 
-  let watch_file_or_dir t ~what ~path ~desc =
+  let watch_file_or_dir t ~what ~path =
     let dir, glass_cache =
       (* A notifier is setup to watch [dir], computed from [path] & [what]
          The underlying Inotify module handles repeated setup for same path.
@@ -562,7 +571,11 @@ end = struct
     unlogged "watch: %s (dir: %s)" path dir;
     match (Hashtbl.find glass_cache path) with
     | Some glass ->
-      (*assert (not (Heart.Glass.is_broken glass));*)
+      if (Glass.is_broken glass) then (
+        (* Ensured because: the glass is removed from the HT *before* breaking it *)
+        Message.error "watch: unexpected broken glass in HT";
+      );
+      (*assert (not (Glass.is_broken glass));*)
       return (Ok (Heart.of_glass glass))
     | None ->
       let absolute_dir = dir in (* do we need absolute dir ??? *)
@@ -574,7 +587,7 @@ end = struct
         Message.error "Unable to watch path: %s" absolute_dir;
         Error (Error.of_exn exn)
       | Ok () ->
-        let default () = Heart.Glass.create ~desc in
+        let default () = Glass.create () in
         let glass = Hashtbl.find_or_add glass_cache path ~default in
         Ok (Heart.of_glass glass)
 
@@ -596,7 +609,6 @@ module Watcher : sig
   val watch_file_or_dir : t ->
     what:[`file|`dir] ->
     path:string ->
-    desc:string ->
     Heart.t Or_error.t Deferred.t
 
 end = struct
@@ -608,10 +620,10 @@ end = struct
     then return None
     else Watcher_real.create ~ignore ~expect >>| fun w -> Some w
 
-  let watch_file_or_dir t ~what ~path ~desc =
+  let watch_file_or_dir t ~what ~path =
     match t with
     | None -> return (Ok Heart.unbreakable)
-    | Some w -> Watcher_real.watch_file_or_dir w ~what ~path ~desc
+    | Some w -> Watcher_real.watch_file_or_dir w ~what ~path
 
 end
 
@@ -655,7 +667,6 @@ end = struct
         Tenacious.lift (fun () ->
           Watcher.watch_file_or_dir t.watcher ~what
             ~path:(Path.X.to_absolute_string path)
-            ~desc:(Path.X.to_string path)
           >>= function
           | Error exn ->
             return (unbreakable (Error exn))
@@ -1087,9 +1098,7 @@ end = struct
 
   let exec glob lm per sm =
     Tenacious.lift (fun () ->
-      let my_glass =
-        Heart.Glass.create ~desc:(to_string glob)
-      in
+      let my_glass = Glass.create () in
       Tenacious.exec (exec_no_cutoff glob lm per sm) >>| fun (res,heart) ->
       let rec loop heart =
         Heart.when_broken heart >>> fun () ->
@@ -1098,7 +1107,7 @@ end = struct
         then loop heart
         else (
           Message.file_changed ~desc:(to_string glob);
-          Heart.Glass.break my_glass
+          Glass.break my_glass
         )
       in
       loop heart;
@@ -1263,7 +1272,7 @@ end = struct
   let list_glob t glob = Memo.list_glob t.memo t.persist glob
 
   let watch_sync_file t ~path =
-    Watcher.watch_file_or_dir t.watcher ~what:`file ~path ~desc:path
+    Watcher.watch_file_or_dir t.watcher ~what:`file ~path
     >>= function
     | Ok heart -> return heart
     | Error e -> raise (Error.to_exn e)

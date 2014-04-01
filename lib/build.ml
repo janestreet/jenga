@@ -3,6 +3,8 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
+module Heart = Tenacious.Heart
+
 let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
 
 let (<>) = Int.(<>)

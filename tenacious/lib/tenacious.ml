@@ -40,6 +40,9 @@ open No_polymorphic_compare let _ = _squelch_unused_module_warning_
     computation to become determined.
 *)
 
+module Heart = Heart
+module Glass = Heart.Glass
+
 type 'a result = ('a * Heart.t) option Deferred.t
 type 'a semantics = cancel:Heart.t -> 'a result
 
@@ -136,7 +139,7 @@ module Inner : Inner_sig = struct
     | Reified (t,st) ->
       let shared_glass = st.shared_glass in
       let resample () =
-        let glass = Heart.Glass.create ~desc:"Ten.Reified" in
+        let glass = Heart.Glass.create () in
         Shared_glass.restart shared_glass glass;
         st.value <- sample t ~cancel:(Heart.of_glass glass);
         st.value
@@ -172,7 +175,7 @@ module Inner : Inner_sig = struct
     | All ts ->
       Deferred.create
         begin fun ivar ->
-          let final_glass = Heart.Glass.create_with_deps [cancel] ~desc:"Ten.All" in
+          let final_glass = Heart.Glass.create_with_deps [cancel] in
           let shared_glass = Shared_glass.share final_glass in
           let none = Deferred.return None in
           let sample_one t =
@@ -190,6 +193,7 @@ module Inner : Inner_sig = struct
                          -      let never = Deferred.never () in
                          +      let none = Deferred.return None in
                       *)
+                      Shared_glass.release shared_glass; (* to avoid hang *)
                       None (* Normally not possible unless cancel broken!!*)
 
                     | Some (_,h) as result ->
@@ -246,7 +250,7 @@ module Inner : Inner_sig = struct
     match d with
     | Reified _ -> d
     | _ ->
-      let glass = Heart.Glass.create ~desc:"Ten.Reify" in
+      let glass = Heart.Glass.create () in
       let shared_glass = Shared_glass.share glass in
       let value = sample d ~cancel:(Heart.of_glass glass) in
       Reified (d, {shared_glass; value})
@@ -276,7 +280,7 @@ let lift f =
 
 let cutoff ~equal ten =
   lift (fun () ->
-    let my_glass = Heart.Glass.create ~desc:"cutoff" in
+    let my_glass = Heart.Glass.create () in
     exec ten >>| fun (res,heart) ->
     let rec loop heart =
       Heart.when_broken heart >>> fun () ->

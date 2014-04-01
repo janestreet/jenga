@@ -40,7 +40,7 @@ let dispatch = function
             "pa_pipebang", "pa_pipebang";
             "herelib", "pa_herelib";
             "custom_printf", "pa_custom_printf";
-            "pa_test", "pa_test";
+            "pa_test", "pa_test_lib";
           ]
         in
         let camlp4 =

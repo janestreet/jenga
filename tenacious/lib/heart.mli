@@ -11,9 +11,8 @@ type t
 module Glass : sig
   type heart = t
   type t
-  val create : desc:string -> t
-  val create_with_deps : heart list -> desc:string -> t
-  val desc : t -> string
+  val create : unit -> t
+  val create_with_deps : heart list -> t
   val is_broken : t -> bool
   val break : t -> unit
 end

@@ -41,7 +41,6 @@ end
 
 type t = {
   u : int;
-  desc : string;
   mutable state : state;
 }
 and state =
@@ -54,10 +53,9 @@ type canceller = (unit -> unit) Ring.t
 
 let create_u =
   let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-  fun ~desc ->
+  fun () ->
     {
       u = genU();
-      desc;
       state = Fresh;
     }
 
@@ -102,22 +100,22 @@ let is_broken t =
   | Unbreakable | Fresh | Fragile _ -> false
 
 let broken =
-  let g = create_u ~desc:"Broken" in
+  let g = create_u () in
   break g; g
 
 let unbreakable =
-  let g = create_u ~desc:"Unbreakable" in
+  let g = create_u () in
   g.state <- Unbreakable; g
 
-let create_with_deps ~is_glass ~desc deps =
+let create_with_deps ~is_glass deps =
   let breakable = function {state = Unbreakable; _} -> false | _ -> true in
   match List.rev_filter ~f:breakable deps with
   | [h] when not is_glass -> h
   | []  when not is_glass -> unbreakable
-  | [] -> create_u ~desc
+  | [] -> create_u ()
   | deps when List.exists ~f:is_broken deps -> broken
   | deps ->
-    let t = create_u ~desc in
+    let t = create_u () in
     let len = List.length deps in
     let weak = Weak.create ~len in
     t.state <- Fragile (Ring.root t, weak, Ring.root ignore);
@@ -134,15 +132,14 @@ module Glass = struct
   type heart = t
   type nonrec t = t
   let create = create_u
-  let create_with_deps deps ~desc = create_with_deps ~is_glass:true ~desc deps
+  let create_with_deps deps = create_with_deps ~is_glass:true deps
 
   let is_broken = is_broken
   let break = break
-  let desc h = h.desc
 end
 
-let combine2 h1 h2 = create_with_deps ~is_glass:false ~desc:"" [h1;h2]
-let combine hs = create_with_deps ~is_glass:false ~desc:"" hs
+let combine2 h1 h2 = create_with_deps ~is_glass:false [h1;h2]
+let combine hs = create_with_deps ~is_glass:false hs
 
 let of_glass g = g
 
@@ -158,26 +155,3 @@ let when_broken h =
   else Deferred.create (fun ivar -> ignore (register h ~f:(Ivar.fill ivar)))
 
 let _ = Ring.value
-
-(*let collect pred h =
-  let visited = Int.Hash_set.create() in
-  let rec walk acc h =
-    if Hash_set.mem visited h.u
-    then acc
-    else
-      let acc = if pred h then h.desc :: acc else acc in
-      Hash_set.add visited h.u;
-      match h.state with
-      | Fragile (_deps,rdeps,_callbacks) ->
-        let acc = ref acc in
-        for i = 0 to Weak.length rdeps - 1 do
-          match Weak.get rdeps i with
-          | None -> ()
-          | Some h -> acc := walk !acc (Ring.value (Heap_block.value h))
-        done;
-        !acc
-      | Unbreakable | Broken | Fresh -> acc
-  in
-  walk [] h
-
-let to_sensitivity_list = collect (fun _ -> true)*)
