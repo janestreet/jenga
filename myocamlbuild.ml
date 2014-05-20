@@ -601,8 +601,10 @@ let dispatch = function
           ]
         in
         let cmxs_list =
+          (stdlib / "bigarray.cmxs") ::
           List.map (fun (pkg, pa) -> (Findlib.query pkg).Findlib.location / pa ^ ".cmxs") [
             "type_conv", "pa_type_conv";
+            "sexplib", "sexplib";
             "sexplib", "pa_sexp_conv";
             "bin_prot", "pa_bin_prot";
             "fieldslib", "pa_fields_conv";
