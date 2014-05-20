@@ -1,0 +1,16 @@
+#!/bin/bash
+
+set -e -u -o pipefail
+
+function patterns-to-drop {
+    cat <<EOF
+Using .* in statically linked applications requires at runtime the shared libraries from the glibc version used for linking
+\(unix.o|unix_stubs.o\): In function
+findlib: \[WARNING\] Interface
+ld: skipping incompatible
+/usr/bin/ld: skipping incompatible
+libunix.a\([^)]*\): In function
+EOF
+}
+
+"$@" 2>&1 | ( grep -Ev -f <(patterns-to-drop) || true )
