@@ -1,6 +1,6 @@
 # OASIS_START
-# DO NOT EDIT (digest: ad1fd137177b901629cb27b5bcf7ed8b)
-version = "111.08.00"
+# DO NOT EDIT (digest: 3ef4c04b439af803edd36c0559a4d980)
+version = "111.08.01"
 description = "Build system"
 requires = "jenga type_conv sexplib"
 archive(byte) = "jenga_archive.cma"

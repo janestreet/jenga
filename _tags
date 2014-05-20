@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: c5e7f8df2a778b58cceb34e81cc09ac1)
+# DO NOT EDIT (digest: d88bfdf477edcff1db072ce1df5cd197)
 # Ignore VCS directories, you can use the same kind of rule outside
 # OASIS_START/STOP if you want to exclude directories that contains
 # useless stuff for the build process
@@ -15,11 +15,11 @@
 "_darcs": not_hygienic
 # Library tenacious_lib
 "tenacious/lib/tenacious_lib.cmxs": use_tenacious_lib
-<tenacious/lib/*.ml{,i}>: package(threads)
-<tenacious/lib/*.ml{,i}>: package(sexplib)
 <tenacious/lib/*.ml{,i}>: package(async)
 <tenacious/lib/*.ml{,i}>: package(core)
+<tenacious/lib/*.ml{,i}>: package(sexplib)
 <tenacious/lib/*.ml{,i}>: package(sexplib.syntax)
+<tenacious/lib/*.ml{,i}>: package(threads)
 # Library jenga_lib
 "lib/jenga_lib.cmxs": use_jenga_lib
 "lib/api.cmx": for-pack(Jenga_lib)
@@ -56,9 +56,6 @@
 "lib/rpc_server.cmx": for-pack(Jenga_lib)
 "lib/run.cmx": for-pack(Jenga_lib)
 "lib/server_lock.cmx": for-pack(Jenga_lib)
-<lib/*.ml{,i}>: use_tenacious_lib
-<lib/*.ml{,i}>: package(threads)
-<lib/*.ml{,i}>: package(sexplib)
 <lib/*.ml{,i}>: package(async)
 <lib/*.ml{,i}>: package(async_inotify)
 <lib/*.ml{,i}>: package(async_parallel)
@@ -73,16 +70,14 @@
 <lib/*.ml{,i}>: package(fieldslib.syntax)
 <lib/*.ml{,i}>: package(ocaml_plugin)
 <lib/*.ml{,i}>: package(pcre)
+<lib/*.ml{,i}>: package(sexplib)
 <lib/*.ml{,i}>: package(sexplib.syntax)
 <lib/*.ml{,i}>: package(str)
+<lib/*.ml{,i}>: package(threads)
+<lib/*.ml{,i}>: use_tenacious_lib
 # Library jenga_archive
 "bin/jenga_archive.cmxs": use_jenga_archive
 <bin/jenga_archive.{cma,cmxa}>: use_libjenga_archive_stubs
-"bin/jenga_archive.c": use_jenga_lib
-"bin/jenga_archive.c": use_tenacious_lib
-"bin/jenga_archive.c": package(threads)
-"bin/jenga_archive.c": package(type_conv)
-"bin/jenga_archive.c": package(sexplib)
 "bin/jenga_archive.c": package(async)
 "bin/jenga_archive.c": package(async_inotify)
 "bin/jenga_archive.c": package(async_parallel)
@@ -97,15 +92,14 @@
 "bin/jenga_archive.c": package(fieldslib.syntax)
 "bin/jenga_archive.c": package(ocaml_plugin)
 "bin/jenga_archive.c": package(pcre)
+"bin/jenga_archive.c": package(sexplib)
 "bin/jenga_archive.c": package(sexplib.syntax)
 "bin/jenga_archive.c": package(str)
+"bin/jenga_archive.c": package(threads)
+"bin/jenga_archive.c": package(type_conv)
+"bin/jenga_archive.c": use_jenga_lib
+"bin/jenga_archive.c": use_tenacious_lib
 # Executable jenga
-<bin/jenga.{native,byte}>: use_jenga_archive
-<bin/jenga.{native,byte}>: use_jenga_lib
-<bin/jenga.{native,byte}>: use_tenacious_lib
-<bin/jenga.{native,byte}>: package(threads)
-<bin/jenga.{native,byte}>: package(type_conv)
-<bin/jenga.{native,byte}>: package(sexplib)
 <bin/jenga.{native,byte}>: package(async)
 <bin/jenga.{native,byte}>: package(async_inotify)
 <bin/jenga.{native,byte}>: package(async_parallel)
@@ -120,15 +114,15 @@
 <bin/jenga.{native,byte}>: package(fieldslib.syntax)
 <bin/jenga.{native,byte}>: package(ocaml_plugin)
 <bin/jenga.{native,byte}>: package(pcre)
+<bin/jenga.{native,byte}>: package(sexplib)
 <bin/jenga.{native,byte}>: package(sexplib.syntax)
 <bin/jenga.{native,byte}>: package(str)
+<bin/jenga.{native,byte}>: package(threads)
+<bin/jenga.{native,byte}>: package(type_conv)
+<bin/jenga.{native,byte}>: use_jenga_archive
+<bin/jenga.{native,byte}>: use_jenga_lib
+<bin/jenga.{native,byte}>: use_tenacious_lib
 # Executable jenga-offline
-<bin/jenga_offline.{native,byte}>: use_jenga_archive
-<bin/jenga_offline.{native,byte}>: use_jenga_lib
-<bin/jenga_offline.{native,byte}>: use_tenacious_lib
-<bin/jenga_offline.{native,byte}>: package(threads)
-<bin/jenga_offline.{native,byte}>: package(type_conv)
-<bin/jenga_offline.{native,byte}>: package(sexplib)
 <bin/jenga_offline.{native,byte}>: package(async)
 <bin/jenga_offline.{native,byte}>: package(async_inotify)
 <bin/jenga_offline.{native,byte}>: package(async_parallel)
@@ -143,16 +137,17 @@
 <bin/jenga_offline.{native,byte}>: package(fieldslib.syntax)
 <bin/jenga_offline.{native,byte}>: package(ocaml_plugin)
 <bin/jenga_offline.{native,byte}>: package(pcre)
+<bin/jenga_offline.{native,byte}>: package(sexplib)
 <bin/jenga_offline.{native,byte}>: package(sexplib.syntax)
 <bin/jenga_offline.{native,byte}>: package(str)
-<bin/*.ml{,i}>: use_jenga_archive
+<bin/jenga_offline.{native,byte}>: package(threads)
+<bin/jenga_offline.{native,byte}>: package(type_conv)
+<bin/jenga_offline.{native,byte}>: use_jenga_archive
+<bin/jenga_offline.{native,byte}>: use_jenga_lib
+<bin/jenga_offline.{native,byte}>: use_tenacious_lib
 <bin/*.ml{,i}>: package(type_conv)
+<bin/*.ml{,i}>: use_jenga_archive
 # Executable jem
-<bin/jem.{native,byte}>: use_jenga_lib
-<bin/jem.{native,byte}>: use_tenacious_lib
-<bin/jem.{native,byte}>: package(ocaml_plugin.fake)
-<bin/jem.{native,byte}>: package(threads)
-<bin/jem.{native,byte}>: package(sexplib)
 <bin/jem.{native,byte}>: package(async)
 <bin/jem.{native,byte}>: package(async_inotify)
 <bin/jem.{native,byte}>: package(async_parallel)
@@ -166,14 +161,14 @@
 <bin/jem.{native,byte}>: package(fieldslib)
 <bin/jem.{native,byte}>: package(fieldslib.syntax)
 <bin/jem.{native,byte}>: package(ocaml_plugin)
+<bin/jem.{native,byte}>: package(ocaml_plugin.fake)
 <bin/jem.{native,byte}>: package(pcre)
+<bin/jem.{native,byte}>: package(sexplib)
 <bin/jem.{native,byte}>: package(sexplib.syntax)
 <bin/jem.{native,byte}>: package(str)
-<bin/*.ml{,i}>: use_jenga_lib
-<bin/*.ml{,i}>: use_tenacious_lib
-<bin/*.ml{,i}>: package(ocaml_plugin.fake)
-<bin/*.ml{,i}>: package(threads)
-<bin/*.ml{,i}>: package(sexplib)
+<bin/jem.{native,byte}>: package(threads)
+<bin/jem.{native,byte}>: use_jenga_lib
+<bin/jem.{native,byte}>: use_tenacious_lib
 <bin/*.ml{,i}>: package(async)
 <bin/*.ml{,i}>: package(async_inotify)
 <bin/*.ml{,i}>: package(async_parallel)
@@ -187,9 +182,14 @@
 <bin/*.ml{,i}>: package(fieldslib)
 <bin/*.ml{,i}>: package(fieldslib.syntax)
 <bin/*.ml{,i}>: package(ocaml_plugin)
+<bin/*.ml{,i}>: package(ocaml_plugin.fake)
 <bin/*.ml{,i}>: package(pcre)
+<bin/*.ml{,i}>: package(sexplib)
 <bin/*.ml{,i}>: package(sexplib.syntax)
 <bin/*.ml{,i}>: package(str)
+<bin/*.ml{,i}>: package(threads)
+<bin/*.ml{,i}>: use_jenga_lib
+<bin/*.ml{,i}>: use_tenacious_lib
 # OASIS_STOP
 <lib/*.ml{,i}>: syntax_camlp4o
 <tenacious/lib/*.ml{,i}>: syntax_camlp4o
