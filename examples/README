@@ -25,3 +25,8 @@ compile-and-link
 simple-ocaml-build
 
     An example to come soon...
+
+js-build-style
+
+    Build JS released packages using a jengaroot.ml based on JS's
+    internal build rules.

@@ -8,3 +8,4 @@ let progress_stream = Rpc.Pipe_rpc.create
   ~bin_query:Unit.bin_t
   ~bin_response:Progress.Snap.bin_t
   ~bin_error:Unit.bin_t
+  ()
