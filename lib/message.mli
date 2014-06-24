@@ -36,9 +36,17 @@ val job_finished :
 
 val repeat_job_summary : Job_summary.t -> unit
 
-val load_jenga_root : Path.X.t -> unit
+val load_jenga_root : Path.X.t -> modules:string list -> unit
 val load_jenga_root_done : Path.X.t -> Time.Span.t -> unit
+
 val load_sexp_error : Path.t -> loc:(int*int) -> exn -> unit
+
+module Err : sig
+  type t
+  val create : ?pos:(int*int) -> ?extra:string -> string -> t
+end
+
+val errors_for_omake_server : Path.X.t -> Err.t list -> unit
 
 val build_done : duration:Time.Span.t -> u:int -> total:int -> string -> unit
 val build_failed : duration:Time.Span.t -> u:int -> fraction:(int*int) -> string -> unit

@@ -3,13 +3,13 @@ open Core.Std
 open Description
 
 type t =
+| Misc                              of string
 | Shutdown
 | Error_in_deps
 | File_read_error                   of Error.t
 | Digest_error                      of Error.t
 | Undigestable                      of Fs.Kind.t
 | Glob_error                        of Fs.Glob.t * string
-| Jenga_root_problem                of string
 | No_definition_for_alias
 | No_source_at_abs_path
 | No_rule_or_source

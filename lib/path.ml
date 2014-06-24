@@ -29,9 +29,13 @@ module Root = struct
     | None -> r := Some dir
 
   let jenga_root_exists_in ~dir =
-    match Sys.file_exists (dir ^/ Misc.jenga_root_basename) with
-    | `No | `Unknown -> false
-    | `Yes -> true
+    let exists name =
+      match Sys.file_exists (dir ^/ name) with
+      | `No | `Unknown -> false
+      | `Yes -> true
+    in
+    exists Misc.jenga_root_basename ||
+    exists Misc.jenga_conf_basename
 
   let discover () =
     let start_dir = Core.Std.Sys.getcwd() in
@@ -160,6 +164,7 @@ module Abs : sig
   type t with sexp, sexp, compare, bin_io
   val create : string -> t
   val to_string : t -> string
+  val relative : dir:t -> string -> t
 
 end = struct
 
@@ -171,6 +176,9 @@ end = struct
     else x
 
   let to_string t = t
+
+  let relative ~dir s =
+    dir ^/ s
 
 end
 
@@ -206,6 +214,15 @@ module X = struct
     match (case t) with
     | `relative p -> Rel.to_absolute_string p
     | `absolute a -> Abs.to_string a
+
+  let relative ~dir s =
+    if (starts_with_slash s) then s else (* dir ignored *)
+    match (case dir) with
+    | `relative dir -> of_relative (Rel.relative ~dir s)
+    | `absolute dir -> of_absolute (Abs.relative ~dir s)
+
+  let equal t1 t2 =
+    String.(to_absolute_string t1 = to_absolute_string t2)
 
 end
 

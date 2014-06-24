@@ -31,11 +31,13 @@ module Glob : sig (* glob specification *)
   val to_string : t -> string
   val create : dir:Path.t -> kinds:Kind.t list option -> glob_string:string -> t
   val create_from_path : kinds:Kind.t list option -> Path.t -> t
+  val create_from_xpath : kinds:Kind.t list option -> Path.X.t -> t
 end
 
 module Listing : sig (* result of globbing *)
   type t with sexp, bin_io, compare
-  val paths : t -> Path.t list
+  val xpaths : t -> Path.X.t list
+  val paths : t -> Path.t list option (* None - wasn't a relative glob *)
 end
 
 module Persist : sig

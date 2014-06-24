@@ -406,7 +406,7 @@ end = struct
     if equal before after then None
     else
       match (
-        List.filter_map
+        Sequence.filter_map
           (Map.symmetric_diff before after ~data_equal:Proxy.equal)
           ~f:(fun (k,comp) ->
             match comp with
@@ -414,6 +414,7 @@ end = struct
             | `Right _ -> Some k (* additional *)
             | `Unequal _ -> Some k (* changed *)
           )
+        |> Sequence.to_list
       ) with
       | [] -> None (* deps only went away, which is not regarded as a difference *)
       | _::_ as xs -> Some xs
@@ -552,6 +553,8 @@ module Builder : sig (* layer error monad within tenacious monad *)
   val all_unit : unit t list -> unit t
   val subgoal : Need.t -> 'a t -> 'a t
 
+  val both : 'a t -> 'b t -> ('a * 'b) t
+
   val of_deferred : (unit -> 'a Deferred.t) -> 'a t
 
   val desensitize : 'a t -> ('a * Heart.t) t
@@ -560,6 +563,8 @@ module Builder : sig (* layer error monad within tenacious monad *)
   val before_redo : 'a t -> f:(unit -> unit) -> 'a t
 
   val with_ore : 'a t -> f:(('a, Problem.t) Result.t -> unit) -> 'a t
+
+  val uncancellable : 'a t -> 'a t
 
 end = struct
 
@@ -628,34 +633,36 @@ end = struct
       f () >>| fun x -> (Ok x, Heart.unbreakable)
     )
 
-  let desensitize t = (* if not error *)
-    let f sample ~cancel =
-      sample ~cancel >>| function
-      | None -> None
-      | Some (Error e, heart) ->
-        Some (Error e, heart)
-      | Some (Ok x, heart) ->
-        Some (Ok (x,heart), Heart.unbreakable)
-    in
-    Tenacious.with_semantics t ~f
+  let desensitize t =
+    Tenacious.bind (Tenacious.desensitize t) (function
+    | (Ok x,heart) -> Tenacious.return (Ok (x,heart))
+    | (Error e, heart) ->
+      Tenacious.lift (fun () ->
+        Deferred.return (Error e, heart)
+      )
+    )
 
   let sensitize heart =
     Tenacious.lift (fun () -> Deferred.return (Ok (), heart))
 
-  let before_redo t ~f =
-    let first_time = ref true in
-    let hook () =
-      if !first_time
-      then first_time := false
-      else f ()
-    in
-    let f sample ~cancel = hook (); sample ~cancel in
-    reify (Tenacious.with_semantics t ~f)
+  let before_redo t ~f = reify (Tenacious.before_redo t ~f)
 
   let with_ore builder ~f =
     wrap (
       Tenacious.map (expose builder) ~f:(fun ore -> f ore; ore)
     )
+
+  let uncancellable builder = Tenacious.uncancellable builder
+
+  let ( *>>| ) = map
+  let both : ('a t -> 'b t -> ('a * 'b) t) =
+    fun a b ->
+      all [
+        (a *>>| fun a -> `a a);
+        (b *>>| fun b -> `b b);
+      ] *>>| function
+      | [`a a; `b b] -> (a,b)
+      | _ -> assert false
 
 end
 
@@ -670,9 +677,6 @@ let build_all_in_sequence xs ~f = (* stopping on first error *)
     | x::xs -> f x *>>= fun v -> loop (v::acc) xs
   in
   loop [] xs
-
-let builder_with_semantics builder ~wrap =
-  Builder.wrap (Tenacious.with_semantics (Builder.expose builder) ~f:wrap)
 
 (*----------------------------------------------------------------------
  RR - Run_reason
@@ -816,6 +820,17 @@ module Memo = struct
 end
 
 (*----------------------------------------------------------------------
+ jr_spec
+----------------------------------------------------------------------*)
+
+module Jr_spec = struct
+
+  type t = In_root_dir | Xpath of Path.X.t
+  let in_root_dir = In_root_dir
+  let xpath x = Xpath x
+end
+
+(*----------------------------------------------------------------------
   t - The downwards bucket type
 ----------------------------------------------------------------------*)
 
@@ -826,7 +841,7 @@ type t = {
   persist : Persist.t; (* persisant cache *)
   memo : Memo.t; (* dynmaic cache *)
   progress : Progress.t; (* track state of each goal being built *)
-  jenga_root_path : Path.X.t; (* access to the jengaroot *)
+  jr_spec : Jr_spec.t; (* access to the jengaroot *)
 
   (* recursive calls to build_goal go via here - avoids having big mutual let rec *)
   recurse_build_goal : (t -> Goal.t -> Proxy_map.t Builder.t);
@@ -920,7 +935,6 @@ let ensure_directory : (t -> dir:Path.t -> unit Builder.t) =
     | `ok -> return ()
     | `not_a_dir -> error (Reason.No_directory_for_target "not a directory")
     | `failed -> error (Reason.No_directory_for_target "failed to create")
-
 
 (*----------------------------------------------------------------------
   running things - generator, scanners, actions
@@ -1061,6 +1075,168 @@ let build_considering_needed : (t -> Need.t -> 'a Builder.t -> 'a Builder.t) =
 
 
 (*----------------------------------------------------------------------
+  jenga.conf
+----------------------------------------------------------------------*)
+
+let errors_for_omake_server ~within errs short =
+  Message.errors_for_omake_server within errs;
+  error (Reason.Misc (sprintf "%s: %s" (Path.X.to_string within) short))
+
+let one_error_for_omake_server ~within ?extra short =
+  errors_for_omake_server ~within [Message.Err.create ?extra short] short
+
+let read_then_convert_string_via_reader :
+    (
+      xpath : Path.X.t ->
+      contents : (Path.X.t -> string Builder.t) ->
+      do_read : (Reader.t -> 'a Deferred.t) ->
+      'a Builder.t
+    ) =
+  fun ~xpath ~contents ~do_read ->
+    contents xpath *>>= fun string ->
+    Builder.of_deferred (fun () ->
+      try_with (fun () ->
+        let info = Info.of_string ("Description.convert_using_reader "
+                                   ^ Path.X.to_string xpath) in
+        let pipe = Pipe.init (fun writer -> Pipe.write writer string) in
+        Reader.of_pipe info pipe >>= fun reader ->
+        do_read reader >>= fun outcome ->
+        Reader.close reader >>| fun () ->
+        outcome
+      )
+    ) *>>= function
+    | Ok x -> return x
+    | Error exn ->
+      one_error_for_omake_server ~within:xpath
+        ~extra:(Exn.to_string exn) "failed sexp conversion"
+
+
+module Jenga_conf_rep : sig
+  type t with of_sexp
+  val modules : t -> string list
+end = struct
+  type t = [`modules of string list] with sexp
+  let modules (`modules xs) = xs
+end
+
+
+let read_jenga_conf : (t -> conf:Path.X.t -> Jenga_conf_rep.t Builder.t) =
+  fun t ~conf:xpath ->
+    read_then_convert_string_via_reader
+      ~xpath
+      ~contents:(get_contents t)
+      ~do_read:(fun reader ->
+        Reader.read_sexp reader >>| function
+        | `Ok sexp -> Jenga_conf_rep.t_of_sexp sexp
+        | `Eof -> failwith "Eof"
+      )
+
+
+let xpath_exists : (t -> Path.X.t -> bool Builder.t) =
+  fun t xpath ->
+    let glob = Glob.create_from_xpath ~kinds:None xpath in
+    need_glob t glob *>>| fun listing ->
+    match Fs.Listing.xpaths listing with
+    | [] -> false
+    | _::_ -> true
+
+let jenga_conf_load_spec : (t -> conf:Path.X.t -> Load_root.Spec.t Builder.t) =
+  fun t ~conf ->
+    read_jenga_conf t ~conf *>>= fun jc ->
+    let badly_suffixed_modules =
+      List.filter_map (Jenga_conf_rep.modules jc) ~f:(fun m ->
+        match (String.lsplit2 ~on:'.' m) with
+        | None -> None (* .ml will be added *)
+        | Some (_,"ml") -> None
+        | Some (_,suf) ->
+          let short = sprintf "%s: module with unexpected suffix: .%s" m suf in
+          Some (Message.Err.create short))
+    in
+    match badly_suffixed_modules with
+    | _::_ as errs -> errors_for_omake_server ~within:conf errs "badly suffixed modules"
+    | [] ->
+      let modules = (* path, but no suffix *)
+        List.map (Jenga_conf_rep.modules jc) ~f:(fun s ->
+          match String.lsplit2 ~on:'.' s with | Some (s,_) -> s | None -> s)
+      in
+      let basenames =
+        List.map modules ~f:(fun s ->
+          match String.rsplit2 ~on:'/' s with | Some (_,s) -> s | None -> s)
+      in
+      (* duplicates checked w.r..t basenames *)
+      match List.find_a_dup basenames with | Some dup ->
+        one_error_for_omake_server ~within:conf (sprintf "duplicate module name: %s" dup)
+      | None ->
+        (* .ml/.mli paths re-constructed w.r.t path of config file *)
+        let mls,mlis =
+          let re_suffix suf =
+            List.map modules ~f:(fun m ->
+              Path.X.relative ~dir:(Path.X.dirname conf) (m ^ suf))
+          in re_suffix ".ml", re_suffix ".mli"
+        in
+        match mls with
+        | [] -> one_error_for_omake_server ~within:conf "no modules configured"
+        | _::_  ->
+          begin
+            Builder.all (
+              List.map mlis ~f:(fun mli ->
+                xpath_exists t mli *>>| function
+                | true -> Some mli
+              | false -> None
+              )) *>>| List.filter_map ~f:Fn.id
+          end
+          *>>= fun mlis_which_exist -> (* retriggering when come/go *)
+          Builder.all (
+            List.map (mls @ mlis_which_exist) ~f:(fun xpath ->
+              let err prob =
+                let short = sprintf "%s: %s" (Path.X.to_string xpath) prob in
+                Some (Message.Err.create short)
+              in
+              digest_path t xpath *>>| function
+              | `missing -> err "unreadable/missing file"
+              | `is_a_dir -> err "is-a-directory"
+              | `file __ignored_digest -> None
+            )
+          ) *>>= fun results ->
+          match (List.filter_map results ~f:Fn.id) with
+          | _::_ as errs -> errors_for_omake_server ~within:conf errs "unreadable modules"
+          | [] ->
+            (* Ocaml_plugin is called to load a list of .mls;
+               Corresponding .mlis will also be loaded if they exist *)
+            return (Load_root.Spec.config_file ~conf ~mls)
+
+
+let jenga_load_spec : (t -> Jr_spec.t -> Load_root.Spec.t Builder.t) =
+  fun t jr_spec ->
+    match jr_spec with
+    | Jr_spec.Xpath path ->
+      let is_ml =
+        match String.lsplit2 ~on:'.' (Path.X.basename path) with
+        | Some (_,"ml") -> true
+        | Some _ | None -> false
+      in
+      if is_ml
+      then return (Load_root.Spec.ml_file ~ml:path)
+      else jenga_conf_load_spec t ~conf:path
+    | Jr_spec.In_root_dir ->
+      let conf = Path.X.of_relative (Path.root_relative Misc.jenga_conf_basename) in
+      let root_ml = Path.X.of_relative (Path.root_relative Misc.jenga_root_basename) in
+      let what_kind_of_jenga_setup =
+        Builder.both (xpath_exists t conf) (xpath_exists t root_ml)
+        *>>| function
+        | (true,true)  -> `both_conf_and_root
+        | (true,false) -> `just_new_style_conf
+        | (false,true) -> `just_old_style_root
+        | (false,false)-> `no_conf_or_root
+      in
+      what_kind_of_jenga_setup *>>= function
+      | `no_conf_or_root ->
+        one_error_for_omake_server ~within:conf "jenga.conf missing"
+      | `just_old_style_root -> return (Load_root.Spec.ml_file ~ml:root_ml)
+      | `just_new_style_conf
+      | `both_conf_and_root -> jenga_conf_load_spec t ~conf
+
+(*----------------------------------------------------------------------
   jenga_root
 ----------------------------------------------------------------------*)
 
@@ -1068,18 +1244,15 @@ let jenga_root : (t -> Env1.t Builder.t) =
   (* wrap up the call to [Load_root.get_env] into a tenacious builder,
      which will reload any time the jengaroot is modified *)
   fun t ->
-    digest_path t t.jenga_root_path *>>= function
-    | `missing -> error (Reason.Jenga_root_problem "missing")
-    | `is_a_dir -> error (Reason.Jenga_root_problem "is-a-directory")
-    | `file __digest ->
-      Builder.of_deferred (fun () -> Load_root.get_env t.jenga_root_path) *>>= function
-      | Error e ->
-        let exn = Monitor.extract_exn (Error.to_exn e) in
-        error (Reason.Usercode_raised exn)
-      | Ok env ->
-        match (Env1.of_env env) with
-        | `dups xs -> error (Reason.Duplicate_scheme_ids xs)
-        | `ok env1 -> return env1
+    jenga_load_spec t t.jr_spec *>>= fun load_spec ->
+    Builder.of_deferred (fun () -> Load_root.get_env load_spec) *>>= function
+    | Error e ->
+      let exn = Monitor.extract_exn (Error.to_exn e) in
+      error (Reason.Usercode_raised exn)
+    | Ok env ->
+      match (Env1.of_env env) with
+      | `dups xs -> error (Reason.Duplicate_scheme_ids xs)
+      | `ok env1 -> return env1
 
 let jenga_root : (t -> Env1.t Builder.t) =
   fun t ->
@@ -1240,7 +1413,13 @@ let build_depends : (t -> 'a Depends.t -> ('a * Proxy_map.t) Builder.t) =
       | Depends.Alias alias ->
         build_sub_goal t (Goal.Alias alias) *>>| fun pm -> ((), pm)
 
-      | Depends.Glob_listing glob ->
+      | Depends.Glob_xlisting glob ->
+        (* CARRY the glob listing; dont put into the proxy-map *)
+        need_glob t glob *>>| fun listing ->
+        let pm  = Proxy_map.empty in
+        (Fs.Listing.xpaths listing, pm)
+
+      | Depends.Glob_listing_opt glob ->
         (* CARRY the glob listing; dont put into the proxy-map *)
         need_glob t glob *>>| fun listing ->
         let pm  = Proxy_map.empty in
@@ -1251,12 +1430,6 @@ let build_depends : (t -> 'a Depends.t -> ('a * Proxy_map.t) Builder.t) =
         need_glob t glob *>>| fun listing ->
         let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing) in
         ((), pm)
-
-      | Depends.Glob glob ->
-        (* deprecated old semantics: glob listing CARRIED and put into the PROXY-MAP *)
-        need_glob t glob *>>| fun listing ->
-        let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing) in
-        (Fs.Listing.paths listing, pm)
 
       | Depends.Contents path ->
         build_sub_goal t (Goal.Path path) *>>= fun __ignored__pm ->
@@ -1386,14 +1559,12 @@ end = struct
           | defer ->
             Deferred.all_unit defer >>= acquire
         in
-        let release result =
+        let release () =
           Option.iter notify_rem ~f:(fun f -> List.iter keys
             ~f:(fun key -> f (Path.Key.tag key)));
-          Ivar.fill ivar ();
-          result
+          Ivar.fill ivar ()
         in
-        Tenacious.with_semantics tenacious ~f:(fun sample ~cancel ->
-          acquire () >>= fun () -> sample ~cancel >>| release)
+        Tenacious.with_acquire_release tenacious ~acquire ~release
 
 end
 
@@ -1416,11 +1587,6 @@ let prevent_action_overlap =
         (Builder.expose builder)
     )
 
-let uncancellable builder =
-  builder_with_semantics builder ~wrap:(fun sample ~cancel:__ ->
-    sample ~cancel:Heart.unbreakable
-  )
-
 let build_target_rule :
   (* run a rule/action, iff:
      - we have no record of running it before
@@ -1441,7 +1607,7 @@ let build_target_rule :
       jenga_root t *>>= fun env1 ->
       let action_proxy = Action_proxy.create action in
       let run_and_cache rr =
-        uncancellable (
+        Builder.uncancellable (
           run_action_for_targets t rr env1 action action_proxy ~targets ~need *>>= fun () ->
           check_targets t targets *>>= function
           | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
@@ -1625,7 +1791,7 @@ let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
 
 let build_one_root_goal :
     (
-      jenga_root_path: Path.X.t ->
+      jr_spec: Jr_spec.t ->
       Fs.t ->
       Persist.t ->
       Memo.t ->
@@ -1641,7 +1807,7 @@ let build_one_root_goal :
      And here we break out of the Builder monad, and revert to the plain
      tenacious monad - ignoring the proxy map or any errors.
   *)
-  fun ~jenga_root_path fs persist memo discovered_graph ~dg_root
+  fun ~jr_spec fs persist memo discovered_graph ~dg_root
     config progress ~demanded ->
     let t = {
       config;
@@ -1649,7 +1815,7 @@ let build_one_root_goal :
       persist;
       memo;
       progress;
-      jenga_root_path;
+      jr_spec;
       recurse_build_goal = build_goal;
       discovered_graph;
       node = dg_root;
@@ -1659,7 +1825,7 @@ let build_one_root_goal :
 
 let get_env_option :
     (
-      jenga_root_path: Path.X.t ->
+      jr_spec: Jr_spec.t ->
       Fs.t ->
       Persist.t ->
       Memo.t ->
@@ -1669,14 +1835,14 @@ let get_env_option :
       Progress.t ->
       Env1.t option Tenacious.t
     ) =
-  fun ~jenga_root_path fs persist memo discovered_graph ~dg_root config progress ->
+  fun ~jr_spec fs persist memo discovered_graph ~dg_root config progress ->
     let t = {
       config;
       fs;
       persist;
       memo;
       progress;
-      jenga_root_path;
+      jr_spec;
       recurse_build_goal = build_goal;
       discovered_graph;
       node = dg_root;
@@ -1947,7 +2113,7 @@ let run_user_function_from_env_opt env_opt tag ~f =
 let build_forever =
   (* co-ordinate the build-forever process *)
 
-  fun config progress ~jenga_root_path ~top_level_demands fs persist
+  fun config progress ~jr_spec ~top_level_demands fs persist
     ~when_polling ~when_rebuilding ->
 
     let memo = Memo.create () in
@@ -1980,7 +2146,7 @@ let build_forever =
 
       let get_env_opt =
         get_env_option
-          ~jenga_root_path
+          ~jr_spec
           fs persist memo discovered_graph ~dg_root
           config progress
       in
@@ -1989,7 +2155,7 @@ let build_forever =
         Builder.all_unit (
           List.map top_level_demands ~f:(fun demanded ->
             build_one_root_goal
-              ~jenga_root_path
+              ~jr_spec
               fs persist memo discovered_graph ~dg_root
               config progress ~demanded
           )

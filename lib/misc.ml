@@ -8,6 +8,11 @@ let jenga_root_basename =
   | None -> "jengaroot.ml"
   | Some x -> x
 
+let jenga_conf_basename =
+  match Core.Std.Sys.getenv "JENGA_CONF_BASENAME" with
+  | None -> "jenga.conf"
+  | Some x -> x
+
 let in_async ~f = (* used by: jem / offline, not jenga *)
   Deferred.unit >>> (fun () ->
     f () >>> (fun n ->

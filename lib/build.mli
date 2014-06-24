@@ -8,10 +8,16 @@ module Persist : sig
   val cat_build_script : t -> Path.t list -> unit
 end
 
+module Jr_spec : sig
+  type t
+  val in_root_dir : t
+  val xpath : Path.X.t -> t
+end
+
 val build_forever :
   Config.t ->
   Progress.t ->
-  jenga_root_path: Path.X.t ->
+  jr_spec: Jr_spec.t ->
   top_level_demands : Description.Goal.t list ->
   Fs.t ->
   Persist.t ->

@@ -27,7 +27,7 @@ let db_save_span =
     Printf.eprintf "db_save_span = %d sec\n%!" int;
     sec (float int)
 
-let run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path =
+let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
   Forker.init config;
   Fs.Digester.init config;
   Persist.create_saving_periodically ~root_dir db_save_span >>= fun persist ->
@@ -48,7 +48,7 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path =
   in
   let bs = Persist.build_persist persist in
   Build.build_forever config progress
-    ~jenga_root_path ~top_level_demands fs bs ~when_polling ~when_rebuilding
+    ~jr_spec ~top_level_demands fs bs ~when_polling ~when_rebuilding
 
 let install_signal_handlers () =
   trace "install_signal_handlers..";
@@ -65,20 +65,21 @@ let main config =
   For_user.install_config_for_user_rules config;
 
   (* The jenga root discovery must run before we call Parallel.init *)
-  let root_dir,jenga_root_path =
-    match Config.external_jenga_root config with
+  let root_dir,jr_spec =
+    match Config.path_to_jenga_conf config with
     | Some jenga_root ->
       let dir = Core.Std.Sys.getcwd () in
       Path.Root.set ~dir;
-      dir, Path.X.of_absolute (Path.Abs.create jenga_root)
+      dir, Build.Jr_spec.xpath (Path.X.of_absolute (Path.Abs.create jenga_root))
     | None ->
       begin
         match Path.Root.discover() with
         | `ok ->
           let dir = Path.to_absolute_string Path.the_root in
-          dir, Path.X.of_relative (Path.root_relative Misc.jenga_root_basename)
+          dir, Build.Jr_spec.in_root_dir
         | `cant_find_root ->
-          error "Cant find '%s' in start-dir or any ancestor dir"
+          error "Cant find '%s' or '%s' in start-dir or any ancestor dir"
+            Misc.jenga_conf_basename
             Misc.jenga_root_basename;
           Pervasives.exit Exit_code.cant_start
       end
@@ -104,8 +105,10 @@ let main config =
 
   let pid_string () = Pid.to_string (Unix.getpid ()) in
 
-  Message.message "[%s] root=%s, j=%d, f=%d"
-    (pid_string()) root_dir (Config.j_number config) (Config.f_number config);
+  Message.message "[%s] root=%s, sys=%s, j=%d, f=%d"
+    (pid_string()) root_dir
+    System.description
+    (Config.j_number config) (Config.f_number config);
 
   (* Must do the chdir before Parallel.init is called, so that we have the same cwd when
      using parallel forkers or not *)
@@ -135,7 +138,7 @@ let main config =
     don't_wait_for (
       Deferred.unit >>= fun () ->
       Quit.ignore_exn_while_quitting (fun () ->
-        run_once_async_is_started config ~start_dir ~root_dir ~jenga_root_path;
+        run_once_async_is_started config ~start_dir ~root_dir ~jr_spec;
       )
     );
     (

@@ -46,6 +46,7 @@ module Abs : sig
   type t with sexp, compare, bin_io
   val create : string -> t
   val to_string : t -> string
+  val relative : dir:t -> string -> t
 end
 
 module X : sig
@@ -60,6 +61,8 @@ module X : sig
   val dirname : t -> t
   val to_string : t -> string (* leading / for absolute; not for relative *)
   val to_absolute_string : t -> string
+  val relative : dir:t -> string -> t
+  val equal : t -> t -> bool
 end
 
 module Key : sig

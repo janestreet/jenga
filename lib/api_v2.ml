@@ -23,8 +23,14 @@ module Action = struct
 
 end
 
-
-module Depends = Description.Depends
+module Depends = struct
+  include Description.Depends
+  let ( *>>= ) = bind
+  let glob g =
+    glob_change g *>>= fun () ->
+    glob_listing_exn g
+  let glob_listing = glob_listing_exn
+end
 
 module Rule = struct
 

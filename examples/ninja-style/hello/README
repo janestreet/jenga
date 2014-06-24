@@ -1,0 +1,3 @@
+
+Tiny ninja example which depends(Ha!) on scanner dependencies working.
+i.e. gcc -MM / ninja's [depfile] variable

@@ -1,0 +1,10 @@
+
+builddir = build
+
+rule gcc
+  command = gcc -MMD -MT $out -MF $out.d $in -o $out
+  depfile = $out.d
+
+build $builddir/hello.exe : gcc hello.c
+
+default $builddir/hello.exe

@@ -57,7 +57,6 @@ let extract_location exn =
     (* dummy location; use col to indicate the extraction failure step number *)
     (1,n)
 
-
 let load_for_jenga_with ~reader_load t_of_sexp path =
   File_access.enqueue (fun () ->
     let filename = Path.to_string path in

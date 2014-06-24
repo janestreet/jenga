@@ -16,7 +16,12 @@ module Glob = struct
     let fs = For_user.fs() in
     Tenacious.exec (Fs.list_glob fs glob) >>| fun (res,_heart) ->
     match res with
-    | `listing listing -> Fs.Listing.paths listing
+    | `listing listing ->
+      begin
+        match (Fs.Listing.paths listing) with
+        | Some paths -> paths
+        | None -> failwith "Glob.exec - unexpected absolute paths, from relative glob"
+      end
     | _ -> failwith "Glob.exec"
 end
 
@@ -36,8 +41,14 @@ module Action = struct
 
 end
 
+module Depends = struct
+  include Description.Depends
+  let ( *>>= ) = bind
+  let glob g =
+    glob_change g *>>= fun () ->
+    glob_listing_exn g
+end
 
-module Depends = Description.Depends
 let ( *>>= ) = Depends.bind
 let ( *>>| ) = Depends.map
 

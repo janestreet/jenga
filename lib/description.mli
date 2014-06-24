@@ -60,8 +60,8 @@ module Depends : sig
   | Source_if_it_exists : Path.t -> unit t
   | Absolute : Path.Abs.t -> unit t
   | Alias : Alias.t -> unit t
-  | Glob : Fs.Glob.t -> Path.t list t (*deprecated*)
-  | Glob_listing : Fs.Glob.t -> Path.t list t
+  | Glob_listing_opt : Fs.Glob.t -> Path.t list option t (* None, glob was not relative *)
+  | Glob_xlisting : Fs.Glob.t -> Path.X.t list t
   | Glob_change : Fs.Glob.t -> unit t
   | Contents : Path.t -> string t
   | Contents_abs : Path.Abs.t -> string t
@@ -78,8 +78,9 @@ module Depends : sig
   val source_if_it_exists : Path.t -> unit t
   val absolute : path:string -> unit t
   val alias : Alias.t -> unit t
-  val glob : Fs.Glob.t -> Path.t list t (*deprecated*)
-  val glob_listing : Fs.Glob.t -> Path.t list t
+  val glob_xlisting : Fs.Glob.t -> Path.X.t list t
+  val glob_listing_opt : Fs.Glob.t -> Path.t list option t
+  val glob_listing_exn : Fs.Glob.t -> Path.t list t
   val glob_change : Fs.Glob.t -> unit t
   val action : Action.t t -> unit t
   val action_stdout : Action.t t -> string t

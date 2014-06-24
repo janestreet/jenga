@@ -21,7 +21,7 @@ type t = {
   report_long_cycle_times : Time.Span.t option;
   progress : [`omake_style | `jem_style] option;
   dont_emit_kill_line : bool;
-  external_jenga_root : string option;
+  path_to_jenga_conf : string option;
   brief_error_summary : bool;
   no_server : bool;
   demands : string list;

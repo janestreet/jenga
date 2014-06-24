@@ -133,13 +133,26 @@ module Tag = struct
   let to_string t = Sexp.to_string (sexp_of_t t)
 end
 
+module Err = struct
+  type t = {
+    line : int;
+    col : int;
+    short : string;
+    extra : string option;
+  } with sexp
+  let create ?(pos=(1,1)) ?extra short =
+    let line,col = pos in
+    {line;col;short;extra}
+end
+
 module Event = struct
   type t =
   | Tagged_message of Tag.t * string
   | Transient of string
-  | Load_jenga_root of Path.X.t
+  | Load_jenga_root of Path.X.t * string list
   | Load_jenga_root_done of Path.X.t * Time.Span.t
   | Load_sexp_error of Path.t * [`loc of int * int] * exn
+  | Errors_for_omake_server of Path.X.t * Err.t list
   | Job_started of Job_start.t
   | Job_completed of Job_summary.t
   | Job_summary of Job_summary.t
@@ -206,14 +219,17 @@ let transient fmt =
 let clear_transient () = last_transient_message := None
 
 
-let load_jenga_root path =
-  T.dispatch the_log (Event.Load_jenga_root path)
+let load_jenga_root path ~modules =
+  T.dispatch the_log (Event.Load_jenga_root (path,modules))
 
 let load_jenga_root_done path span =
   T.dispatch the_log (Event.Load_jenga_root_done (path,span))
 
 let load_sexp_error path ~loc exn =
   T.dispatch the_log (Event.Load_sexp_error (path,`loc loc, exn))
+
+let errors_for_omake_server xpath errs =
+  T.dispatch the_log (Event.Errors_for_omake_server (xpath,errs))
 
 let job_started =
   let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
@@ -338,13 +354,18 @@ let omake_style_logger config event =
   (* progress style message - wll be overwritten by next transient or normal message *)
   | Event.Transient s -> put_trans s
 
-  | Event.Load_jenga_root path ->
+  | Event.Load_jenga_root (path,modules) ->
     if verbose then (
       let where = Path.X.to_string (Path.X.dirname path) in
       let need = Path.X.basename path in
       put (sprintf "- build %s %s" where need);
     );
-    jput (sprintf "reading %s" (Path.X.to_string path))
+    let modules_string =
+      match modules with
+      | [] -> ""
+      | _ -> sprintf " (%s)" (String.concat ~sep:" " modules)
+    in
+    jput (sprintf "reading %s%s" (Path.X.to_string path) modules_string)
 
   | Event.Load_jenga_root_done (path,duration) ->
     jput (sprintf "finished reading %s (%s)"
@@ -363,6 +384,23 @@ let omake_style_logger config event =
     put (sprintf "Error: sexp_conversion failed\n%s" (Exn.to_string exn));
     if verbose then (
       put (sprintf "- exit %s %s" where need);
+    );
+    redisplay_transient()
+
+  | Event.Errors_for_omake_server (xpath,errs) ->
+    let where = Path.X.to_string (Path.X.dirname xpath) in
+    let file = Path.X.basename xpath in
+    if verbose then (
+      put (sprintf "- build %s %s" where file);
+    );
+    List.iter errs ~f:(fun err ->
+      let {Err. line;col;short;extra} = err in
+      put (sprintf "File \"%s\", line %d, characters %d-%d:" file line col col);
+      put (sprintf "Error: %s" short);
+      (match extra with | None -> () | Some text -> put text);
+    );
+    if verbose then (
+      put (sprintf "- exit %s %s" where file);
     );
     redisplay_transient()
 

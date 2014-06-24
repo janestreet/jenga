@@ -88,7 +88,7 @@ module Need = struct
   let jengaroot = Jengaroot
 
   let to_string = function
-    | Jengaroot -> Misc.jenga_root_basename
+    | Jengaroot -> "<jenga.conf>"
     | Goal x -> Goal.to_string x
 
 end
@@ -148,8 +148,8 @@ module Depends = struct
   | Source_if_it_exists : Path.t -> unit t
   | Absolute : Path.Abs.t -> unit t
   | Alias : Alias.t -> unit t
-  | Glob : Glob.t -> Path.t list t (*deprecated*)
-  | Glob_listing : Glob.t -> Path.t list t
+  | Glob_listing_opt : Fs.Glob.t -> Path.t list option t (* None, glob was not relative *)
+  | Glob_xlisting : Fs.Glob.t -> Path.X.t list t
   | Glob_change : Glob.t -> unit t
   | Contents : Path.t -> string t
   | Contents_abs : Path.Abs.t -> string t
@@ -167,8 +167,8 @@ module Depends = struct
   let alias x = Alias x
 
   let action_stdout t = Stdout t
-  let glob t = Glob t
-  let glob_listing t = Glob_listing t
+  let glob_xlisting t = Glob_xlisting t
+  let glob_listing_opt t = Glob_listing_opt t
   let glob_change t = Glob_change t
   let deferred t = Deferred t
 
@@ -193,12 +193,18 @@ module Depends = struct
 
   let action a = action_stdout a *>>| fun (_:string) -> ()
 
+  let glob_listing_exn g =
+    (* The glob might have been be absolute, so... *)
+    glob_listing_opt g *>>| function
+    | None -> failwithf "unexpected absolute glob: %s" (Glob.to_string g) ()
+    | Some paths -> paths
+
   let subdirs ~dir =
-    glob (Glob.create ~dir ~kinds:(Some [`Directory]) ~glob_string:"*")
+    glob_listing_exn (Glob.create ~dir ~kinds:(Some [`Directory]) ~glob_string:"*")
 
   let file_exists path =
     (* change in semantics: previously used [glob] instead of [glob_listing] *)
-    glob_listing (Glob.create_from_path ~kinds:None path) (* any kind *)
+    glob_xlisting (Glob.create_from_path ~kinds:None path) (* any kind *)
     *>>| function | [] -> false | _::_ -> true
 
   let read_sexp p =

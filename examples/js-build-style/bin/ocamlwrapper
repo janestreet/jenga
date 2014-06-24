@@ -1,0 +1,18 @@
+#!/bin/bash
+
+if [ "$RELAX_UNUSED_WARNINGS" = true ]; then
+    # the dependency on $RELAX_UNUSED_WARNINGS is hidden from omake on
+    # purpose so that toggling the variable is not going to cause a lot
+    # of recompilation
+    a=("$@")
+    i=
+    for ((i = 0; i < "${#a[@]}"; i++)) {
+        if [ "${a[$i]}" = "-w" ]; then
+            : $((i++))
+            a[$i]="${a[$i]}"-32-33
+            break
+        fi
+    }
+    set - "${a[@]}"
+fi
+exec "$@"

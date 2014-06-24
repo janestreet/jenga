@@ -109,7 +109,8 @@ let main () =
       ~readme:Progress.readme
       (fun () ->
         match Path.Root.discover() with | `cant_find_root ->
-          error "Cant find '%s' in start-dir or any ancestor dir"
+          error "Cant find '%s' or '%s' in start-dir or any ancestor dir"
+            Misc.jenga_conf_basename
             Misc.jenga_root_basename
         | `ok ->
           let root_dir = Path.to_absolute_string Path.the_root in

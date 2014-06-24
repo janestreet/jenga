@@ -15,9 +15,9 @@ let filesystem_related = function
   | No_directory_for_target _
     -> true
 
+  | Misc _
   | Shutdown
   | Error_in_deps
-  | Jenga_root_problem _
   | No_definition_for_alias
   | No_source_at_abs_path
   | No_rule_or_source
@@ -32,12 +32,12 @@ let filesystem_related = function
     -> false
 
 let to_string_one_line = function
+  | Misc s                            -> s
   | Shutdown                          -> "Shutdown"
   | Error_in_deps                     -> "Unable to build dependencies"
   | File_read_error _                 -> "file read error"
   | Digest_error _                    -> "unable to digest file"
   | Glob_error (g,s)                  -> sprintf "%s %s" (Fs.Glob.to_string g) s
-  | Jenga_root_problem s              -> sprintf "Problem with %s: %s" (Misc.jenga_root_basename) s
   | No_definition_for_alias           -> "No definition found for alias"
   | No_source_at_abs_path             -> "No source at absolute path"
   | No_rule_or_source                 -> "No rule or source found for target"
@@ -62,11 +62,11 @@ let to_string_one_line = function
     "Inconsistency proxies"
 
 let to_extra_lines = function
+  | Misc _
   | Shutdown
   | Error_in_deps
   | Undigestable _
   | Glob_error _
-  | Jenga_root_problem _
   | No_definition_for_alias
   | No_rule_or_source
   | No_source_at_abs_path
@@ -75,10 +75,10 @@ let to_extra_lines = function
   | No_directory_for_target _
   | Duplicate_scheme_ids _
   | Inconsistent_proxies
+  | Usercode_raised _
     -> []
 
   | Scheme_raised exn
-  | Usercode_raised exn
   | Running_job_raised exn
     -> [Exn.to_string exn]
 

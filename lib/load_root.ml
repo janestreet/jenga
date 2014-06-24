@@ -29,7 +29,34 @@ let track_loading f =
   finish_loading();
   return res
 
-let get_env path_lr =
+module Spec = struct
+
+  type t =
+  | SingleML of Path.X.t
+  | Conf of Path.X.t * Path.X.t list
+
+  let ml_file ~ml = SingleML ml
+  let config_file ~conf ~mls = Conf (conf,mls)
+
+  let ml_paths_to_load = function
+    | SingleML ml -> [ml]
+    | Conf (_,mls) -> mls
+
+  let path_for_message = function
+    | SingleML ml -> ml
+    | Conf (conf,_) -> conf
+
+  let modules_for_message = function
+    | SingleML _ -> []
+    | Conf (_,mls) ->
+      List.map mls ~f:(fun ml ->
+        let s = Path.X.basename ml in
+        match String.lsplit2 ~on:'.' s with | Some (s,_) -> s | None -> s
+      )
+
+end
+
+let get_env spec =
   let plugin_cache_dir =
     Path.to_absolute_string (Path.root_relative Path.plugin_cache_basename)
   in
@@ -39,15 +66,15 @@ let get_env path_lr =
       ~try_old_cache_with_new_exec:true
       ()
   in
-  Message.load_jenga_root path_lr;
+  let path_for_message = Spec.path_for_message spec in
+  Message.load_jenga_root path_for_message ~modules:(Spec.modules_for_message spec);
   let start_time = Time.now() in
   (*Ocaml_plugin.Shell.set_defaults ~echo:true ~verbose:true ();*)
-  let filename = Path.X.to_absolute_string path_lr in
   track_loading (fun () ->
     Plugin.load_ocaml_src_files
       ~persistent_archive_dirpath:plugin_cache_dir
       ~use_cache:plugin_cache
-      [filename]
+      (List.map ~f:Path.X.to_absolute_string (Spec.ml_paths_to_load spec))
     >>= function
     | Error e ->
       Message.error "Plugin failed: %s " (Error.to_string_hum e);
@@ -56,6 +83,6 @@ let get_env path_lr =
       let module M = (val plugin : Jenga_root_interface.S) in
       M.setup() >>= fun env ->
       let duration = Time.diff (Time.now()) start_time in
-      Message.load_jenga_root_done path_lr duration;
+      Message.load_jenga_root_done path_for_message duration;
       return (Ok env)
   )

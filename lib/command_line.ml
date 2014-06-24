@@ -12,48 +12,38 @@ let (+>) = Spec.(+>)
 let (++) = Spec.(++)
 let (%:) = Spec.(%:)
 
-let cpus =
-  let err fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt in
-  let path = "/proc/cpuinfo" in
-  let lines =
-    try
-      let module IC = Core.Std.In_channel in
-      IC.with_file path ~f:IC.input_lines
-    with
-    | _ -> err "cant read: %s" path; []
-  in
-  match List.filter lines ~f:(String.is_prefix ~prefix:"processor")  with
-  | [] -> err "no processor lines seen in: %s" path; 1
-  | lines -> List.length lines
-
-let j_formula = "max (#cpus-1) 1"
-let j_default = Int.max (cpus-1) 1
-
-let f_formula = "(#cpus-1)/4 + 1"
-let f_default = (cpus - 1) / 4 + 1
-
-(* set d-number usings same defaults as j-number *)
-let d_formula = j_formula
-let d_default = j_default
-
-
 let j_number =
+  let formula,default =
+    match System.num_cpus_if_known with
+    | None -> "", 1
+    | Some cpus ->
+      " = max (#cpus-1) 1", Int.max (cpus-1) 1
+  in
   Spec.step (fun m x -> m ~j_number:x)
-  +> Spec.flag "j" (Spec.optional_with_default j_default Spec.int)
-    ~doc:(sprintf "<jobs> maximum num jobs, def: %d = %s)"
-            j_default j_formula)
+  +> Spec.flag "j" (Spec.optional_with_default default Spec.int)
+    ~doc:(sprintf "<jobs> parallel jobs, def: %d%s" default formula)
 
 let f_number =
+  let formula,default =
+    match System.num_cpus_if_known with
+    | None -> "", 1
+    | Some cpus ->
+      " = (#cpus-1)/4 + 1",  (cpus - 1) / 4 + 1
+  in
   Spec.step (fun m x -> m ~f_number:x)
-  +> Spec.flag "f" (Spec.optional_with_default f_default Spec.int)
-    ~doc:(sprintf "<forkers> num forker procs, def: %d = %s"
-            f_default f_formula)
+  +> Spec.flag "f" (Spec.optional_with_default default Spec.int)
+    ~doc:(sprintf "<forkers> forker processes, def: %d%s" default formula)
 
 let d_number =
+  let formula,default = (* same defaults as for -j *)
+    match System.num_cpus_if_known with
+    | None -> "", 1
+    | Some cpus ->
+      " = max (#cpus-1) 1", Int.max (cpus-1) 1
+  in
   Spec.step (fun m x -> m ~d_number:x)
-  +> Spec.flag "max-par-digest" (Spec.optional_with_default d_default Spec.int)
-    ~doc:(sprintf "<digests> maximum number parallel digests, def: %d = %s"
-            d_default d_formula)
+  +> Spec.flag "max-par-digest" (Spec.optional_with_default default Spec.int)
+    ~doc:(sprintf "<digests> parallel digests, def: %d%s" default formula)
 
 let poll_forever =
   Spec.step (fun m x -> m ~poll_forever:x)
@@ -135,11 +125,10 @@ let progress =
   +> Spec.flag "progress" ~aliases:["--progress"] Spec.no_arg
     ~doc:" Show periodic progress report (omake style)"
 
-let external_jenga_root =
-  Spec.step (fun m x -> m ~external_jenga_root:x)
-  +> Spec.flag "external-jengaroot" ~aliases:["x"] (Spec.optional Spec.string)
-    ~doc:(sprintf " Specify path to %s; The repo_root is taken to be CWD."
-            Misc.jenga_root_basename)
+let path_to_jenga_conf =
+  Spec.step (fun m x -> m ~path_to_jenga_conf:x)
+  +> Spec.flag "-path-to-jenga-conf" (Spec.optional Spec.string)
+    ~doc:(sprintf " Specify path to <jenga.conf>; The repo_root is taken to be CWD.")
 
 let brief_error_summary =
   Spec.step (fun m x -> m ~brief_error_summary:x)
@@ -199,7 +188,7 @@ let go_command =
     ++ omake_server
     ++ output_postpone
     ++ progress
-    ++ external_jenga_root
+    ++ path_to_jenga_conf
     ++ brief_error_summary
     ++ no_server
     ++ minor_heap_size
@@ -233,7 +222,7 @@ let go_command =
       ~omake_server
       ~output_postpone:_
       ~progress
-      ~external_jenga_root
+      ~path_to_jenga_conf
       ~brief_error_summary
       ~no_server
       ~minor_heap_size
@@ -271,7 +260,7 @@ let go_command =
 
           dont_emit_kill_line = String.(terminal_type = "dumb");
 
-          external_jenga_root;
+          path_to_jenga_conf;
           brief_error_summary;
           no_server;
           no_notifiers;

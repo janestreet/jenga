@@ -1,0 +1,50 @@
+#!/bin/bash
+
+timeout="$1"
+shift
+( exit_if_not_alive() {
+      local state="$(ps -p $$ -o stat=)"
+      local ret=$?
+      # don't get why ps doesn't return 1 sometimes
+      if [ $ret -ne 0 ] || grep -q 'Z\|^$' <<< "$state"; then
+          exit 0;
+      fi
+  }
+  exit_if_not_alive
+  for ((i = 0; i < "$timeout"; i++)); do
+        sleep 1;
+        exit_if_not_alive
+  done;
+  echo Timeout after "$timeout"s;
+  echo
+  # stupid nyc-qws-cd* don't have pstack
+  # echo '$' pstack $$
+  # pstack $$
+  for ((i = 0; i < 2; i++)) {
+      com=(gdb /proc/$$/exe $$ -batch -ex 'thread apply all bt')
+      echo '$' "${com[@]}"
+      "${com[@]}" < /dev/null
+      echo
+      echo '$' ls -l /proc/$$/fd
+      ls -l /proc/$$/fd
+      echo
+      echo '$' ps ufx '#' process is $$
+      ps ufx
+      echo
+      echo "\$ strace -s500 -f -p $$ & { sleep 1; kill -INT \$! || { sleep 1; kill -KILL \$!; }; }"
+      strace -s500 -f -p $$ & { sleep 1; kill -INT $! || { sleep 1; kill -KILL $!; }; }
+      if [ $i -eq 0 ]; then
+          echo
+          echo '########## Sending a sigchild to see if it helps ##########'
+          echo
+          echo kill -CHLD $$
+          kill -CHLD $$
+          sleep 2
+      fi
+  }
+  kill $$
+  sleep 2
+  kill -KILL $$ 2> /dev/null
+) &
+
+exec "$@"
