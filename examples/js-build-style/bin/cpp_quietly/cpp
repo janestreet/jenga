@@ -1,2 +1,0 @@
-#!/bin/bash
-(set -o pipefail; /usr/bin/cpp "$@" 2>&1>&3|(grep -v "warning: missing terminating ' character"||true)>&2)3>&1

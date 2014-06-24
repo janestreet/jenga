@@ -1,4 +1,0 @@
-
-$ ./pull-git-packages.sh
-$ jenga -progress examples
-$ ./examples/countdown.exe

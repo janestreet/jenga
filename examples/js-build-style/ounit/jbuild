@@ -1,5 +1,0 @@
-(library
- ((name oUnit) (packed false)
-  (libraries ())
-  (modules (list (oUnit)))
-  (preprocess (((pps ()) All)))))
