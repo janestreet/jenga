@@ -1,0 +1,39 @@
+# OASIS_START
+# DO NOT EDIT (digest: 9c78b88958e67544c63a676a469e6a3c)
+Api
+Api_v2
+Api_v3
+Build
+Command_line
+Config
+Description
+Discovered_graph
+Effort
+Error_reason_type
+Exit_code
+File_access
+Finish_time_estimator
+For_user
+Forker
+Fs
+Glob_to_re
+Jem_command_line
+Jenga_root_interface
+Job
+Load_root
+Message
+Misc
+Monomorphic_mutable_graph
+Offline
+Path
+Pattern
+Persist
+Progress
+Quit
+Reason
+Rpc_intf
+Rpc_server
+Run
+Server_lock
+System
+# OASIS_STOP
