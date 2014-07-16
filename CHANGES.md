@@ -1,3 +1,8 @@
+## 111.21.00
+
+- Introduced jenga API v3, a small cleanup of v2 which has been planned
+  for a while.
+
 ## 111.08.00
 
 - Fix a hang.
