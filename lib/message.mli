@@ -2,6 +2,10 @@
 open Core.Std
 open Async.Std
 
+module Q : sig
+  val shell_escape : arg:string -> string
+end
+
 module Job_start : sig type t end
 module Job_summary : sig type t end
 
@@ -36,17 +40,17 @@ val job_finished :
 
 val repeat_job_summary : Job_summary.t -> unit
 
-val load_jenga_root : Path.X.t -> modules:string list -> unit
-val load_jenga_root_done : Path.X.t -> Time.Span.t -> unit
+val load_jenga_root : Path.t -> modules:string list -> unit
+val load_jenga_root_done : Path.t -> Time.Span.t -> unit
 
-val load_sexp_error : Path.t -> loc:(int*int) -> exn -> unit
+val load_sexp_error : Path.Rel.t -> loc:(int*int) -> exn -> unit
 
 module Err : sig
   type t
   val create : ?pos:(int*int) -> ?extra:string -> string -> t
 end
 
-val errors_for_omake_server : Path.X.t -> Err.t list -> unit
+val errors_for_omake_server : Path.t -> Err.t list -> unit
 
 val build_done : duration:Time.Span.t -> u:int -> total:int -> string -> unit
 val build_failed : duration:Time.Span.t -> u:int -> fraction:(int*int) -> string -> unit

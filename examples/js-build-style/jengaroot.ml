@@ -8,7 +8,7 @@ end
 
 open Core.Std
 open Async.Std
-open Jenga_lib.Api_v2
+open Jenga_lib.Api
 
 module List = struct
   include List
@@ -19,48 +19,6 @@ end
 
 let put fmt = ksprintf (fun s -> Printf.printf "%s\n%!" s) fmt
 let message fmt = ksprintf (fun s -> Printf.printf "!!JengaRoot.ml : %s\n%!" s) fmt
-
-let _rename_record_field t_of_sexp ~backward_compatibility ~forward_compatibility =
-  let assoc =
-    backward_compatibility @ List.map forward_compatibility ~f:(fun (x, y) -> (y, x))
-  in
-  fun sexp ->
-    let sexp =
-      match sexp with
-      | Sexp.Atom _ -> sexp
-      | Sexp.List list ->
-        Sexp.List
-          (List.map list ~f:(function
-             | Sexp.List (Sexp.Atom name :: rest) as binding ->
-               begin match List.Assoc.find assoc name with
-               | Some s -> Sexp.List (Sexp.Atom s :: rest)
-               | None -> binding
-               end
-             | binding -> binding))
-    in
-    t_of_sexp sexp
-
-module Dep = struct
-  include Depends (* plan to push this change in v3 of the jenga API *)
-
-  let of_string ~dir string =
-    if string <> "" && string.[0] = '/'
-    then absolute ~path:string
-    else path (Path.relative ~dir string)
-
-  let contents_cutoff p =
-    (contents p)
-
-  module List = struct
-    let concat_map xs ~f =
-      map (all (List.map xs ~f)) List.concat
-  end
-
-  (*let glob = Depends.glob_listing*)
-  let _glob_change = glob
-  let glob_change _ = Depends.return ()  (* TODO *)
-  let source_if_it_exists _ = Depends.return ()  (* TODO *)
-end
 
 let return = Dep.return
 let ( *>>= ) = Dep.bind
@@ -76,28 +34,14 @@ module Rule = struct (* planned changes for API v3 *)
       Dep.all_unit deps *>>| fun () -> action
     )
 
-  let alias a deps =
-    Rule.alias a (Dep.all_unit deps)
-
-  let default ~dir deps =
-    Rule.default ~dir (Dep.all_unit deps)
-
   let create_relative ~dir ~targets ~deps ~non_relative_deps monadic_action =
     let targets = List.map targets ~f:(fun name -> Path.relative ~dir name) in
     let deps =
       non_relative_deps @
-      List.map deps ~f:(fun name -> Depends.path (Path.relative ~dir name))
+      List.map deps ~f:(fun name -> Dep.path (Path.relative ~dir name))
     in
-    create ~targets (Depends.all_unit deps *>>= fun () -> monadic_action)
+    create ~targets (Dep.all_unit deps *>>= fun () -> monadic_action)
 
-end
-
-module Scheme : sig (* plan for API v3 - combine Generator/Scheme -> Scheme *)
-  type t = Scheme.t
-  val create : tag:string -> (dir:Path.t -> Rule.t list Dep.t) -> t
-end = struct
-  type t = Scheme.t
-  let create ~tag f = Scheme.create ~tag (fun ~dir -> Generator.create (f ~dir))
 end
 
 let relative = Path.relative
@@ -1446,7 +1390,7 @@ module Dep_conf = struct
     | Sexp.List _ as sexp -> t_of_sexp sexp
 
   let to_depends ~dir = function
-    | File s -> Dep.of_string ~dir s
+    | File s -> Dep.path (Path.relative_or_absolute ~dir s)
     | Files_recursively_in spec_dir ->
       (* Add deps on the recursive list of files, *and* their contents. Only works
          if the directory only contains source files, otherwise we wouldn't depend
@@ -1454,7 +1398,7 @@ module Dep_conf = struct
       deep_unignored_subdirs ~dir:(relative ~dir spec_dir) *>>= fun dirs ->
       Dep.all_unit (
         List.map dirs ~f:(fun dir ->
-          Dep.glob (Glob.create ~dir ~kinds:[`File] "*") *>>= fun paths ->
+          Dep.glob_listing (Glob.create ~dir ~kinds:[`File] "*") *>>= fun paths ->
           Dep.all_unit (List.map paths ~f:Dep.source_if_it_exists)
         )
       )
@@ -2149,7 +2093,11 @@ let setup_ml_compile_rules
 
   let compile_rules = List.concat_map names_spec_modules ~f:(fun name ->
     let pp_libs, pp_deps, pp_com_opt = pp_of_name name in
-    let pp_deps = List.map preprocessor_deps ~f:(Dep.of_string ~dir) @ pp_deps in
+    let pp_deps =
+      List.map preprocessor_deps ~f:(fun s ->
+        Dep.path (Path.relative_or_absolute ~dir s)
+      ) @ pp_deps
+    in
     let exists_ml = names_spec_has_impl name in
     let exists_mli = names_spec_has_intf name in
 
@@ -2379,12 +2327,7 @@ module Ordering = struct
         let sorted_modules = knot_name :: sorted_modules in
         sorted_modules
     in
-
-    Action.internal
-      ~tag:(<:sexp_of< string * string list>> ("pack-order", sorted_modules))
-      ~func:(fun () ->
-              Writer.save (Path.to_string target)
-                ~contents:(String.concat ~sep:" " sorted_modules))
+    write_string_action (String.concat ~sep:" " sorted_modules) ~target
   ;;
 
   let comparison order_file =
@@ -3685,84 +3628,6 @@ let inline_bench_rules dc ~dir =
     ]
 
 (*----------------------------------------------------------------------
- One_ml_file_of_library
-----------------------------------------------------------------------*)
-
-module One_ml_file_of_library = struct
-  type t = {
-    target : string;
-    source_libname : string;
-  } with sexp, fields
-end
-
-module Buffer = Caml.Buffer
-
-let one_ml_file_of_library dc ~dir { One_ml_file_of_library. target; source_libname } =
-  let target_path = relative ~dir target in
-  Rule.create
-    ~targets:[target_path]
-    (let find_library = Libmap.look_exn dc.DC.libmap in
-     let source_dir = find_library source_libname in
-     let set_of_source_glob glob =
-       Dep.glob (glob ~dir:source_dir) *>>| fun paths ->
-       let files = List.map paths ~f:basename in
-       String.Set.of_list files
-     in
-     let source_contents file =
-       Depends.contents (relative ~dir:source_dir file)
-     in
-     file_words (pack_order_file ~dir:source_dir ~libname:source_libname) *>>= fun modules ->
-     (* because the pack order file is built, even the generated mls and mlis do exist *)
-     Depends.both (set_of_source_glob glob_ml) (set_of_source_glob glob_mli)
-     *>>= fun (mls, mlis) ->
-     let buf = Buffer.create 500 in
-     let rec loop = function
-       | [] ->
-         return (Buffer.contents buf)
-       | hd :: tl ->
-         let ml = hd ^ ".ml" in
-         let mli = hd ^ ".mli" in
-         let module_ = String.capitalize hd in
-         match Set.mem mls ml, Set.mem mlis mli with
-         | false, false ->
-           failwithf "module %s listed in pack order file is not in the directory"
-             module_ ()
-         | true, false ->
-           source_contents ml *>>= fun str ->
-           Printf.bprintf buf "module %s = struct\n" module_;
-           Printf.bprintf buf "#1 %S\n" ml;
-           Buffer.add_string buf str;
-           Printf.bprintf buf "\nend\n\n";
-           loop tl
-         | false, true ->
-           source_contents mli *>>= fun str ->
-           Printf.bprintf buf "module rec %s : sig\n" module_;
-           Printf.bprintf buf "#1 %S\n" mli;
-           Buffer.add_string buf str;
-           Printf.bprintf buf "\nend = %s\n\n" module_;
-           loop tl
-         | true, true ->
-           source_contents mli *>>= fun str ->
-           Printf.bprintf buf "module %s : sig\n" module_;
-           Printf.bprintf buf "#1 %S\n" mli;
-           Buffer.add_string buf str;
-           Printf.bprintf buf "\nend = struct\n";
-           Printf.bprintf buf "#1 %S\n" ml;
-           source_contents ml *>>= fun str ->
-           Buffer.add_string buf str;
-           Printf.bprintf buf "\nend\n\n";
-           loop tl
-     in
-     loop modules *>>| fun whole_module ->
-     let whole_module_digest = Caml.Digest.string whole_module in
-     Action.internal
-       ~tag:(<:sexp_of< string * string >> ("one_ml_file_of_library",  whole_module_digest))
-       ~func:(fun () ->
-         Writer.save ~perm:0o444 (Path.to_string target_path) ~contents:whole_module
-       ))
-
-
-(*----------------------------------------------------------------------
  Jbuild
 ----------------------------------------------------------------------*)
 
@@ -3777,7 +3642,6 @@ module Jbuild : sig
   | `compile_c of Compile_c_conf.t
   | `rule of Rule_conf.t
   | `alias of Alias_conf.t
-  | `one_ml_file_of_library of One_ml_file_of_library.t
   | `no_mycaml
   | `no_utop
   | `Synced_with_omakefile_with_digest of string
@@ -3798,7 +3662,6 @@ end = struct
   | `compile_c of Compile_c_conf.t
   | `rule of Rule_conf.t
   | `alias of Alias_conf.t
-  | `one_ml_file_of_library of One_ml_file_of_library.t
   | `no_mycaml
   | `no_utop
   | `Synced_with_omakefile_with_digest of string
@@ -3841,7 +3704,6 @@ end = struct
     | `compile_c _ -> []
     | `rule _ -> []
     | `alias _ -> []
-    | `one_ml_file_of_library _ -> []
     | `no_mycaml -> []
     | `no_utop -> []
     | `Synced_with_omakefile_with_digest _ -> []
@@ -3864,7 +3726,6 @@ let ocaml_libraries j = match Jbuild.rep j with
   | `compile_c _ -> []
   | `rule _ -> []
   | `alias _ -> []
-  | `one_ml_file_of_library _ -> []
   | `no_mycaml -> []
   | `no_utop -> []
   | `Synced_with_omakefile_with_digest _ -> []
@@ -3878,7 +3739,6 @@ let xlibnames j = match Jbuild.rep j with
   | `compile_c _ -> []
   | `rule _ -> []
   | `alias _ -> []
-  | `one_ml_file_of_library _ -> []
   | `no_mycaml -> []
   | `no_utop -> []
   | `Synced_with_omakefile_with_digest _ -> []
@@ -3892,7 +3752,6 @@ let extra_disabled_warnings j = match Jbuild.rep j with
   | `compile_c _ -> []
   | `rule _ -> []
   | `alias _ -> []
-  | `one_ml_file_of_library _ -> []
   | `no_mycaml -> []
   | `no_utop -> []
   | `Synced_with_omakefile_with_digest _ -> []
@@ -3992,7 +3851,6 @@ let gen_build_rules dc ~dir jbuilds =
     | `alias conf ->
       let dc_for_rule_conf = {dc with DC. ocamlflags} in
       [alias_conf_to_rule dc_for_rule_conf ~dir ~cflags conf]
-    | `one_ml_file_of_library conf -> [one_ml_file_of_library dc ~dir conf]
     | `no_mycaml -> []
     | `no_utop -> []
     | `Synced_with_omakefile_with_digest _ -> []
@@ -4103,9 +3961,6 @@ let infer_autogen jbuilds =
       List.concat_cartesian_product x.Executables_conf.ocamllex [".ml"]
       @ List.concat_cartesian_product x.Executables_conf.ocamlyacc [".ml"; ".mli"]
 
-    | `one_ml_file_of_library { One_ml_file_of_library.target; _ } ->
-      [target]
-
     | `libraryX _ (* I suppose it could produce ml files, but well *)
     | `preprocessor _
     | `embed _
@@ -4124,8 +3979,8 @@ let infer_autogen jbuilds =
 let create_directory_context ~dir jbuilds =
   (* These dependencies could/should be run in parallel *)
   Centos.ocamllibflags *>>= fun ocamllibflags ->
-  Dep.glob (glob_ml ~dir) *>>= fun ml_paths ->
-  Dep.glob (glob_mli ~dir) *>>= fun mli_paths ->
+  Dep.glob_listing (glob_ml ~dir) *>>= fun ml_paths ->
+  Dep.glob_listing (glob_mli ~dir) *>>= fun mli_paths ->
   Libmap_sexp.get *>>= fun libmap ->
   let merlinflags =
     let extra_disabled_warnings = List.concat_map jbuilds ~f:extra_disabled_warnings in

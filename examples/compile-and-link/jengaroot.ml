@@ -1,10 +1,10 @@
 
 open Core.Std
 open Async.Std
-open Jenga_lib.Api_v2
-let return = Depends.return
-let ( *>>| ) = Depends.map
-let ( *>>= ) = Depends.bind
+open Jenga_lib.Api
+let return = Dep.return
+let ( *>>| ) = Dep.map
+let ( *>>= ) = Dep.bind
 
 (* Example to show the programmatic setup of compilation & link rules for a directory of
    source files.
@@ -31,12 +31,12 @@ let rec upto i j = if i > j then [] else i :: upto (i+1) j
 
 let simple_rule ~targets ~deps ~action =
   Rule.create ~targets (
-    Depends.all_unit deps *>>| fun () ->
+    Dep.all_unit deps *>>| fun () ->
     action)
 
 (* /bin/cp is our compiler *)
 let cp_rule ~source ~target =
-  simple_rule ~targets:[target] ~deps:[Depends.path source]
+  simple_rule ~targets:[target] ~deps:[Dep.path source]
     ~action:(
       Action.shell ~dir:(Path.dirname target)
         ~prog:"/bin/cp"
@@ -59,7 +59,7 @@ let compile_stages ~dir ~name ~n_stages =
 
 (* cat is our linker *)
 let link_files_by_concatenation ~sources ~target =
-  simple_rule ~targets:[target] ~deps:(List.map sources ~f:Depends.path)
+  simple_rule ~targets:[target] ~deps:(List.map sources ~f:Dep.path)
     ~action:(
       Action.shell ~dir:(Path.dirname target)
         ~prog:"/bin/bash"
@@ -79,26 +79,24 @@ let scheme =
     (* Rule setup depends on all sources found in the directory *)
     let dot1s = Glob.create ~dir "*.1" in
     let n_max = 3 in
-    Generator.create (
-      Depends.glob dot1s *>>= fun dot1_paths ->
-      let names = List.map dot1_paths ~f:name_of_path in
-      message "Generate rules: %s, names = %s"
-        (Path.to_string dir) (String.concat ~sep:" " names);
-      let compile_rules =
-        List.concat_map names ~f:(fun name ->
-          compile_stages ~dir ~name ~n_stages:n_max
-        )
-      in
-      let fully_compiled_files =
-        List.map names ~f:(fun name -> mk_file ~dir name n_max)
-      in
-      let the_library = Path.relative ~dir "the.library" in
-      let link_rule =
-        link_files_by_concatenation ~sources:fully_compiled_files ~target:the_library
-      in
-      let default_rule = Rule.default ~dir (Depends.path the_library) in
-      return (compile_rules @ [link_rule; default_rule;])
-    )
+    Dep.glob_listing dot1s *>>= fun dot1_paths ->
+    let names = List.map dot1_paths ~f:name_of_path in
+    message "Generate rules: %s, names = %s"
+      (Path.to_string dir) (String.concat ~sep:" " names);
+    let compile_rules =
+      List.concat_map names ~f:(fun name ->
+        compile_stages ~dir ~name ~n_stages:n_max
+      )
+    in
+    let fully_compiled_files =
+      List.map names ~f:(fun name -> mk_file ~dir name n_max)
+    in
+    let the_library = Path.relative ~dir "the.library" in
+    let link_rule =
+      link_files_by_concatenation ~sources:fully_compiled_files ~target:the_library
+    in
+    let default_rule = Rule.default ~dir [Dep.path the_library] in
+    return (compile_rules @ [link_rule; default_rule;])
   )
 
 let env = Env.create ["**", Some scheme]

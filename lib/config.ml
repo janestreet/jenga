@@ -1,6 +1,6 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_ let _ = _squelch_unused_module_warning_
+open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
 type t = {
   j_number : int;
@@ -12,6 +12,7 @@ type t = {
   show_actions_run : bool;
   show_actions_run_verbose : bool;
   show_checked : bool;
+  show_reflecting : bool;
   show_considering : bool;
   show_reconsidering : bool;
   show_trace_messages : bool;

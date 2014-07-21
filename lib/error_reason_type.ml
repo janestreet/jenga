@@ -1,6 +1,5 @@
 
 open Core.Std
-open Description
 
 type t =
 | Misc                              of string
@@ -20,6 +19,6 @@ type t =
 | Duplicate_scheme_ids              of string list
 | Scheme_raised                     of exn
 | Running_job_raised    of exn
-| Multiple_rules_for_paths          of Gen_key.t * Path.t list
-| Rule_failed_to_generate_targets   of Path.t list
+| Multiple_rules_for_paths          of Gen_key.t * Path.Rel.t list
+| Rule_failed_to_generate_targets   of Path.Rel.t list
 | Usercode_raised                   of exn

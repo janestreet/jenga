@@ -31,14 +31,14 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
   Forker.init config;
   Fs.Digester.init config;
   Persist.create_saving_periodically ~root_dir db_save_span >>= fun persist ->
-  Fs.create config (Persist.fs_persist persist) >>= fun fs ->
+  let path_locked = Build.path_locked in
+  Fs.create config (Persist.fs_persist persist) ~path_locked >>= fun fs ->
   let progress = Progress.create config in
   Rpc_server.go config ~root_dir progress >>= fun () ->
-  For_user.install_fs_for_user_rules fs;
   let top_level_demands =
     match Config.demands config with
-    | [] -> [ Description.Goal.Alias (Description.Alias.default ~dir:start_dir) ]
-    | demands -> List.map demands ~f:(Description.Goal.parse_string ~dir:start_dir)
+    | [] -> [ Goal.Alias (Alias.default ~dir:(Path.of_relative start_dir)) ]
+    | demands -> List.map demands ~f:(Goal.parse_string ~dir:start_dir)
   in
   let when_polling () =
     Persist.disable_periodic_saving_and_save_now persist
@@ -62,7 +62,7 @@ let install_signal_handlers () =
 let error fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt
 
 let main config =
-  For_user.install_config_for_user_rules config;
+  Description.For_user.install_config_for_user_rules config;
 
   (* The jenga root discovery must run before we call Parallel.init *)
   let root_dir,jr_spec =
@@ -70,12 +70,12 @@ let main config =
     | Some jenga_root ->
       let dir = Core.Std.Sys.getcwd () in
       Path.Root.set ~dir;
-      dir, Build.Jr_spec.xpath (Path.X.of_absolute (Path.Abs.create jenga_root))
+      dir, Build.Jr_spec.path (Path.of_absolute (Path.Abs.create jenga_root))
     | None ->
       begin
         match Path.Root.discover() with
         | `ok ->
-          let dir = Path.to_absolute_string Path.the_root in
+          let dir = Path.Rel.to_absolute_string Path.Rel.the_root in
           dir, Build.Jr_spec.in_root_dir
         | `cant_find_root ->
           error "Cant find '%s' or '%s' in start-dir or any ancestor dir"
@@ -85,21 +85,21 @@ let main config =
       end
   in
 
-  let log_filename = root_dir ^/ Path.log_basename in
+  let log_filename = root_dir ^/ Misc.log_basename in
   Message.init_logging config ~log_filename;
 
   (* Remember the original start_dir, but then chdir to root_dir. This way jenga behaves
      the same regardless of what subdir it is started in. *)
 
   let start_dir =
-    match (Path.create_from_absolute (Core.Std.Sys.getcwd ())) with
+    match (Path.Rel.create_from_absolute (Core.Std.Sys.getcwd ())) with
     | None -> failwith "start_dir, not under root_dir - impossible"
     | Some x -> x
   in
 
   trace "----------------------------------------------------------------------";
   trace "Root: %s" root_dir;
-  trace "Start: %s" (Path.to_string start_dir);
+  trace "Start: %s" (Path.Rel.to_string start_dir);
 
   Core.Std.Sys.chdir root_dir;
 

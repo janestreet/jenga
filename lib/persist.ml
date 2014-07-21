@@ -91,7 +91,7 @@ let build_persist t = State.build_persist t.state_mem
 let db_filename t = t.db_filename
 
 let create ~root_dir =
-  let db_filename = root_dir ^/ Path.db_basename in
+  let db_filename = root_dir ^/ Misc.db_basename in
 
   trace "LOAD_DB: %s..." db_filename;
   time_async (fun () -> State.load_db ~db_filename) >>= fun (state,duration) ->

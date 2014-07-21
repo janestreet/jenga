@@ -12,7 +12,11 @@ let pretend_to_be_omake =
 let build_system_message_tag =
   if pretend_to_be_omake then "*** omake" else "*** jenga"
 
-module Q = struct
+module Q : sig
+
+  val shell_escape : arg:string -> string
+
+end = struct
 
   let is_special_char_to_bash = function
     | '\\' | '\'' | '"' | '`' | '<' | '>' | '|' | ';' | ' ' | '\t' | '\n'
@@ -21,27 +25,24 @@ module Q = struct
     | _
       -> false
 
-  (*let escape_special_chars s =
-    String.concat_map s ~f:(fun c ->
-      if is_special_char_to_bash c then sprintf "\\%c" c else Char.to_string c
-    )*)
-
-  let shell_escape s =
+  let vanilla_shell_escape s =
     "'" ^ String.concat_map s ~f:(function
     | '\'' -> "'\\''"
     | c -> String.make 1 c
     ) ^ "'"
 
-  let quote_arg_prevent_bash_interpretation s =
+  let shell_escape ~arg:s =
     (* quote a string (if necessary) to prevent interpretation of any chars which have a
        special meaning to bash *)
     if String.exists s ~f:is_special_char_to_bash
     then
       if String.contains s '\''
       (* already contains single-quotes; quote using backslash escaping *)
-      then shell_escape s
-      (* no embedded single quotes; just wrap with single quotes *)
-      else sprintf "'%s'" s
+      then vanilla_shell_escape s
+      else
+        (* no embedded single quotes; just wrap with single quotes;
+           same behavior as [shell_escape], but perhaps more efficient *)
+        sprintf "'%s'" s
     else
       (* does not need quoting *)
       s
@@ -109,12 +110,8 @@ module Job_summary = struct
     (* print out the command in a format suitable for cut&pasting into bash
        (except for the leading "+")
     *)
-    put (
-      sprintf "+ %s %s" prog (
-        String.concat ~sep:" "
-          (List.map args ~f:Q.quote_arg_prevent_bash_interpretation)
-      )
-    );
+    let args = List.map args ~f:(fun arg -> Q.shell_escape ~arg) in
+    put (sprintf "+ %s %s" prog (String.concat ~sep:" " args));
     List.iter stdout ~f:put;
     List.iter stderr ~f:put;
     let duration_string = pretty_span duration in
@@ -149,10 +146,10 @@ module Event = struct
   type t =
   | Tagged_message of Tag.t * string
   | Transient of string
-  | Load_jenga_root of Path.X.t * string list
-  | Load_jenga_root_done of Path.X.t * Time.Span.t
-  | Load_sexp_error of Path.t * [`loc of int * int] * exn
-  | Errors_for_omake_server of Path.X.t * Err.t list
+  | Load_jenga_root of Path.t * string list
+  | Load_jenga_root_done of Path.t * Time.Span.t
+  | Load_sexp_error of Path.Rel.t * [`loc of int * int] * exn
+  | Errors_for_omake_server of Path.t * Err.t list
   | Job_started of Job_start.t
   | Job_completed of Job_summary.t
   | Job_summary of Job_summary.t
@@ -228,8 +225,8 @@ let load_jenga_root_done path span =
 let load_sexp_error path ~loc exn =
   T.dispatch the_log (Event.Load_sexp_error (path,`loc loc, exn))
 
-let errors_for_omake_server xpath errs =
-  T.dispatch the_log (Event.Errors_for_omake_server (xpath,errs))
+let errors_for_omake_server path errs =
+  T.dispatch the_log (Event.Errors_for_omake_server (path,errs))
 
 let job_started =
   let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
@@ -356,8 +353,8 @@ let omake_style_logger config event =
 
   | Event.Load_jenga_root (path,modules) ->
     if verbose then (
-      let where = Path.X.to_string (Path.X.dirname path) in
-      let need = Path.X.basename path in
+      let where = Path.to_string (Path.dirname path) in
+      let need = Path.basename path in
       put (sprintf "- build %s %s" where need);
     );
     let modules_string =
@@ -365,16 +362,16 @@ let omake_style_logger config event =
       | [] -> ""
       | _ -> sprintf " (%s)" (String.concat ~sep:" " modules)
     in
-    jput (sprintf "reading %s%s" (Path.X.to_string path) modules_string)
+    jput (sprintf "reading %s%s" (Path.to_string path) modules_string)
 
   | Event.Load_jenga_root_done (path,duration) ->
     jput (sprintf "finished reading %s (%s)"
-      (Path.X.to_string path)
+      (Path.to_string path)
       (pretty_span duration))
 
   | Event.Load_sexp_error (path,`loc (line,col),exn) ->
-    let where = Path.to_string (Path.dirname path) in
-    let file = Path.basename path in
+    let where = Path.Rel.to_string (Path.Rel.dirname path) in
+    let file = Path.Rel.basename path in
       (* hack on .cmx suffix for benefit of omake-server *)
     let need = file ^ ".cmx" in
     if verbose then (
@@ -387,9 +384,9 @@ let omake_style_logger config event =
     );
     redisplay_transient()
 
-  | Event.Errors_for_omake_server (xpath,errs) ->
-    let where = Path.X.to_string (Path.X.dirname xpath) in
-    let file = Path.X.basename xpath in
+  | Event.Errors_for_omake_server (path,errs) ->
+    let where = Path.to_string (Path.dirname path) in
+    let file = Path.basename path in
     if verbose then (
       put (sprintf "- build %s %s" where file);
     );

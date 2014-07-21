@@ -1,11 +1,19 @@
 
 open Core.Std
 open Async.Std
-open Description
 
 val persist_saves_done : Effort.Counter.t
 val actions_run : Effort.Counter.t
 val considerations_run : Effort.Counter.t
+
+module Need : sig
+  type t
+  val goal : Goal.t -> t
+  val jengaroot : t
+  include Hashable_binable with type t := t
+  include Comparable_binable with type t := t
+  val to_string : t -> string
+end
 
 module Status : sig
   type t =

@@ -2,17 +2,6 @@
 open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
-let special_prefix = ".jenga"
-let special suf = special_prefix ^ suf
-
-let log_basename = special ".debug"
-let sexp_db_basename = special ".sexp-db"
-let db_basename = special ".db"
-let dot_basename = special ".dot"
-let lock_basename = special ".lock"
-let server_basename = special ".server"
-let plugin_cache_basename = special ".plugin-cache"
-
 let empty_string = function "" -> true | _ -> false
 
 let starts_with_slash s =
@@ -141,6 +130,7 @@ module Rel = struct
   (* compute relative ".."-based-path-string path to reach [path] from [dir] *)
   let dotdot ~dir path =
     if is_root dir then unpack path else
+    (*if (dirname path = dir) then basename path else*)
     let segs = String.split (unpack dir) ~on:'/' in
     let dots = List.map segs ~f:(fun seg -> assert (not (String.(seg=".."))); "../") in
     String.concat dots ^ (unpack path)
@@ -155,7 +145,7 @@ module Rel = struct
     else Root.get() ^ "/" ^ (unpack t)
 
   let is_special_jenga_path t =
-    String.is_prefix ~prefix:special_prefix (to_string t)
+    String.is_prefix ~prefix:Misc.special_prefix (to_string t)
 
 end
 
@@ -182,71 +172,69 @@ end = struct
 
 end
 
-module X = struct
-
-  module T = struct
-    type t = string with sexp, compare, bin_io
-    let hash = String.hash
-  end
-
-  include T
-  include Hashable.Make_binable(T)
-
-  let of_relative x = Rel.to_string x
-  let of_absolute x = Abs.to_string x
-
-  let case t =
-    if starts_with_slash t
-    then `absolute (Abs.create t)
-    else `relative (Rel.create t)
-
-  let split t = Filename.split t
-
-  let dirname t = fst (split t)
-  let basename t = snd (split t)
-
-  let to_string t =
-    match (case t) with
-    | `relative p -> Rel.to_string p
-    | `absolute a -> Abs.to_string a
-
-  let to_absolute_string t =
-    match (case t) with
-    | `relative p -> Rel.to_absolute_string p
-    | `absolute a -> Abs.to_string a
-
-  let relative ~dir s =
-    if (starts_with_slash s) then s else (* dir ignored *)
-    match (case dir) with
-    | `relative dir -> of_relative (Rel.relative ~dir s)
-    | `absolute dir -> of_absolute (Abs.relative ~dir s)
-
-  let equal t1 t2 =
-    String.(to_absolute_string t1 = to_absolute_string t2)
-
+module T = struct
+  type t = string with sexp, compare, bin_io
+  let hash = String.hash
 end
 
-include Rel
+include T
+include Hashable.Make_binable(T)
+include Comparable.Make_binable(T)
 
-open Async.Std
+let of_relative x = Rel.to_string x
+let of_absolute x = Abs.to_string x
 
-(* Prevent overlapping executions on a specific path *)
-module Key = struct
-  type 'a t = {tag: 'a; mutable cell: unit Deferred.t}
+let case t =
+  if starts_with_slash t
+  then `absolute (Abs.create t)
+  else `relative (Rel.create t)
 
-  let create ~tag = {tag; cell = Deferred.unit}
-  let tag t = t.tag
+let split t = Filename.split t
 
-  let locked t = not (Deferred.is_determined t.cell)
+let dirname t = fst (split t)
+let basename t = snd (split t)
 
-  let wait t = t.cell
+let to_string t =
+  match (case t) with
+  | `relative p -> Rel.to_string p
+  | `absolute a -> Abs.to_string a
 
-  let set_cell t cell = t.cell <- cell
+let to_absolute_string t =
+  match (case t) with
+  | `relative p -> Rel.to_absolute_string p
+  | `absolute a -> Abs.to_string a
 
-end
+let absolute s = of_absolute (Abs.create s)
 
-let get_key =
-  let tenacious_keys = Weak_hashtbl.create hashable in
-  fun t ->
-    let default () = Heap_block.create_exn (Key.create ~tag:t) in
-    Heap_block.value (Weak_hashtbl.find_or_add tenacious_keys t ~default)
+let relative ~dir s =
+  match (case dir) with
+  | `relative dir -> of_relative (Rel.relative ~dir s)
+  | `absolute dir -> of_absolute (Abs.relative ~dir s)
+
+let relative_or_absolute ~dir s =
+  if starts_with_slash s
+  then absolute s (* dir ignored *)
+  else relative ~dir s
+
+let equal t1 t2 =
+  String.(to_absolute_string t1 = to_absolute_string t2)
+
+let the_root = of_relative Rel.the_root
+
+let root_relative = relative ~dir:the_root
+
+let dotdot ~dir t =
+  match (case dir, case t) with
+  | `relative dir, `relative t -> Rel.dotdot ~dir t
+  | _,_ ->
+    (* give up, just use absolute path *)
+    to_absolute_string t
+
+
+let is_descendant ~dir path =
+  String.is_prefix ~prefix:(to_absolute_string dir^"/") (to_absolute_string path)
+
+let reach_from ~dir path =
+  if is_descendant ~dir path
+  then String.chop_prefix_exn ~prefix:(to_absolute_string dir^"/") (to_absolute_string path)
+  else dotdot ~dir path

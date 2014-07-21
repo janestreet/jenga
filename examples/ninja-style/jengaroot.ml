@@ -3,8 +3,8 @@ open Core.Std
 open Async.Std
 
 (* Dont open jenga API, but access via explicit [J.] *)
-module J = Jenga_lib.Api_v2
-module Dep = J.Depends
+module J = Jenga_lib.Api
+module Dep = J.Dep
 let dirname = J.Path.dirname
 let relative = J.Path.relative
 let return = Dep.return
@@ -13,7 +13,7 @@ let ( *>>| ) = Dep.map
 
 let simple_default ~dir paths =
   J.Rule.default ~dir (
-    Dep.all_unit (List.map ~f:Dep.path paths)
+    List.map ~f:Dep.path paths
   )
 
 let simple_rule ~targets ~deps action =
@@ -607,7 +607,7 @@ let find_build_dot_ninja_upwards_from =
   loop
 
 let scheme =
-  J.Scheme.create ~tag:"the-scheme" (fun ~dir -> J.Generator.create (
+  J.Scheme.create ~tag:"the-scheme" (fun ~dir ->
     find_build_dot_ninja_upwards_from ~dir *>>= function
     | None -> return []
     | Some build_dot_ninja ->
@@ -617,7 +617,7 @@ let scheme =
         let contents = contents
       end) in
       Loaded.rules
-  ))
+  )
 
 let env = J.Env.create ["**build.ninja",None; "**",Some scheme]
 

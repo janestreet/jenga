@@ -4,7 +4,16 @@ open Async.Std
 
 exception Shutdown
 
-(*val external_jobs_run : Effort.Counter.t*)
+(* [Job.t] is a process description
+   We can run it directly. Or we can extract a suitable quoted string to run it via a
+   shell, such as "bash -c". *)
+type t
+with sexp, bin_io, compare
+include Hashable_binable with type t := t
+val create : dir:Path.t -> prog:string -> args:string list -> t
+val string_for_sh : t -> string
+
+val dir : t -> Path.t
 
 module Output : sig
 
@@ -23,10 +32,10 @@ module Output : sig
 end
 
 val run :
+  t ->
   config:Config.t ->
   need:string ->
   putenv : (string * string) list ->
-  xaction : Description.Xaction.t ->
   output : 'a Output.t ->
   ('a,
    [

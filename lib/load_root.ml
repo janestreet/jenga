@@ -32,8 +32,8 @@ let track_loading f =
 module Spec = struct
 
   type t =
-  | SingleML of Path.X.t
-  | Conf of Path.X.t * Path.X.t list
+  | SingleML of Path.t
+  | Conf of Path.t * Path.t list
 
   let ml_file ~ml = SingleML ml
   let config_file ~conf ~mls = Conf (conf,mls)
@@ -50,7 +50,7 @@ module Spec = struct
     | SingleML _ -> []
     | Conf (_,mls) ->
       List.map mls ~f:(fun ml ->
-        let s = Path.X.basename ml in
+        let s = Path.basename ml in
         match String.lsplit2 ~on:'.' s with | Some (s,_) -> s | None -> s
       )
 
@@ -58,7 +58,7 @@ end
 
 let get_env spec =
   let plugin_cache_dir =
-    Path.to_absolute_string (Path.root_relative Path.plugin_cache_basename)
+    Path.Rel.to_absolute_string (Path.Rel.root_relative Misc.plugin_cache_basename)
   in
   let plugin_cache =
     P.Plugin_cache.Config.create
@@ -74,7 +74,7 @@ let get_env spec =
     Plugin.load_ocaml_src_files
       ~persistent_archive_dirpath:plugin_cache_dir
       ~use_cache:plugin_cache
-      (List.map ~f:Path.X.to_absolute_string (Spec.ml_paths_to_load spec))
+      (List.map ~f:Path.to_absolute_string (Spec.ml_paths_to_load spec))
     >>= function
     | Error e ->
       Message.error "Plugin failed: %s " (Error.to_string_hum e);

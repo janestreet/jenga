@@ -4,23 +4,19 @@ open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
 module MG = Monomorphic_mutable_graph
 
-open Description
-
 module Item = struct
 
   type t =
   | Root
   | Goal of Goal.t
+  | Reflect of Path.t
   | Gen_key of Gen_key.t
-  | Target_rule of Path.t list
 
   let to_string = function
     | Root -> "ROOT"
     | Goal dep -> (*sprintf "DEP: %s"*) (Goal.to_string dep)
+    | Reflect path -> sprintf "REFLECT: %s" (Path.to_string path)
     | Gen_key g -> sprintf "GEN: %s" (Gen_key.to_string g)
-    | Target_rule targets ->
-      sprintf "RULE: %s : ..."
-        (String.concat ~sep:" " (List.map targets ~f:Path.to_string))
 
 end
 
@@ -94,7 +90,6 @@ module T = struct
 end
 
 include T
-
 
 let iter_reachable t ~f =
   let visiting_or_visited = Node.Hash_set.create () in

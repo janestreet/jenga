@@ -9,9 +9,9 @@ module Item : sig
 
   type t =
   | Root
-  | Goal of Description.Goal.t
-  | Gen_key of Description.Gen_key.t
-  | Target_rule of Path.t list
+  | Goal of Goal.t
+  | Reflect of Path.t
+  | Gen_key of Gen_key.t
 
   val to_string : t -> string
 

@@ -75,6 +75,11 @@ let show_checked =
   +> Spec.flag "show-checked" ~aliases:["nr"] Spec.no_arg
     ~doc:" Show actions which are checked, but not run"
 
+let show_reflecting =
+  Spec.step (fun m x -> m ~show_reflecting:x)
+  +> Spec.flag "show-reflecting" ~aliases:["reflect"] Spec.no_arg
+    ~doc:" Mainly for debug. Shows when deps are being reflected"
+
 let show_considering =
   Spec.step (fun m x -> m ~show_considering:x)
   +> Spec.flag "show-considering" ~aliases:["con"] Spec.no_arg
@@ -178,6 +183,7 @@ let go_command =
     ++ show_actions_run
     ++ show_actions_run_verbose
     ++ show_checked
+    ++ show_reflecting
     ++ show_considering
     ++ show_reconsidering
     ++ show_trace_messages
@@ -212,6 +218,7 @@ let go_command =
       ~show_actions_run
       ~show_actions_run_verbose
       ~show_checked
+      ~show_reflecting
       ~show_considering
       ~show_reconsidering
       ~show_trace_messages
@@ -243,6 +250,7 @@ let go_command =
           show_actions_run_verbose;
           show_checked;
           show_considering;
+          show_reflecting;
           show_reconsidering;
           show_trace_messages;
           debug_discovered_graph;

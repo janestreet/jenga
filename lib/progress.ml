@@ -2,7 +2,6 @@
 open Core.Std
 open Async.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
-open Description
 
 let persist_saves_done = Effort.Counter.create "db-save" (* for use in persist.ml *)
 let actions_run = Effort.Counter.create "act" (* for use in build.ml *)
@@ -13,6 +12,26 @@ module Status = struct
   | Todo
   | Built
   | Error of Reason.t list (* empty list means failure in deps *)
+end
+
+module Need = struct
+
+  module T = struct
+    type t = Jengaroot | Goal of Goal.t
+    with sexp, bin_io, compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make_binable(T)
+  include Comparable.Make_binable(T)
+
+  let goal x = Goal x
+  let jengaroot = Jengaroot
+
+  let to_string = function
+    | Jengaroot -> "<jenga.conf>"
+    | Goal x -> Goal.to_string x
+
 end
 
 type t = {
@@ -54,7 +73,7 @@ let message_errors config t =
       List.iter reasons ~f:(fun reason ->
         match reason with
         | Reason.Shutdown -> () (* suppress these *)
-        | _ -> Reason.message_summary config need reason
+        | _ -> Reason.message_summary config ~need:(Need.to_string need) reason
       )
     | _ -> ()
   )

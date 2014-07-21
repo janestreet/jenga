@@ -87,7 +87,7 @@ let unix_lstat path =
 module Stats : sig
 
   type t with sexp, bin_io
-  val lstat : Path.X.t -> t Or_error.t Deferred.t
+  val lstat : Path.t -> t Or_error.t Deferred.t
   val equal : t -> t -> bool
   val kind : t -> Kind.t
 
@@ -139,7 +139,7 @@ end = struct
     }
 
   let lstat path =
-    let path = Path.X.to_absolute_string path in
+    let path = Path.to_absolute_string path in
     unix_lstat path >>= function
     | Ok u -> return (Ok (of_unix_stats u))
     | Error exn -> return (Error (Error.of_exn exn))
@@ -170,10 +170,10 @@ let ensure_directory ~dir =
   Stats.lstat dir >>= function
   | Ok stats -> return (if is_dir stats then `ok else `not_a_dir)
   | Error _e ->
-    (*Message.message "mkdir: %s" (Path.X.to_string dir);*)
+    (*Message.message "mkdir: %s" (Path.to_string dir);*)
     Effort.track mkdir_counter (fun () ->
       try_with (fun () ->
-        Unix.mkdir ~p:() (Path.X.to_absolute_string dir)
+        Unix.mkdir ~p:() (Path.to_absolute_string dir)
       )
     ) >>= fun res ->
     match res with
@@ -245,7 +245,7 @@ end
 
 module type Compute_digest_sig = sig
 
-  val of_file : Path.X.t -> Digest.t Or_error.t Deferred.t
+  val of_file : Path.t -> Digest.t Or_error.t Deferred.t
 
 end
 
@@ -256,7 +256,7 @@ module Ocaml__Compute_digest : Compute_digest_sig = struct
       Effort.track digest_counter (fun () ->
         In_thread.run (fun () ->
           try (
-            let ic = Caml.open_in_bin (Path.X.to_absolute_string path) in
+            let ic = Caml.open_in_bin (Path.to_absolute_string path) in
             let res =
               try (
                 let d = Ocaml_digest.channel ic (-1) in
@@ -285,7 +285,7 @@ end) : Compute_digest_sig = struct
 
   let of_file path =
     Effort.track digest_counter (fun () ->
-      let arg = Path.X.to_absolute_string path in
+      let arg = Path.to_absolute_string path in
       let err s =
         let message = sprintf "%s %s : %s" prog arg s in
         return (Error (Error.of_string message))
@@ -333,9 +333,8 @@ module Listing : sig
   type t with sexp, bin_io, compare
 
   val equal : t -> t -> bool
-  val run_ls : dir:Path.X.t -> t Or_error.t Deferred.t
-  val xpaths : t -> Path.X.t list
-  val paths : t -> Path.t list option
+  val run_ls : dir:Path.t -> t Or_error.t Deferred.t
+  val paths : t -> Path.t list
 
   module Restriction : sig
     type t with sexp, bin_io
@@ -356,13 +355,13 @@ end = struct
   end
 
   type t = {
-    dir : Path.X.t;
+    dir : Path.t;
     listing : Elem.t list;
   } with sexp, bin_io, compare
 
   let run_ls ~dir =
     File_access.enqueue (fun () ->
-      let path_string = Path.X.to_string dir in
+      let path_string = Path.to_string dir in
       Effort.track ls_counter (fun () ->
         try_with (fun () -> Unix.opendir path_string) >>= function
         | Error exn -> return (Error (Error.of_exn exn)) (* opendir failed *)
@@ -381,7 +380,7 @@ end = struct
               | Ok ".." -> loop acc
               | Ok base ->
                 begin
-                  let path_string = Path.X.to_string dir ^ "/" ^ base in
+                  let path_string = Path.to_string dir ^ "/" ^ base in
                   unix_lstat path_string >>= function
                   | Error _e ->
                     (* File disappeared between readdir & lstat system calls.
@@ -415,19 +414,10 @@ end = struct
       )
     )
 
-  let xpaths t =
-    List.map t.listing ~f:(fun e ->
-      Path.X.relative ~dir:t.dir e.Elem.base
-    )
-
   let paths t =
-    match Path.X.case t.dir with
-    | `absolute _ -> None
-    | `relative dir ->
-      Some (
-        List.map t.listing ~f:(fun e ->
-          Path.relative ~dir e.Elem.base
-        ))
+    List.map t.listing ~f:(fun e ->
+      Path.relative ~dir:t.dir e.Elem.base
+    )
 
   let equal = equal_using_compare compare
 
@@ -550,8 +540,8 @@ end = struct
             *)
             if not (t.expect ~path) then (
               let desc =
-                match (Path.create_from_absolute path) with
-                | Some path -> Path.to_string path
+                match (Path.Rel.create_from_absolute path) with
+                | Some path -> Path.Rel.to_string path
                 | None -> path
               in
               Message.file_changed ~desc
@@ -655,7 +645,7 @@ module Stat_memo : sig
   val create : nono:bool -> Watcher.t -> t
   (* Caller must declare what the lstat is expected to be for,
      so that the correct kind of watcher can be set up *)
-  val lstat : t -> what:[`file|`dir] -> Path.X.t -> Stats.t Or_error.t Tenacious.t
+  val lstat : t -> what:[`file|`dir] -> Path.t -> Stats.t Or_error.t Tenacious.t
 
 end = struct
 
@@ -663,15 +653,15 @@ end = struct
   type t = {
     nono : bool;
     watcher : Watcher.t;
-    file_watch_cache : computation Path.X.Table.t;
-    dir_watch_cache : computation Path.X.Table.t;
+    file_watch_cache : computation Path.Table.t;
+    dir_watch_cache : computation Path.Table.t;
   }
 
   let create ~nono watcher = {
     nono;
     watcher;
-    file_watch_cache = Path.X.Table.create ();
-    dir_watch_cache = Path.X.Table.create ();
+    file_watch_cache = Path.Table.create ();
+    dir_watch_cache = Path.Table.create ();
   }
 
   let lstat t ~what path =
@@ -684,7 +674,7 @@ end = struct
       let tenacious =
         Tenacious.lift (fun () ->
           Watcher.watch_file_or_dir t.watcher ~what
-            ~path:(Path.X.to_absolute_string path)
+            ~path:(Path.to_absolute_string path)
           >>= function
           | Error exn ->
             return (unbreakable (Error exn))
@@ -748,7 +738,7 @@ let contents_file sm ~file =
     Tenacious.lift (fun () ->
       File_access.enqueue (fun () ->
         try_with (fun () ->
-          Reader.file_contents (Path.X.to_absolute_string file)
+          Reader.file_contents (Path.to_absolute_string file)
         )
         >>| (function Ok x -> Ok x | Error exn -> Error (Error.of_exn exn))
       )
@@ -771,17 +761,17 @@ module Digest_persist : sig
   val digest_file :
     t ->
     Stat_memo.t ->
-    file:Path.X.t ->
+    file:Path.t ->
     Digest_result.t Tenacious.t
 
 end = struct
 
   type t = {
-    cache : (Stats.t * Digest.t) Path.X.Table.t;
+    cache : (Stats.t * Digest.t) Path.Table.t;
   } with sexp, bin_io
 
   let create () = {
-    cache = Path.X.Table.create ();
+    cache = Path.Table.create ();
   }
 
   let digest_file t sm ~file =
@@ -826,18 +816,18 @@ module Listing_persist : sig
   val list_dir :
     t ->
     Stat_memo.t ->
-    dir:Path.X.t ->
+    dir:Path.t ->
     Listing_result.t Tenacious.t
 
 
 end = struct
 
   type t = {
-    cache : (Stats.t * Listing.t) Path.X.Table.t;
+    cache : (Stats.t * Listing.t) Path.Table.t;
   } with sexp, bin_io
 
   let create () = {
-    cache = Path.X.Table.create ();
+    cache = Path.Table.create ();
   }
 
   let list_dir t sm ~dir =
@@ -862,7 +852,7 @@ end = struct
             ) *>>= function
             | Error e -> (remove(); Tenacious.return (`listing_error e))
             | Ok new_listing ->
-              if Path.X.(equal (Path.X.of_relative Path.the_root) dir) then (
+              if Path.(equal (Path.of_relative Path.Rel.the_root) dir) then (
               (* Don't save the result of listing the root of the repo because having .jenga
                  files in the root means that the stat will always differ and so we can
                  never use the listing saved.  The cost of saving the listing for root is
@@ -890,13 +880,13 @@ module Persist : sig
   val digest_file :
     t ->
     Stat_memo.t ->
-    file:Path.X.t ->
+    file:Path.t ->
     Digest_result.t Tenacious.t
 
   val list_dir :
     t ->
     Stat_memo.t ->
-    dir:Path.X.t ->
+    dir:Path.t ->
     Listing_result.t Tenacious.t
 
 end = struct
@@ -929,7 +919,7 @@ module Contents_memo : sig
   val contents_file :
     t ->
     Stat_memo.t ->
-    file:Path.X.t ->
+    file:Path.t ->
     Contents_result.t Tenacious.t
 
 end = struct
@@ -937,7 +927,7 @@ end = struct
   type computation = Contents_result.t Tenacious.t
   type t = {
     nono : bool;
-    cache : computation Path.X.Table.t;
+    cache : computation Path.Table.t;
   }
 
   let contents_file t sm ~file =
@@ -947,7 +937,7 @@ end = struct
 
   let create ~nono = {
     nono;
-    cache = Path.X.Table.create ();
+    cache = Path.Table.create ();
   }
 
 end
@@ -965,7 +955,7 @@ module Digest_memo : sig
     t ->
     Persist.t ->
     Stat_memo.t ->
-    file:Path.X.t ->
+    file:Path.t ->
     Digest_result.t Tenacious.t
 
 end = struct
@@ -973,7 +963,7 @@ end = struct
   type computation = Digest_result.t Tenacious.t
   type t = {
     nono: bool;
-    cache : computation Path.X.Table.t;
+    cache : computation Path.Table.t;
   }
 
   let digest_file t dp sm ~file =
@@ -983,7 +973,7 @@ end = struct
 
   let create ~nono = {
     nono;
-    cache = Path.X.Table.create ();
+    cache = Path.Table.create ();
   }
 
 end
@@ -1001,7 +991,7 @@ module Listing_memo : sig
     t ->
     Persist.t ->
     Stat_memo.t ->
-    dir:Path.X.t ->
+    dir:Path.t ->
     Listing_result.t Tenacious.t
 
 end = struct
@@ -1009,7 +999,7 @@ end = struct
   type computation = Listing_result.t Tenacious.t
   type t = {
     nono: bool;
-    cache : computation Path.X.Table.t;
+    cache : computation Path.Table.t;
   }
 
   let list_dir t dp sm ~dir =
@@ -1019,7 +1009,7 @@ end = struct
 
   let create ~nono = {
     nono;
-    cache = Path.X.Table.create ();
+    cache = Path.Table.create ();
   }
 
 end
@@ -1034,9 +1024,9 @@ module Glob : sig
   type t with sexp, bin_io
   include Hashable with type t := t
 
-  val create : dir:Path.t -> kinds: Kind.t list option -> glob_string:string -> t
+  val create : dir:Path.t -> ?kinds: Kind.t list -> string -> t
   val create_from_path : kinds: Kind.t list option -> Path.t -> t
-  val create_from_xpath : kinds: Kind.t list option -> Path.X.t -> t
+
   val to_string : t -> string
   val compare : t -> t -> int
 
@@ -1051,7 +1041,7 @@ end = struct
   module Key = struct
     module T = struct
       type t = {
-        dir : Path.X.t;
+        dir : Path.t;
         pat : Pattern.t;
         kinds : Kind.t list option;
       } with sexp, bin_io, compare
@@ -1063,7 +1053,7 @@ end = struct
 
   module T = struct
     type t = {
-      dir : Path.X.t;
+      dir : Path.t;
       restriction : Listing.Restriction.t;
     } with sexp, bin_io, compare
     let hash = Hashtbl.hash
@@ -1074,7 +1064,7 @@ end = struct
 
   let to_string t =
     sprintf "glob: %s/ %s"
-      (Path.X.to_string t.dir)
+      (Path.to_string t.dir)
       (Listing.Restriction.to_string t.restriction)
 
   let raw_create ~dir ~kinds pat =
@@ -1095,24 +1085,23 @@ end = struct
       Hashtbl.add_exn the_cache ~key ~data:glob;
       glob
 
-  let xcreate ~dir ~kinds ~glob_string =
+  let create1 ~dir ~kinds ~glob_string =
     let pat = Pattern.create_from_glob_string glob_string in
     let key = {Key. dir; kinds; pat} in
     cached_create key
 
-  let create ~dir ~kinds ~glob_string =
-    let dir = Path.X.of_relative dir in
-    xcreate ~dir ~kinds ~glob_string
+  let create ~dir ?kinds glob_string =
+    create1 ~dir ~kinds ~glob_string
 
   let create_from_path ~kinds path =
-    create ~dir:(Path.dirname path) ~kinds ~glob_string:(Path.basename path) (*OLD *)
-    (*let dir = Path.dirname path in
+(*
+    let dir = Path.dirname path in
     let pat = Pattern.create_from_literal_string (Path.basename path) in
     let key = {Key. dir; kinds; pat} in
-    cached_create key*)
+    cached_create key
+*)
+    create1 ~dir:(Path.dirname path) ~kinds ~glob_string:(Path.basename path)
 
-  let create_from_xpath ~kinds xpath =
-    xcreate ~dir:(Path.X.dirname xpath) ~kinds ~glob_string:(Path.X.basename xpath)
 
   let exec_no_cutoff glob lm per sm  =
     Listing_memo.list_dir lm per sm ~dir:glob.dir *>>= function
@@ -1191,13 +1180,13 @@ module Memo : sig
 
   val contents_file :
     t ->
-    file:Path.X.t ->
+    file:Path.t ->
     Contents_result.t Tenacious.t
 
   val digest_file :
     t ->
     Persist.t ->
-    file:Path.X.t ->
+    file:Path.t ->
     Digest_result.t Tenacious.t
 
   val list_glob :
@@ -1236,19 +1225,23 @@ end
  Fs - combination of persistent & dynamic caches
 ----------------------------------------------------------------------*)
 
+let tmp_jenga =
+  let user = Core.Std.Unix.getlogin() in
+  sprintf "/tmp/jenga-%s" user
+
 module Fs : sig
 
   type t
-  val create : Config.t -> Persist.t -> t Deferred.t
+  val create : Config.t -> Persist.t -> path_locked:(Path.Rel.t -> bool) -> t Deferred.t
 
   val contents_file :
     t ->
-    file:Path.X.t ->
+    file:Path.t ->
     Contents_result.t Tenacious.t
 
   val digest_file :
     t ->
-    file:Path.X.t ->
+    file:Path.t ->
     Digest_result.t Tenacious.t
 
   val list_glob :
@@ -1268,23 +1261,20 @@ end = struct
     persist : Persist.t;
   } with fields
 
-  let create config persist =
+  let create config persist ~path_locked =
     let nono = not System.has_inotify || Config.no_notifiers config in
     let ignore ~path =
-      match (Path.create_from_absolute path) with
+      match (Path.Rel.create_from_absolute path) with
       | None -> false
-      | Some path -> Path.is_special_jenga_path path
+      | Some path -> Path.Rel.is_special_jenga_path path
     in
     let expect ~path =
-      String.is_prefix ~prefix:"/tmp" path
-      (* to avoid reporting as changed jenga-sync files
-         Does it matter that we ignore everything in /tmp? - Dont think so.
-         At the moment, the only places we watch apart from /tmp are repo paths.
-      *)
+      String.is_prefix ~prefix:tmp_jenga path
+      (* to avoid reporting as changed jenga-sync files *)
       ||
-      match (Path.create_from_absolute path) with
+      match (Path.Rel.create_from_absolute path) with
       | None -> false
-      | Some path -> Path.Key.locked (Path.get_key path)
+      | Some path -> path_locked path
     in
     Watcher.create ~nono ~ignore ~expect >>= fun watcher ->
     let memo = Memo.create ~nono watcher in
@@ -1334,11 +1324,6 @@ let unless_shutting_down ~f =
   match Shutdown.shutting_down() with
   | `Yes _ -> return ()
   | `No -> f ()
-
-
-let tmp_jenga =
-  let user = Core.Std.Unix.getlogin() in
-  sprintf "/tmp/jenga-%s" user
 
 let () =
   don't_wait_for (

@@ -113,7 +113,7 @@ let main () =
             Misc.jenga_conf_basename
             Misc.jenga_root_basename
         | `ok ->
-          let root_dir = Path.to_absolute_string Path.the_root in
+          let root_dir = Path.Rel.to_absolute_string Path.Rel.the_root in
           Misc.in_async ~f:(fun () ->
             run ~root_dir
           )

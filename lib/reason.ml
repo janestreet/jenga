@@ -1,6 +1,5 @@
 
 open Core.Std
-open Description
 
 include Error_reason_type
 
@@ -75,11 +74,11 @@ let to_extra_lines = function
   | No_directory_for_target _
   | Duplicate_scheme_ids _
   | Inconsistent_proxies
-  | Usercode_raised _
     -> []
 
   | Scheme_raised exn
   | Running_job_raised exn
+  | Usercode_raised exn
     -> [Exn.to_string exn]
 
   | File_read_error  error
@@ -88,14 +87,14 @@ let to_extra_lines = function
 
   | Multiple_rules_for_paths (_,paths)
   | Rule_failed_to_generate_targets paths
-    -> List.map paths ~f:(fun path -> "- " ^ Path.to_string path)
+    -> List.map paths ~f:(fun path -> "- " ^ Path.Rel.to_string path)
 
 let messages ~tag t =
   Message.error "%s: %s" tag (to_string_one_line t);
   List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s)
 
-let message_summary config need t =
-  Message.error "(summary) %s: %s" (Need.to_string need) (to_string_one_line t);
+let message_summary config ~need t =
+  Message.error "(summary) %s: %s" need (to_string_one_line t);
   List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s);
   if not (Config.brief_error_summary config) then (
     match t with

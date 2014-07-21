@@ -29,15 +29,13 @@ end
 module Glob : sig (* glob specification *)
   type t with sexp, bin_io, compare
   val to_string : t -> string
-  val create : dir:Path.t -> kinds:Kind.t list option -> glob_string:string -> t
+  val create : dir:Path.t -> ?kinds: Kind.t list -> string -> t
   val create_from_path : kinds:Kind.t list option -> Path.t -> t
-  val create_from_xpath : kinds:Kind.t list option -> Path.X.t -> t
 end
 
 module Listing : sig (* result of globbing *)
   type t with sexp, bin_io, compare
-  val xpaths : t -> Path.X.t list
-  val paths : t -> Path.t list option (* None - wasn't a relative glob *)
+  val paths : t -> Path.t list
 end
 
 module Persist : sig
@@ -46,7 +44,7 @@ module Persist : sig
 end
 
 type t (* handle to the file-system *)
-val create : Config.t -> Persist.t -> t Deferred.t
+val create : Config.t -> Persist.t -> path_locked:(Path.Rel.t -> bool) -> t Deferred.t
 
 module Contents_result : sig
   type t = [
@@ -79,9 +77,9 @@ module Ensure_directory_result : sig
   type t = [`ok | `failed | `not_a_dir]
 end
 
-val contents_file : t -> file:Path.X.t -> Contents_result.t Tenacious.t
-val digest_file : t -> file:Path.X.t -> Digest_result.t Tenacious.t
+val contents_file : t -> file:Path.t -> Contents_result.t Tenacious.t
+val digest_file : t -> file:Path.t -> Digest_result.t Tenacious.t
 val list_glob : t -> Glob.t -> Listing_result.t Tenacious.t
-val ensure_directory : t -> dir:Path.X.t -> Ensure_directory_result.t Tenacious.t
+val ensure_directory : t -> dir:Path.t -> Ensure_directory_result.t Tenacious.t
 
 val sync_inotify_delivery : t -> sync_contents:string -> 'a Tenacious.t -> 'a Tenacious.t
