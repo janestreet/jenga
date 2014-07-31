@@ -1,3 +1,11 @@
+## 111.25.00
+
+- Switched to un-version-numbered API.
+- Renamed `Tenacious_sample_lib.Tenacious` to
+  `Tenacious_sample_lib.Tenacious_sample` to avoid conflicts in the
+  public release.
+- Write `buildable_targets.list` (on alias `.info`).
+
 ## 111.21.00
 
 - Introduced jenga API v3, a small cleanup of v2 which has been planned
