@@ -10,7 +10,7 @@ let filesystem_related = function
   | Digest_error _
   | Undigestable _
   | Glob_error _
-  | Unexpected_directory
+  | Unexpected_directory _
   | No_directory_for_target _
     -> true
 
@@ -18,8 +18,8 @@ let filesystem_related = function
   | Shutdown
   | Error_in_deps
   | No_definition_for_alias
-  | No_source_at_abs_path
-  | No_rule_or_source
+  | No_source_at_abs_path _
+  | No_rule_or_source _
   | Non_zero_status _
   | Inconsistent_proxies
   | Duplicate_scheme_ids _
@@ -38,9 +38,9 @@ let to_string_one_line = function
   | Digest_error _                    -> "unable to digest file"
   | Glob_error (g,s)                  -> sprintf "%s %s" (Fs.Glob.to_string g) s
   | No_definition_for_alias           -> "No definition found for alias"
-  | No_source_at_abs_path             -> "No source at absolute path"
-  | No_rule_or_source                 -> "No rule or source found for target"
-  | Unexpected_directory              -> "Unexpected directory found for target"
+  | No_source_at_abs_path a           -> sprintf "No source at absolute path: %s" (Path.Abs.to_string a)
+  | No_rule_or_source p               -> sprintf "No rule or source for: %s" (Path.to_string p)
+  | Unexpected_directory p            -> sprintf "Unexpected directory: %s" (Path.to_string p)
   | Non_zero_status _                 -> "External command has non-zero exit code"
   | No_directory_for_target s         -> sprintf "No directory for target: %s" s
   | Scheme_raised _                   -> "Generator scheme raised exception"
@@ -67,9 +67,9 @@ let to_extra_lines = function
   | Undigestable _
   | Glob_error _
   | No_definition_for_alias
-  | No_rule_or_source
-  | No_source_at_abs_path
-  | Unexpected_directory
+  | No_rule_or_source _
+  | No_source_at_abs_path _
+  | Unexpected_directory _
   | Non_zero_status _
   | No_directory_for_target _
   | Duplicate_scheme_ids _

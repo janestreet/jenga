@@ -793,7 +793,7 @@ let get_contents
     Builder.of_tenacious (Fs.contents_file t.fs ~file)
     *>>= function
     | `file_read_error e    -> error (Reason.File_read_error e)
-    | `is_a_dir             -> error Reason.Unexpected_directory
+    | `is_a_dir             -> error (Reason.Unexpected_directory file)
     | `contents s           -> return s
 
 let digest_path
@@ -1232,10 +1232,11 @@ let need_abs_path : (t -> Path.Abs.t -> Proxy_map.t Builder.t) =
      just digest & return the proxy.
   *)
   fun t abs ->
-    digest_path t (Path.of_absolute abs) *>>= fun res ->
+    let path = Path.of_absolute abs in
+    digest_path t path *>>= fun res ->
     match res with
-    | `missing ->  error Reason.No_source_at_abs_path
-    | `is_a_dir -> error Reason.Unexpected_directory
+    | `missing ->  error (Reason.No_source_at_abs_path abs)
+    | `is_a_dir -> error (Reason.Unexpected_directory path)
     | `file digest ->
       let proxy = Proxy.of_digest digest in
       let pm = Proxy_map.single (Pm_key.of_abs_path abs) proxy in
@@ -1631,6 +1632,14 @@ let build_target_rule :
       let run_and_cache rr =
         Builder.uncancellable (
           run_action_for_targets t rr env1 action job ~targets ~need *>>= fun () ->
+          (* The cache is cleared AFTER the action has been run, and BEFORE we check the
+             targets created by the action. Clearing the cache forces the files to be
+             re-stated, without relying on any events from inotify to make this happen *)
+          let () =
+            List.iter targets ~f:(fun rel ->
+              Fs.clear_cache_for_target t.fs (Path.of_relative rel)
+            )
+          in
           check_targets t targets *>>= function
           | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
           | `ok path_tagged_proxys ->
@@ -1685,10 +1694,11 @@ let build_target_rule :
 
 let expect_source : (t -> Path.Rel.t -> Proxy_map.t Builder.t) =
   fun t demanded ->
-    digest_path t (Path.of_relative demanded) *>>= fun res ->
+    let path = Path.of_relative demanded in
+    digest_path t path *>>= fun res ->
     match res with
-    | `missing ->  error Reason.No_rule_or_source
-    | `is_a_dir -> error Reason.Unexpected_directory
+    | `missing ->  error (Reason.No_rule_or_source path)
+    | `is_a_dir -> error (Reason.Unexpected_directory path)
     | `file digest ->
       let proxy = Proxy.of_digest digest in
       let pm = Proxy_map.single (Pm_key.of_rel_path demanded) proxy in

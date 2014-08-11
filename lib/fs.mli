@@ -83,3 +83,5 @@ val list_glob : t -> Glob.t -> Listing_result.t Tenacious.t
 val ensure_directory : t -> dir:Path.t -> Ensure_directory_result.t Tenacious.t
 
 val sync_inotify_delivery : t -> sync_contents:string -> 'a Tenacious.t -> 'a Tenacious.t
+
+val clear_cache_for_target : t -> Path.t -> unit

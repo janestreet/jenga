@@ -1,3 +1,7 @@
+## 111.28.00
+
+- Fixed problem that caused `rule failed to generate targets`.
+
 ## 111.25.00
 
 - Switched to un-version-numbered API.

@@ -189,6 +189,8 @@ let case t =
   then `absolute (Abs.create t)
   else `relative (Rel.create t)
 
+let is_absolute t = starts_with_slash t
+
 let split t = Filename.split t
 
 let dirname t = fst (split t)
@@ -238,3 +240,16 @@ let reach_from ~dir path =
   if is_descendant ~dir path
   then String.chop_prefix_exn ~prefix:(to_absolute_string dir^"/") (to_absolute_string path)
   else dotdot ~dir path
+
+let is_special_jenga_path path =
+  match case path with
+  | `relative rel -> Rel.is_special_jenga_path rel
+  | `absolute _ -> false
+
+let of_absolute_string s =
+  match (Rel.create_from_absolute s) with
+  | Some rel -> of_relative rel
+  | None -> absolute s
+
+let relativize_if_possible p =
+  of_absolute_string (to_absolute_string p)

@@ -10,9 +10,9 @@ type t =
 | Undigestable                      of Fs.Kind.t
 | Glob_error                        of Fs.Glob.t * string
 | No_definition_for_alias
-| No_source_at_abs_path
-| No_rule_or_source
-| Unexpected_directory
+| No_source_at_abs_path             of Path.Abs.t
+| No_rule_or_source                 of Path.t
+| Unexpected_directory              of Path.t
 | Non_zero_status                   of Message.Job_summary.t
 | No_directory_for_target           of string
 | Inconsistent_proxies
