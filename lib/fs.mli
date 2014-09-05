@@ -28,6 +28,9 @@ end
 
 module Glob : sig (* glob specification *)
   type t with sexp, bin_io, compare
+  include Hashable with type t := t
+  val dir : t -> Path.t
+  val pattern : t -> Pattern.t
   val to_string : t -> string
   val create : dir:Path.t -> ?kinds: Kind.t list -> string -> t
   val create_from_path : kinds:Kind.t list option -> Path.t -> t
@@ -35,7 +38,8 @@ end
 
 module Listing : sig (* result of globbing *)
   type t with sexp, bin_io, compare
-  val paths : t -> Path.t list
+  val of_file_paths_exn : dir:Path.t -> Path.t list -> t
+  val paths : t -> Path.Set.t
 end
 
 module Persist : sig
@@ -84,4 +88,12 @@ val ensure_directory : t -> dir:Path.t -> Ensure_directory_result.t Tenacious.t
 
 val sync_inotify_delivery : t -> sync_contents:string -> 'a Tenacious.t -> 'a Tenacious.t
 
-val clear_cache_for_target : t -> Path.t -> unit
+val clear_watcher_cache : t -> Path.t -> unit
+
+module Mtime : sig
+  type t with compare
+  val equal : t -> t -> bool
+end
+
+val mtime_file : t -> file:Path.t -> Mtime.t option Tenacious.t (* [None] - no file *)
+val mtime_file_right_now : file:Path.t -> Mtime.t option Deferred.t (* avoiding cache *)

@@ -15,7 +15,7 @@ module Path : sig
   (* either absolute or relative taken w.r.t. [dir] - determined by leading char *)
   val relative_or_absolute : dir:t -> string -> t
 
-  val to_string : t -> string (* if relative, then repo root-relative string *)
+  val to_string : t -> string (* if relative, displayed as repo-root-relative string *)
   val to_absolute_string : t -> string
   val dirname : t -> t
   val basename : t -> string
@@ -75,8 +75,14 @@ module Dep : sig (* The jenga monad *)
   val contents : Path.t -> string t
   val contents_cutoff : Path.t -> string t
 
+  (* The semantics of [glob_listing] and [glob_change] includes files which exist on the
+     file-system AND files which are buildable by some jenga rule *)
   val glob_listing : Glob.t -> Path.t list t
   val glob_change : Glob.t -> unit t
+
+  (* Versions with old semantics: only includes files on the file-system. *)
+  val fs_glob_listing : Glob.t -> Path.t list t
+  val fs_glob_change : Glob.t -> unit t
 
   val subdirs : dir:Path.t -> Path.t list t
   val file_exists : Path.t -> bool t
@@ -127,17 +133,19 @@ module Rule : sig
   val create : targets:Path.t list -> Action.t Dep.t -> t
   val alias : Alias.t -> unit Dep.t list -> t
   val default : dir:Path.t -> unit Dep.t list -> t
-end
-
-module Generator : sig
-  type t = Rule.t list Dep.t
-  val create : Rule.t list Dep.t -> t
-  (*val switch : cond:(Path.t -> bool) -> t -> t -> t*)
+  val simple : targets:Path.t list -> deps:unit Dep.t list -> action:Action.t -> t
 end
 
 module Scheme : sig
   type t
-  val create : tag:string -> (dir:Path.t -> Generator.t) -> t
+  val rules : Rule.t list -> t
+  val dep : t Dep.t -> t
+  val all : t list -> t
+  val exclude : (Path.t -> bool) -> t -> t
+  val rules_dep : Rule.t list Dep.t -> t
+  val contents : Path.t -> (string -> t)-> t
+  val no_rules : t
+  val switch_glob : ?def:t -> (string * t) list -> t
 end
 
 module Env : sig
@@ -147,7 +155,7 @@ module Env : sig
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?build_begin : (unit -> unit Deferred.t) ->
     ?build_end : (unit -> unit Deferred.t) ->
-    (string * Scheme.t option) list ->
+    (dir:Path.t -> Scheme.t) ->
     t
 end
 

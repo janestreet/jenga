@@ -75,6 +75,11 @@ let show_checked =
   +> Spec.flag "show-checked" ~aliases:["nr"] Spec.no_arg
     ~doc:" Show actions which are checked, but not run"
 
+let show_buildable_discovery =
+  Spec.step (fun m x -> m ~show_buildable_discovery:x)
+  +> Spec.flag "show-buildable-discovery" ~aliases:["buildable"] Spec.no_arg
+    ~doc:" Mainly for debug. Shows discovery of buildable targets in a directory"
+
 let show_reflecting =
   Spec.step (fun m x -> m ~show_reflecting:x)
   +> Spec.flag "show-reflecting" ~aliases:["reflect"] Spec.no_arg
@@ -89,6 +94,11 @@ let show_reconsidering =
   Spec.step (fun m x -> m ~show_reconsidering:x)
   +> Spec.flag "show-reconsidering" ~aliases:["recon"] Spec.no_arg
     ~doc:" Mainly for debug. Show when deps are re-considered"
+
+let show_glob_changed =
+  Spec.step (fun m x -> m ~show_glob_changed:x)
+  +> Spec.flag "show-glob-changed" ~aliases:["glob"] Spec.no_arg
+    ~doc:" Mainly for debug. Show when glob-deps are triggered by file-system changes"
 
 let show_trace_messages =
   Spec.step (fun m x -> m ~show_trace_messages:x)
@@ -168,9 +178,24 @@ let no_notifiers =
   +> Spec.flag "no-notifiers" ~aliases:["nono"] Spec.no_arg
     ~doc:" Disable filesystem notifiers (inotify); polling wont work"
 
+let buildable_targets_fixpoint_max =
+  let default = 5 in
+  Spec.step (fun m x -> m ~buildable_targets_fixpoint_max:x)
+  +> Spec.flag "buildable-targets-fixpoint-max" (Spec.optional_with_default default Spec.int)
+    ~doc:(sprintf "<iters> (default = %d); 0 means no limit" default)
+
+let cat_api =
+  Spec.step (fun m x -> m ~cat_api:x)
+  +> Spec.flag "cat-api" ~aliases:["api"] Spec.no_arg
+    ~doc:" Print the API supported by this version of jenga, then exit."
+
 let anon_demands =
-  Spec.step (fun m demands -> m ~demands)
+  Spec.step (fun m x -> m ~anon_demands:x)
   +> Spec.anon (Spec.sequence ("DEMAND" %: Spec.string))
+
+let print_api_and_exit () =
+  Printf.printf "%s\n%!" Cat_api.string;
+  exit 0
 
 let go_command =
   Command.basic (
@@ -183,9 +208,11 @@ let go_command =
     ++ show_actions_run
     ++ show_actions_run_verbose
     ++ show_checked
+    ++ show_buildable_discovery
     ++ show_reflecting
     ++ show_considering
     ++ show_reconsidering
+    ++ show_glob_changed
     ++ show_trace_messages
     ++ debug_discovered_graph
     ++ prefix_time
@@ -201,8 +228,9 @@ let go_command =
     ++ major_heap_increment
     ++ space_overhead
     ++ no_notifiers
+    ++ buildable_targets_fixpoint_max
+    ++ cat_api
     ++ anon_demands
-
   )
     ~summary:"Run Jenga in the current directory."
     ~readme:(fun () -> String.concat ~sep:"\n" [
@@ -218,9 +246,11 @@ let go_command =
       ~show_actions_run
       ~show_actions_run_verbose
       ~show_checked
+      ~show_buildable_discovery
       ~show_reflecting
       ~show_considering
       ~show_reconsidering
+      ~show_glob_changed
       ~show_trace_messages
       ~debug_discovered_graph
       ~prefix_time
@@ -236,8 +266,11 @@ let go_command =
       ~major_heap_increment
       ~space_overhead
       ~no_notifiers
-      ~demands
+      ~buildable_targets_fixpoint_max
+      ~cat_api
+      ~anon_demands
       () ->
+        if cat_api then print_api_and_exit() else
         let config = {
           Config.
           j_number;
@@ -250,8 +283,10 @@ let go_command =
           show_actions_run_verbose;
           show_checked;
           show_considering;
+          show_buildable_discovery;
           show_reflecting;
           show_reconsidering;
+          show_glob_changed;
           show_trace_messages;
           debug_discovered_graph;
           prefix_time;
@@ -272,7 +307,8 @@ let go_command =
           brief_error_summary;
           no_server;
           no_notifiers;
-          demands;
+          buildable_targets_fixpoint_max;
+          demands = anon_demands;
         }
         in
         let words_per_mb = 1024 * 1024 / 8 in

@@ -206,9 +206,9 @@ let link_rule_and_default_exe ~dir =
       makefile_gen_gen ~dir;
     ]
 
-let scheme =
-  Scheme.create ~tag:"the-scheme" (fun ~dir ->
-    (* only setup ocaml build rules in subdirs *)
+let scheme ~dir =
+  (* only setup ocaml build rules in subdirs *)
+  Scheme.rules_dep (
     if Path.the_root = dir
     then
       Dep.all [
@@ -226,5 +226,11 @@ let scheme =
       ] *>>| List.concat
   )
 
-let env = Env.create ["**config.sexp",None; "**",Some scheme]
+let env =
+  Env.create (fun ~dir ->
+    Scheme.switch_glob [
+      "**config.sexp", Scheme.no_rules;
+    ] ~def:(scheme ~dir)
+  )
+
 let setup () = Async.Std.Deferred.return env

@@ -1,0 +1,3 @@
+(executables
+ ((names (countdown))
+  (libraries (core async))))

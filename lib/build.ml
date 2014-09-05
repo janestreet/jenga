@@ -8,282 +8,11 @@ module Heart = Tenacious.Heart
 let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
 
 module Target_rule = Rule.Target_rule
-module Generator = Description.Generator
-module Scheme = Description.Scheme
-
 module Digest = Fs.Digest
 module Glob = Fs.Glob
 module DG = Discovered_graph
 
 let exit_code_upon_control_c = ref Exit_code.incomplete
-
-(*----------------------------------------------------------------------
- stale targets
-----------------------------------------------------------------------*)
-
-let remove_stale_artifacts ~dir ~stale =
-  match stale with [] -> return () | _::_ ->
-    Deferred.List.iter stale ~f:(fun path ->
-      let path_string = Path.Rel.to_string path in
-      (* Dont remove non-local stale build artifcats
-         We no longer allow (api.ml) rules to be created with non-local targets.
-         But jenga.db might have been created by ealier version of jenga which did.
-      *)
-      if not (Path.Rel.(dirname path = dir)) then (
-        (*Message.message "Not removing stale build artifact in non-local directory: %s"
-          path_string;*)
-        return ()
-      ) else
-      try_with (fun () -> Sys.remove path_string) >>= function
-      | Ok () ->
-        Message.message "Removed stale build artifact: %s" path_string;
-        return ()
-      | Error _ ->
-        try_with (fun () -> Sys.file_exists path_string) >>= function
-        | Error _ ->
-          Message.error "Sys.file_exists failed: %s" path_string;
-          return ()
-        | Ok res -> match res with
-          | `Unknown
-          | `Yes ->
-            (* looks like the remove failed *)
-            Message.error "Sys.remove failed: %s" path_string;
-            return ()
-          | `No ->
-            (* looks like file was not there - a target we had never built *)
-            return ()
-    )
-
-(*----------------------------------------------------------------------
- putenv_for_path
-----------------------------------------------------------------------*)
-
-let putenv_for_path =
-  (* lookup once and remember to avoid repeated pushing on to the front *)
-  let orig_path = match (Core.Std.Sys.getenv "PATH") with | None -> "" | Some s -> s in
-
-  let minimal_path_kept_even_after_replacement = "/bin:/usr/bin:/usr/local/bin" in
-  (* Without this minimal path, user replacement can terminally break Jenga!
-     For example, the ocaml_plugin module replies on the path to find "objcopy"
-  *)
-  let colonize xs = String.concat (List.map xs ~f:(fun x -> x ^ ":")) in
-  fun spec ->
-    let replacement_path  =
-      match spec with
-      | `Extend xs -> colonize xs ^ orig_path
-      | `Replace xs -> colonize xs ^ minimal_path_kept_even_after_replacement
-    in
-    replacement_path
-
-(*----------------------------------------------------------------------
- new - Env1
-----------------------------------------------------------------------*)
-
-type scheme_id = string with sexp, bin_io
-
-module Env1 : sig (* TODO: move into [description.ml] *)
-
-  type t
-  val of_env : Env.t ->  [ `ok of t | `dups of scheme_id list ]
-  val putenv : t -> (string * string) list
-  val lookup_gen_key : t -> Goal.t -> Gen_key.t option
-  val gen_keys_for_directory : t -> dir:Path.Rel.t -> Gen_key.t list
-  val run_generator_scheme : t -> Gen_key.t -> (Generator.t,exn) Result.t
-  val build_begin : t -> unit Deferred.t
-  val build_end : t -> unit Deferred.t
-
-end = struct
-
-  type t = {
-    putenv : (string * string) list;
-    lookup_gen_key : Goal.t -> Gen_key.t option;
-    gen_keys_for_directory : dir:Path.Rel.t -> Gen_key.t list;
-    run_generator_scheme : Gen_key.t -> (Generator.t,exn) Result.t;
-    build_begin : unit -> unit Deferred.t;
-    build_end : unit -> unit Deferred.t;
-  } with fields
-
-  let build_begin t = t.build_begin ()
-  let build_end t = t.build_end ()
-
-  let of_env env =
-    let {Env. putenv; command_lookup_path;
-         build_begin; build_end;
-         schemes} = Env.rep env in
-
-    (* Each time we construct the Env1 form the Env, we reset the command lookup path.
-
-       It's kind of odd being here, but the env->env1 conversion is done just once when
-       the JR.ml is changed by the user, and this is the only time the command_lookup_path
-       might get changed.
-    *)
-    let putenv = putenv @
-      match command_lookup_path with
-      | None -> []
-      | Some spec -> [("PATH",putenv_for_path spec)]
-    in
-
-    (* manipulate the user schemes list into the two lookup stages required
-       (1) Goal.t -> Gen_key.t option;
-       (2) Gen_key.t -> Generator.t;
-
-       The first stage matches the patterns in order until a match is found, return the
-       gen_key constructed from the tag of the scheme-found & the dir of the goal
-
-       The second stage consults a pre-build HT from the scheme-tag to the scheme-body.
-       We deconstruct the gen-key back to the scheme-tag & dir.
-       We lookup the HT using the scheme-tag. This cant fail!
-       The scheme-body is then applied to the dir to get the generator.
-
-       When pre-constructing the HT, we check for duplicate schemes with the same tag
-       - this is the reason for the ref on the scheme body -
-       and we return an error-indication of this is so.
-    *)
-
-    (* stage 1 *)
-    let lookup_gen_key goal =
-      let key_string = Goal.to_string goal in
-      match
-        match (
-          List.find schemes ~f:(fun (pat,_opt_scheme) ->
-            Pattern.matches pat key_string
-          )
-        ) with
-        | None -> None
-        | Some (_,opt_scheme) -> opt_scheme
-      with
-      | None -> None
-      | Some scheme ->
-        Some (Gen_key.create ~tag:(Scheme.tag scheme) ~dir:(Goal.directory goal))
-    in
-
-    let gen_keys_for_directory ~dir =
-      List.filter_map schemes ~f:(fun (_,scheme_opt) ->
-        match scheme_opt with
-        | None -> None
-        | Some scheme ->
-          Some (Gen_key.create ~tag:(Scheme.tag scheme) ~dir)
-      )
-    in
-
-    (*let lookup_gen_key goal =
-      let opt_gen_key = lookup_gen_key goal in
-      Message.message "lookup_gen_key: %s -> %s"
-        (Goal.to_string goal)
-        (match opt_gen_key with
-        | None -> "None"
-        | Some gen_key -> Gen_key.to_string gen_key);
-      opt_gen_key
-    in*)
-
-    (* stage 2 *)
-    let dups = ref [] in
-    let push_dups tag = (dups := tag :: !dups) in
-    let h_schemes = String.Table.create () in
-    let () =
-      List.iter schemes ~f:(fun (_pat,scheme_opt) ->
-        match scheme_opt with
-        | None -> ()
-        | Some scheme ->
-          let tag = Scheme.tag scheme in
-          let body = Scheme.body scheme in
-          match (Hashtbl.find h_schemes tag) with
-          | Some prev -> if phys_equal prev body then () else push_dups tag
-          | None -> Hashtbl.set h_schemes ~key:tag ~data:body
-      )
-    in
-    let run_generator_scheme gen_key =
-      let {Gen_key. tag; dir} = gen_key in
-      match (Hashtbl.find h_schemes tag) with
-      | None -> failwith "run_generator_scheme" (* cant happen? *)
-      | Some scheme_body ->
-        try (
-          let generator = (!scheme_body) ~dir in
-          Ok generator
-        )
-        with exn -> Error exn
-    in
-
-    let dups = !dups in
-    match dups with | _::_ -> `dups dups
-    | [] ->
-      `ok {
-        putenv;
-        lookup_gen_key;
-        gen_keys_for_directory;
-        run_generator_scheme;
-        build_begin;
-        build_end;
-      }
-
-end
-
-
-(*----------------------------------------------------------------------
-  Ruleset
-----------------------------------------------------------------------*)
-
-module Ruleset : sig
-
-  type t
-  val create : Rule.t list -> [ `ok of t | `dups of Path.Rel.t list ]
-
-  val lookup_target : t -> Path.Rel.t -> Target_rule.t option
-  val lookup_alias : t -> Alias.t -> unit Dep.t option
-
-  val targets : t -> Path.Rel.Set.t
-
-end = struct
-
-  type t = {
-    rules  : Rule.t list;
-    lookup_target : Path.Rel.t -> Target_rule.t option;
-    lookup_alias : Alias.t -> unit Dep.t option;
-  } with fields
-
-  let targets t =
-    Path.Rel.Set.of_list (List.concat_map (rules t) ~f:Rule.targets)
-
-  let create rules =
-    let by_target = Path.Rel.Table.create () in
-    let by_alias = Alias.Table.create () in
-    let dups = ref [] in
-    let () =
-      List.iter rules ~f:(fun rule ->
-        match rule with
-        | Rule.Target tr ->
-          List.iter (Target_rule.targets tr) ~f:(fun path ->
-            match (Hashtbl.add by_target ~key:path ~data:tr) with
-            | `Ok -> ()
-            | `Duplicate -> dups := path :: !dups
-          )
-        | Rule.Alias (alias,depends) ->
-          let depends =
-            match (Hashtbl.find by_alias alias) with
-            | None -> depends
-            | Some prev ->
-              (* merge aliases *)
-              Dep.Bind (
-                Dep.All [depends; prev], (fun _ -> Dep.Return ())
-              )
-          in
-          Hashtbl.set by_alias ~key:alias ~data:depends
-
-      )
-    in
-    let dups = !dups in
-    match dups with
-    | _::_ -> `dups dups
-    | [] ->
-      let lookup_target = Hashtbl.find by_target in
-      let lookup_alias = Hashtbl.find by_alias in
-      `ok {
-        rules;
-        lookup_target;
-        lookup_alias;
-      }
-
-end
 
 (*----------------------------------------------------------------------
  Pm_key - path or glob
@@ -301,6 +30,7 @@ module Pm_key : sig
   val of_glob : Glob.t -> t
   val to_string : t -> string
   val to_path_exn : t -> Path.Rel.t (* for targets_proxy_map *)
+  val to_path_opt : t -> Path.t option (* for mtimes check *)
 
 end = struct
 
@@ -329,6 +59,10 @@ end = struct
       | `absolute _ -> failwith "Proxy_map.key.to_path_exn/Abs"
       | `relative path -> path
 
+  let to_path_opt = function
+    | Path path -> Some path
+    | Glob _ -> None
+
 end
 
 (*----------------------------------------------------------------------
@@ -339,14 +73,16 @@ module Proxy : sig
 
   type t with sexp, bin_io, compare
   val of_digest : Digest.t -> t
-  val of_listing : Fs.Listing.t -> t
+  val of_listing : dir:Path.t -> Path.Set.t -> t
   val equal : t -> t -> bool
 
 end = struct
 
   type t = Digest of Digest.t | Fs_proxy of Fs.Listing.t with sexp, bin_io, compare
   let of_digest x = Digest x
-  let of_listing x = Fs_proxy x
+
+  let of_listing ~dir paths =
+    Fs_proxy (Fs.Listing.of_file_paths_exn ~dir (Path.Set.to_list paths))
 
   let equal = equal_using_compare compare
 
@@ -371,6 +107,8 @@ module Proxy_map : sig (* need to be keyed on Path/Glob *)
 
   val equal : t -> t -> bool
   val diff : before:t -> after:t -> Pm_key.t list option
+
+  val path_keys : t -> Path.Set.t
 
 end = struct
 
@@ -433,6 +171,11 @@ end = struct
       ) with
       | [] -> None (* deps only went away, which is not regarded as a difference *)
       | _::_ as xs -> Some xs
+
+  let path_keys t =
+    Path.Set.of_list (
+      List.filter_map (Pm_key.Map.keys t) ~f:Pm_key.to_path_opt
+    )
 
 end
 
@@ -679,7 +422,7 @@ module Persist = struct
      so they can be saved to file.  *)
 
   type t = {
-    generated   : Path.Rel.Set.t Gen_key.Table.t;
+    generated   : Path.Set.t Gen_key.Table.t;
     ruled       : Rule_proxy.t Path.Rel.Table.t; (* actions run for target-rules *)
     actioned    : Output_proxy.t Job.Table.t; (* actions run for their stdout *)
   } with sexp, bin_io
@@ -690,6 +433,46 @@ module Persist = struct
     actioned = Job.Table.create();
   }
 
+end
+
+
+(*----------------------------------------------------------------------
+ fixpoint step count
+----------------------------------------------------------------------*)
+
+module Fixpoint_iter = struct
+  module T = struct
+    type t = Iter of int | Star
+    with sexp,compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make(T)
+  let to_string = function Star -> "star" | Iter i -> "iter-"^Int.to_string i
+  let _ = to_string
+end
+
+
+(*----------------------------------------------------------------------
+  for memoization of dependent scheme
+----------------------------------------------------------------------*)
+
+module Dep_scheme_key = struct
+  module T = struct
+    type t = {
+      dep_u : int;
+      fixpoint_iter : Fixpoint_iter.t;
+    } with sexp,compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make(T)
+  let to_string t = Sexp.to_string (sexp_of_t t)
+  let _ = to_string
+end
+
+module Scheme_memo = struct
+  type t = Scheme.t Builder.t Dep_scheme_key.Table.t
 end
 
 
@@ -706,14 +489,12 @@ module Memo = struct
      computatations *)
 
   type t = {
-    generating : (Ruleset.t Builder.t * DG.Node.t) Gen_key.Table.t;
     reflecting : (Reflected.Trip.t option Builder.t * DG.Node.t) Path.Table.t;
     building  : (Proxy_map.t Builder.t * DG.Node.t) Goal.Table.t;
-    root : Env1.t Builder.t option ref;
+    root : (Env.t * Scheme_memo.t) Builder.t option ref;
   }
 
   let create () = {
-    generating = Gen_key.Table.create();
     reflecting = Path.Table.create();
     building = Goal.Table.create();
     root = ref None;
@@ -746,42 +527,45 @@ type t = {
   jr_spec : Jr_spec.t; (* access to the jengaroot *)
 
   (* recursive calls to build_goal go via here - avoids having big mutual let rec *)
-  recurse_build_goal : (t -> Goal.t -> Proxy_map.t Builder.t);
-  recurse_reflect_path : (t -> Path.t -> Reflected.Trip.t option Builder.t);
-  recurse_reflect_alias : (t -> Alias.t -> Path.Set.t Builder.t);
-  recurse_buildable_targets : (t -> dir:Path.t -> Path.Set.t Builder.t);
+  build_goal : (t -> Goal.t -> Proxy_map.t Builder.t);
+  reflect_path : (t -> Path.t -> Reflected.Trip.t option Builder.t);
+  reflect_alias : (t -> Alias.t -> Path.Set.t Builder.t);
+  buildable_targets : (t -> dir:Path.t -> Path.Set.t Builder.t);
 
   (* discovered_graph structure & current node - used for cycle checking *)
   discovered_graph : DG.t;
   node : DG.Node.t;
 
+  fixpoint_iter : Fixpoint_iter.t
+
 } with fields
 
-let generated t = t.persist.Persist.generated
 let ruled t = t.persist.Persist.ruled
 let actioned t = t.persist.Persist.actioned
 
-let memo_generating t = t.memo.Memo.generating
 let memo_reflecting t = t.memo.Memo.reflecting
 let memo_building t = t.memo.Memo.building
 let memo_root t = t.memo.Memo.root
 
 let build_sub_goal : (t ->  Goal.t -> Proxy_map.t Builder.t) =
-  fun t goal -> t.recurse_build_goal t goal
+  fun t goal -> t.build_goal t goal
 
-let run_user_code f =
-  Builder.of_deferred (fun () ->
-    Monitor.try_with f
-  ) *>>= function
-  | Ok x -> return x
-  | Error exn ->
-    let exn = Monitor.extract_exn exn in
-    error (Reason.Usercode_raised exn)
+let apply_user_function : ((unit -> 'a) -> 'a Builder.t) =
+  fun f ->
+    try return (f ()) with
+    | exn -> error (Reason.Usercode_raised exn)
 
-let run_rhs_of_bind f =
-  match try (Ok (f())) with | exn -> Error exn with
-  | Error exn -> error (Reason.Usercode_raised exn)
-  | Ok right -> return right
+let run_user_async_code : ((unit -> 'a Deferred.t) -> 'a Builder.t) =
+  fun f ->
+    Builder.of_deferred (fun () ->
+      Monitor.try_with (fun () ->
+        f ()
+      )
+    ) *>>= function
+    | Ok x -> return x
+    | Error exn ->
+      let exn = Monitor.extract_exn exn in
+      error (Reason.Usercode_raised exn)
 
 (*----------------------------------------------------------------------
   File system interface
@@ -814,14 +598,14 @@ let look_for_source : (t -> Path.t -> Proxy.t option Builder.t) =
     | `missing        -> return None
     | `is_a_dir       -> return None
 
-let need_glob : (t -> Glob.t -> Fs.Listing.t Builder.t) =
+let glob_fs_only : (t -> Glob.t -> Path.Set.t Builder.t) =
   fun t glob ->
     let err s = Reason.Glob_error (glob,s) in
     Builder.of_tenacious (Fs.list_glob t.fs glob) *>>= function
     | `stat_error _   -> error (err "stat error")
     | `not_a_dir      -> error (err "not a directory")
     | `listing_error _-> error (err "unable to list")
-    | `listing listing -> return listing
+    | `listing listing -> return (Fs.Listing.paths listing)
 
 let ensure_directory : (t -> dir:Path.Rel.t -> unit Builder.t) =
   fun t ~dir ->
@@ -832,16 +616,125 @@ let ensure_directory : (t -> dir:Path.Rel.t -> unit Builder.t) =
     | `failed -> error (Reason.No_directory_for_target "failed to create")
 
 (*----------------------------------------------------------------------
-  running things - generator, scanners, actions
+ artifacts, source files
+----------------------------------------------------------------------*)
+
+let generated t = t.persist.Persist.generated
+
+let artifacts_for_dir : (t -> dir:Path.t -> Path.Set.t Builder.t) =
+  (* Currently we deem a path as an artifact if jenga.db tells us we previously had a rule
+     for it. A better solution is to ask hg, which can answer w.r.t to .hgignore *)
+  fun t ~dir ->
+    match Path.case dir with
+    | `absolute _ -> return Path.Set.empty
+    | `relative dir ->
+      let gen_key = Gen_key.create ~dir in
+      let prev_targets =
+        match (Hashtbl.find (generated t) gen_key) with
+        | Some x -> x
+        | None -> Path.Set.empty
+      in
+      (* builder will never retrigger *)
+      return prev_targets
+
+let artifacts : (t -> Glob.t -> Path.Set.t Builder.t) =
+  (* Currently we deem a file as an artifact if jenga.db tells us we previously had a rule
+     for it. A better solution is to ask hg, which can answer w.r.t to .hgignore *)
+  fun t glob ->
+    let dir = Glob.dir glob in
+    artifacts_for_dir t ~dir *>>= fun artifacts ->
+    let pattern = Glob.pattern glob in
+    let filtered =
+      Path.Set.filter artifacts ~f:(fun path ->
+        Pattern.matches pattern (Path.basename path))
+    in
+    return filtered
+
+let source_files : (t -> Glob.t -> Path.Set.t Builder.t) =
+  (* what's on the file-system, MINUS, what's known to be an artifact *)
+  fun t glob ->
+    glob_fs_only t glob *>>= fun filesystem ->
+    artifacts t glob *>>= fun artifacts ->
+    return (Path.Set.diff filesystem artifacts)
+
+(*----------------------------------------------------------------------
+ stale artifacts
+----------------------------------------------------------------------*)
+
+let remove_stale_artifact : (
+  t -> dir:Path.t -> Path.t -> unit Deferred.t
+) =
+  fun t ~dir path ->
+    let path_string = Path.to_string path in
+    (* Dont remove non-local stale build artifacts
+       We no longer allow (api.ml) rules to be created with non-local targets.
+       But jenga.db might have been created by ealier version of jenga which did. *)
+    if not (Path.(dirname path = dir)) then (
+      Deferred.return ()
+    ) else
+      try_with (fun () -> Sys.remove path_string) >>= function
+      | Ok () ->
+        Message.message "Removed stale build artifact: %s" path_string;
+        Fs.clear_watcher_cache t.fs path;
+        Deferred.return ()
+      | Error _ ->
+        Deferred.return ()
+
+let determine_and_remove_stale_artifacts : (
+  t -> dir:Path.t -> targets:Path.Set.t -> unit Builder.t
+) =
+  fun t ~dir ~targets ->
+    match Path.case dir with
+    | `absolute _ -> return ()
+    | `relative rel ->
+      artifacts_for_dir t ~dir *>>= fun prev_targets ->
+      begin
+        match
+          Set.to_list (Set.diff prev_targets targets)
+        with
+        | [] -> return ()
+        | _::_ as stales ->
+          Builder.of_deferred (fun () ->
+            Deferred.List.iter stales ~f:(fun path ->
+              remove_stale_artifact t ~dir path
+            )
+          )
+      end
+      *>>= fun () ->
+      if not (Path.Set.equal prev_targets targets) then (
+        let gen_key = Gen_key.create ~dir:rel in
+        Hashtbl.set (Misc.mod_persist (generated t)) ~key:gen_key ~data:targets;
+      );
+      return ()
+
+(*----------------------------------------------------------------------
+ glob - new semantics (source_files or buildable)
+----------------------------------------------------------------------*)
+
+let glob_fs_or_buildable : (t -> Glob.t -> Path.Set.t Builder.t) =
+  fun t glob ->
+    let dir = Glob.dir glob in
+    let pattern = Glob.pattern glob in
+    t.buildable_targets t ~dir *>>= fun targets ->
+    let filtered_targets =
+      Path.Set.filter targets ~f:(fun path ->
+        Pattern.matches pattern (Path.basename path))
+    in
+    source_files t glob *>>| fun filesystem ->
+    let result = Path.Set.union filtered_targets filesystem in
+    result
+
+(*----------------------------------------------------------------------
+  running actions
 ----------------------------------------------------------------------*)
 
 let run_action_with_message :
-    (t -> Env1.t -> Action.t -> message:(unit->unit) -> need:string ->
+    (t -> Env.t -> Action.t -> message:(unit->unit) -> need:string ->
      output:'a Job.Output.t -> 'a Builder.t) =
-  fun t env1 action ~message ~need ~output ->
+  fun t env action ~message ~need ~output ->
     let progress = t.progress in
     let config = t.config in
-    let putenv = Env1.putenv env1 in
+    let putenv = Env.putenv env in
     Builder.of_deferred (fun () ->
       Action.run action ~message ~output ~putenv ~progress ~config ~need
     ) *>>= function
@@ -851,12 +744,12 @@ let run_action_with_message :
     | Error (`other_error exn)            -> error (Reason.Running_job_raised exn)
 
 let run_action_for_targets :
-    (t -> RR.t -> Env1.t -> Action.t -> Job.t ->
+    (t -> RR.t -> Env.t -> Action.t -> Job.t ->
      targets:Path.Rel.t list -> need:string ->
      unit Builder.t) =
   (* After running an action, synchronise until all inotify events triggered while the
      action was run have been delivered (and acted upon) by this process *)
-  fun t rr env1 action job ~targets ~need ->
+  fun t rr env action job ~targets ~need ->
     let message() =
       if Config.show_actions_run t.config then
         Message.message "Building: %s [%s]"
@@ -867,22 +760,22 @@ let run_action_for_targets :
     Builder.wrap (
       Fs.sync_inotify_delivery t.fs ~sync_contents (
         Builder.expose (
-          run_action_with_message t env1 action ~message ~need
+          run_action_with_message t env action ~message ~need
             ~output:Job.Output.ignore
         )
       )
     )
 
 let run_action_for_stdout :
-    (t -> RR.t -> Env1.t -> Action.t -> Job.t -> string Builder.t) =
-  fun t rr env1 action job ->
+    (t -> RR.t -> Env.t -> Action.t -> Job.t -> string Builder.t) =
+  fun t rr env action job ->
     let message() =
       if Config.show_actions_run t.config then
         Message.message "Action: %s [%s]"
           (Job.string_for_sh job)
           (RR.to_string t.config rr)
     in
-    run_action_with_message t env1 action ~message ~need:"stdout"
+    run_action_with_message t env action ~message ~need:"stdout"
       ~output:Job.Output.stdout
 
 (*----------------------------------------------------------------------
@@ -951,6 +844,56 @@ let build_considering_needed : (t -> Progress.Need.t -> 'a Builder.t -> 'a Build
       )
     )
 
+(*----------------------------------------------------------------------
+ expand_dollar_vars
+----------------------------------------------------------------------*)
+
+let expand_dollar_vars_between ~left ~right ~lookup orig =
+  match String.lsplit2 orig ~on:'$' with
+  | None -> orig (* no dollars, do nothing *)
+  | Some (before_first_dollar, after_first_dollar) ->
+    let translate after_dollar =
+      match (
+        match String.chop_prefix after_dollar ~prefix:(String.make 1 left) with
+        | None -> None
+        | Some after_lp ->
+          match String.lsplit2 after_lp ~on:right with
+          | None -> None
+          | Some (var_name, after_rp) ->
+            match (lookup var_name) with
+            | None -> None
+            | Some x -> Some (x, after_rp)
+      ) with
+      | None -> "$" ^ after_dollar (* cant translate - leave the string as it is*)
+      | Some (expansion, after_rp) -> expansion ^ after_rp
+    in
+    let rec loop acc = function
+      | [] -> assert false
+      | [last] -> String.concat (List.rev (translate last::acc))
+      | after_dollar::xs -> loop (translate after_dollar :: acc) xs
+    in
+    loop [before_first_dollar] (String.split after_first_dollar ~on:'$')
+
+let expand_dollar_vars ~lookup s =
+  (*let s = expand_dollar_vars_between ~left:'(' ~right:')' ~lookup s in*)
+  let s = expand_dollar_vars_between ~left:'{' ~right:'}' ~lookup s in
+  s
+
+let expand_module_string_dollar_vars =
+  (* replace ${jenga} in jenga.conf module strings with the root path of the jenga
+     distribution, determined via the dirname of the running jenga.exe ($0) after
+     stripping any "bin/" suffix *)
+  let bin_directory =
+    Filename.dirname (Sys.argv.(0))
+  in
+  let root_distribution =
+    match Filename.basename bin_directory with
+    | "bin" -> Filename.dirname bin_directory
+    | _ -> bin_directory
+  in
+  expand_dollar_vars ~lookup:(function
+  | "jenga" -> Some root_distribution
+  | _ -> None)
 
 (*----------------------------------------------------------------------
   jenga.conf
@@ -974,7 +917,7 @@ let read_then_convert_string_via_reader :
     contents path *>>= fun string ->
     Builder.of_deferred (fun () ->
       try_with (fun () ->
-        let info = Info.of_string ("Description.convert_using_reader "
+        let info = Info.of_string ("read_then_convert_string_via_reader"
                                    ^ Path.to_string path) in
         let pipe = Pipe.init (fun writer -> Pipe.write writer string) in
         Reader.of_pipe info pipe >>= fun reader ->
@@ -1009,14 +952,11 @@ let read_jenga_conf : (t -> conf:Path.t -> Jenga_conf_rep.t Builder.t) =
         | `Eof -> failwith "Eof"
       )
 
-
 let path_exists : (t -> Path.t -> bool Builder.t) =
   fun t path ->
     let glob = Glob.create_from_path ~kinds:None path in
-    need_glob t glob *>>| fun listing ->
-    match Fs.Listing.paths listing with
-    | [] -> false
-    | _::_ -> true
+    glob_fs_only t glob *>>| fun paths ->
+    not (Path.Set.is_empty paths)
 
 let check_path_is_digestable t path =
   let err prob =
@@ -1031,9 +971,11 @@ let check_path_is_digestable t path =
 let jenga_conf_load_spec : (t -> conf:Path.t -> Load_root.Spec.t Builder.t) =
   fun t ~conf ->
     read_jenga_conf t ~conf *>>= fun jc ->
+    let module_strings = Jenga_conf_rep.modules jc in
+    let module_strings = List.map module_strings ~f:expand_module_string_dollar_vars in
     let badly_suffixed_modules =
-      List.filter_map (Jenga_conf_rep.modules jc) ~f:(fun m ->
-        match (String.lsplit2 ~on:'.' m) with
+      List.filter_map module_strings ~f:(fun m ->
+        match (String.rsplit2 ~on:'.' m) with
         | None -> None (* .ml will be added *)
         | Some (_,"ml") -> None
         | Some (_,suf) ->
@@ -1044,8 +986,8 @@ let jenga_conf_load_spec : (t -> conf:Path.t -> Load_root.Spec.t Builder.t) =
     | _::_ as errs -> errors_for_omake_server ~within:conf errs "badly suffixed modules"
     | [] ->
       let modules = (* path, but no suffix *)
-        List.map (Jenga_conf_rep.modules jc) ~f:(fun s ->
-          match String.lsplit2 ~on:'.' s with | Some (s,_) -> s | None -> s)
+        List.map module_strings ~f:(fun s ->
+          match String.rsplit2 ~on:'.' s with | Some (s,_) -> s | None -> s)
       in
       let basenames =
         List.map modules ~f:(fun s ->
@@ -1059,7 +1001,7 @@ let jenga_conf_load_spec : (t -> conf:Path.t -> Load_root.Spec.t Builder.t) =
         let mls,mlis =
           let re_suffix suf =
             List.map modules ~f:(fun m ->
-              Path.relative ~dir:(Path.dirname conf) (m ^ suf))
+              Path.relative_or_absolute ~dir:(Path.dirname conf) (m ^ suf))
           in re_suffix ".ml", re_suffix ".mli"
         in
         match mls with
@@ -1125,7 +1067,7 @@ let jenga_load_spec : (t -> Jr_spec.t -> Load_root.Spec.t Builder.t) =
   jenga_root
 ----------------------------------------------------------------------*)
 
-let jenga_root : (t -> Env1.t Builder.t) =
+let jenga_root : (t -> (Env.t * Scheme_memo.t) Builder.t) =
   (* wrap up the call to [Load_root.get_env] into a tenacious builder,
      which will reload any time the jengaroot is modified *)
   fun t ->
@@ -1135,17 +1077,16 @@ let jenga_root : (t -> Env1.t Builder.t) =
       let exn = Monitor.extract_exn (Error.to_exn e) in
       error (Reason.Usercode_raised exn)
     | Ok env ->
-      match (Env1.of_env env) with
-      | `dups xs -> error (Reason.Duplicate_scheme_ids xs)
-      | `ok env1 -> return env1
+      let bds_memo = Dep_scheme_key.Table.create() in
+      return (env,bds_memo)
 
-let jenga_root : (t -> Env1.t Builder.t) =
+let jenga_root : (t -> (Env.t * Scheme_memo.t) Builder.t) =
   fun t ->
     build_considering_needed t Progress.Need.jengaroot (
       jenga_root t
     )
 
-let jenga_root : (t -> Env1.t  Builder.t) =
+let jenga_root : (t -> (Env.t * Scheme_memo.t) Builder.t) =
   (* Memoization of jenga_root is simpler that other cases, becasuse:
      - There is only one; we don't need a hashtable, just a ref.
      - The root has no deps, so there is no chance of cycles,
@@ -1158,20 +1099,110 @@ let jenga_root : (t -> Env1.t  Builder.t) =
       memo_root t := Some builder;
       builder
 
+(*----------------------------------------------------------------------
+ Mtimes - to check mtimes are unchanged for deps while an action is running
+----------------------------------------------------------------------*)
+
+module Mtimes : sig
+
+  type t
+  val create : (Path.t * Fs.Mtime.t) list -> t
+  val keys : t -> Path.Set.t
+  val diff : before:t -> after:t -> Path.t list option
+
+end = struct
+
+  type t = Fs.Mtime.t Path.Map.t with compare
+
+  let create xs = Path.Map.of_alist_exn xs
+
+  let keys t = Path.Set.of_list (Path.Map.keys t)
+
+  let equal = equal_using_compare compare
+
+  let diff ~before ~after =
+    (* expect to only be called on [Mtimes.t] values with the same path-keys *)
+    if equal before after then None
+    else
+      match (
+        Sequence.filter_map
+          (Map.symmetric_diff before after ~data_equal:Fs.Mtime.equal)
+          ~f:(fun (k,comp) ->
+            match comp with
+            | `Left _ -> Some k (* lost path-key.. unexpected *)
+            | `Right _ -> Some k (* additional path-key.. unexpected *)
+            | `Unequal _ -> Some k (* changed mtime *)
+          )
+        |> Sequence.to_list
+      ) with
+      | [] -> assert false
+      | _::_ as xs -> Some xs
+
+end
+
+let mtime_file : (
+  [`as_cached of t | `right_now] -> Path.t -> (Path.t * Fs.Mtime.t) Builder.t
+) =
+  fun how path ->
+    begin
+      match how with
+      | `as_cached t -> Builder.of_tenacious (Fs.mtime_file t.fs ~file:path)
+      | `right_now -> Builder.of_deferred (fun () -> Fs.mtime_file_right_now ~file:path)
+    end *>>= function
+    | Some mtime -> return (path,mtime)
+    | None -> error (Reason.Misc (sprintf "file disappeared for mtime: %s"
+                                    (Path.to_string path)))
+
+let mtimes_of_proxy_map : (t -> Proxy_map.t -> Mtimes.t Builder.t) =
+  fun t pm ->
+    let paths = Proxy_map.path_keys pm in
+    Builder.all (
+      List.map (Set.to_list paths) ~f:(fun path -> mtime_file (`as_cached t) path)
+    )*>>| Mtimes.create
+
+let check_mtimes_unchanged : (t -> Mtimes.t -> unit Builder.t) =
+  fun t mtimes_before ->
+    let paths = Mtimes.keys mtimes_before in
+    begin
+      Builder.all (
+        List.map (Set.to_list paths) ~f:(fun path -> mtime_file `right_now path)
+      )*>>| Mtimes.create
+    end *>>= fun mtimes_now ->
+    match Mtimes.diff ~before:mtimes_before ~after:mtimes_now with
+    | None -> return ()
+    | Some paths ->
+      (* clearing the watcher cache allows the build to retrigger if running
+         without notifiers, or we lost an inotify event *)
+      let () = List.iter paths ~f:(Fs.clear_watcher_cache t.fs) in
+      error (Reason.Mtimes_changed paths)
+
 
 (*----------------------------------------------------------------------
-  build
+  share / share & allow cycle detection
 ----------------------------------------------------------------------*)
+
+let share_builder : (
+  key : 'a ->
+  memo : ('a, 'b Builder.t) Hashtbl.t ->
+  f : (unit -> 'b Builder.t) ->
+  'b Builder.t
+) =
+  fun ~key ~memo ~f ->
+    match (Hashtbl.find memo key) with
+    | Some builder -> builder
+    | None ->
+      let builder = f () in
+      let builder = Builder.reify builder in
+      Hashtbl.add_exn memo ~key ~data:builder;
+      builder
 
 let share_and_check_for_cycles :
     (* memoize / check for cycles...
        Three places where this function is called, wraps for:
+       - memo_buildable_targets
        - build_goal
-       - generate_ruleset
        - reflect_path
-       Which are the places in the build description where sharing can be encountered
-       For each sharing point we must ensure that only one builder computation is setup
-    *)
+       Which are the places in the build description where cycles can be encountered. *)
     (t ->
      key : 'a ->
      memo : ('a, 'b Builder.t * DG.Node.t) Hashtbl.t ->
@@ -1204,14 +1235,19 @@ let share_and_check_for_cycles :
       Hashtbl.add_exn memo ~key ~data:(builder,t.node);
       builder
 
+(*----------------------------------------------------------------------
+ things we can depend upon
+----------------------------------------------------------------------*)
 
 let run_action_for_stdout_if_necessary
     : (t -> deps:Proxy_map.t -> Action.t -> string Builder.t) =
   fun t ~deps action ->
-    jenga_root t *>>= fun env1 ->
+    jenga_root t *>>= fun (env,_) ->
+    mtimes_of_proxy_map t deps *>>= fun mtimes ->
     let job = Action.job action in
     let run_and_cache rr =
-      run_action_for_stdout t rr env1 action job *>>= fun stdout ->
+      run_action_for_stdout t rr env action job *>>= fun stdout ->
+      check_mtimes_unchanged t mtimes *>>= fun () ->
       let output_proxy = {Output_proxy. deps; stdout;} in
       Hashtbl.set (Misc.mod_persist (actioned t)) ~key:job ~data:output_proxy;
       return stdout
@@ -1254,16 +1290,21 @@ let build_merged_proxy_maps : (Proxy_map.t list -> Proxy_map.t Builder.t) =
     | `err _inconsistency -> error Reason.Inconsistent_proxies
     | `ok pm -> return pm
 
+(*----------------------------------------------------------------------
+ build_depends
+----------------------------------------------------------------------*)
+
 let build_depends : (t -> 'a Dep.t -> ('a * Proxy_map.t) Builder.t) =
   fun t depends ->
-    let rec exec : type a. a Dep.t -> (a * Proxy_map.t) Builder.t = function
+    let rec exec : type a. a Dep.t -> (a * Proxy_map.t) Builder.t = fun dep ->
+      match dep with
 
       | Dep.Return x ->
         return (x, Proxy_map.empty)
 
       | Dep.Bind (left,f_right) ->
         exec left *>>= fun (v1,pm1) ->
-        run_rhs_of_bind (fun () -> f_right v1) *>>= fun right ->
+        apply_user_function (fun () -> f_right v1) *>>= fun right ->
         exec right *>>= fun (v2,pm2) ->
         build_merged_proxy_maps [pm1;pm2] *>>= fun pm ->
         return (v2, pm)
@@ -1280,7 +1321,7 @@ let build_depends : (t -> 'a Dep.t -> ('a * Proxy_map.t) Builder.t) =
         return (vs,pm)
 
       | Dep.Deferred f ->
-        run_user_code f *>>| fun v ->
+        run_user_async_code f *>>| fun v ->
         (v, Proxy_map.empty)
 
       | Dep.Alias alias ->
@@ -1309,41 +1350,57 @@ let build_depends : (t -> 'a Dep.t -> ('a * Proxy_map.t) Builder.t) =
         get_contents t path *>>| fun contents ->
         (contents, pm)
 
-      | Dep.Glob_listing glob ->
-        (* CARRY the glob listing; dont put into the proxy-map *)
-        need_glob t glob *>>| fun listing ->
-        let pm  = Proxy_map.empty in
-        (Fs.Listing.paths listing, pm)
-
-      | Dep.Glob_change glob ->
-        (* Dont carry the glob listing; do put into the PROXY-MAP *)
-        need_glob t glob *>>| fun listing ->
-        let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing listing) in
-        ((), pm)
-
       | Dep.Action_stdout action_depends ->
         exec action_depends *>>= fun (action,pm) ->
         run_action_for_stdout_if_necessary t ~deps:pm action *>>| fun stdout ->
         (stdout, Proxy_map.empty)
 
       | Dep.Reflect_path path ->
-        t.recurse_reflect_path t path *>>| fun x ->
+        t.reflect_path t path *>>| fun x ->
         (x,Proxy_map.empty)
 
       | Dep.Reflect_alias alias ->
-        t.recurse_reflect_alias t alias *>>| fun x ->
+        t.reflect_alias t alias *>>| fun x ->
         (x,Proxy_map.empty)
 
       | Dep.Reflect_putenv ->
-        jenga_root t *>>| fun env1 ->
-        (Env1.putenv env1, Proxy_map.empty)
+        jenga_root t *>>| fun (env,_) ->
+        (Env.putenv env, Proxy_map.empty)
 
       | Dep.Buildable_targets dir ->
-        t.recurse_buildable_targets t ~dir *>>| fun paths ->
+        t.buildable_targets t ~dir *>>| fun targets ->
+        (targets, Proxy_map.empty)
+
+      | Dep.Glob_listing_OLD glob ->
+        (* CARRY the glob listing; dont put into the proxy-map *)
+        glob_fs_only t glob *>>| fun paths ->
         (paths, Proxy_map.empty)
+
+      | Dep.Glob_listing glob ->
+        (* CARRY the glob listing; dont put into the proxy-map *)
+        glob_fs_or_buildable t glob *>>| fun paths ->
+        (paths, Proxy_map.empty)
+
+      | Dep.Glob_change_OLD glob ->
+        (* Dont carry the glob listing; do put into the PROXY-MAP *)
+        glob_fs_only t glob *>>| fun paths ->
+        let dir = Glob.dir glob in
+        let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing ~dir paths) in
+        ((), pm)
+
+      | Dep.Glob_change glob ->
+        (* Dont carry the glob listing; do put into the PROXY-MAP *)
+        glob_fs_or_buildable t glob *>>| fun paths ->
+        let dir = Glob.dir glob in
+        let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing ~dir paths) in
+        ((), pm)
 
     in
     exec depends
+
+(*----------------------------------------------------------------------
+ reflect depends
+----------------------------------------------------------------------*)
 
 let reflect_depends : (t -> 'a Dep.t -> ('a * Path.Set.t) Builder.t) =
   fun t depends ->
@@ -1354,7 +1411,7 @@ let reflect_depends : (t -> 'a Dep.t -> ('a * Path.Set.t) Builder.t) =
 
       | Dep.Bind (left,f_right) ->
         exec left *>>= fun (v1,set1) ->
-        run_rhs_of_bind (fun () -> f_right v1) *>>= fun right ->
+        apply_user_function (fun () -> f_right v1) *>>= fun right ->
         exec right *>>= fun (v2,set2) ->
         let set = Path.Set.union set1 set2 in
         return (v2, set)
@@ -1371,11 +1428,11 @@ let reflect_depends : (t -> 'a Dep.t -> ('a * Path.Set.t) Builder.t) =
         return (vs,set)
 
       | Dep.Deferred f ->
-        run_user_code f *>>| fun v ->
+        run_user_async_code f *>>| fun v ->
         (v, Path.Set.empty)
 
       | Dep.Alias alias ->
-        t.recurse_reflect_alias t alias *>>| fun set ->
+        t.reflect_alias t alias *>>| fun set ->
         ((),set)
 
       | Dep.Path path ->
@@ -1400,93 +1457,144 @@ let reflect_depends : (t -> 'a Dep.t -> ('a * Path.Set.t) Builder.t) =
         get_contents t path *>>| fun contents ->
         (contents, Path.Set.empty)
 
+      | Dep.Action_stdout action_depends ->
+        (* reflect causes building here by calling [build_depends] *)
+        build_depends t action_depends *>>= fun (action,deps_proxy) ->
+        run_action_for_stdout_if_necessary t ~deps:deps_proxy action *>>| fun stdout ->
+        (stdout, Path.Set.empty)
+
+      | Dep.Reflect_path path ->
+        t.reflect_path t path *>>| fun x ->
+        (x,Path.Set.empty)
+
+      | Dep.Reflect_alias alias ->
+        t.reflect_alias t alias *>>| fun x ->
+        (x,Path.Set.empty)
+
+      | Dep.Reflect_putenv ->
+        jenga_root t *>>| fun (env,_) ->
+        (Env.putenv env, Path.Set.empty)
+
+      | Dep.Buildable_targets dir ->
+        t.buildable_targets t ~dir *>>| fun targets ->
+        (targets, Path.Set.empty)
+
+      | Dep.Glob_listing_OLD glob ->
+        glob_fs_only t glob *>>| fun paths ->
+        (paths, Path.Set.empty)
+
       | Dep.Glob_listing glob ->
-        (* CARRY the glob listing; dont put into the proxy-map *)
-        need_glob t glob *>>| fun listing ->
-        (Fs.Listing.paths listing, Path.Set.empty)
+        glob_fs_or_buildable t glob *>>| fun paths ->
+        (paths, Path.Set.empty)
+
+      | Dep.Glob_change_OLD _ ->
+        return ((), Path.Set.empty)
 
       | Dep.Glob_change _ ->
         return ((), Path.Set.empty)
 
-      | Dep.Action_stdout action_depends ->
-        (* reflect causes building here by calling [build_depends] *)
-        build_depends t action_depends *>>= fun (action,set) ->
-        run_action_for_stdout_if_necessary t ~deps:set action *>>| fun stdout ->
-        (stdout, Path.Set.empty)
-
-      | Dep.Reflect_path path ->
-        t.recurse_reflect_path t path *>>| fun x ->
-        (x,Path.Set.empty)
-
-      | Dep.Reflect_alias alias ->
-        t.recurse_reflect_alias t alias *>>| fun x ->
-        (x,Path.Set.empty)
-
-      | Dep.Reflect_putenv ->
-        jenga_root t *>>| fun env1 ->
-        (Env1.putenv env1, Path.Set.empty)
-
-      | Dep.Buildable_targets dir  ->
-        t.recurse_buildable_targets t ~dir *>>| fun paths ->
-        (paths, Path.Set.empty)
-
     in
     exec depends
 
-let generate_ruleset : (t -> Gen_key.t -> Ruleset.t Builder.t) =
-  (* Run rule generation (for a gen_key); always
-     Record the generated targets in the persistent state,
-     to allow stale targets to be removed later.
-  *)
-  fun t gen_key ->
-    jenga_root t *>>= fun env1 ->
-    match (Env1.run_generator_scheme env1 gen_key) with
-    | Error exn -> error (Reason.Scheme_raised exn)
-    | Ok generator ->
-      build_depends t (Generator.run generator) *>>= fun (rules,__proxy_map) ->
-      begin
-        match (Ruleset.create rules) with
-        | `ok ruleset -> return ruleset
-        | `dups paths -> error (Reason.Multiple_rules_for_paths (gen_key,paths))
-      end
-      *>>= fun ruleset ->
-      let prev_targets =
-        match (Hashtbl.find (generated t) gen_key) with
-        | Some x -> x
-        | None -> Path.Rel.Set.empty
-      in
-      let targets = Ruleset.targets ruleset in
-      let stale = Set.to_list (Set.diff prev_targets targets) in
-      let dir = Gen_key.directory gen_key in
-      Builder.of_deferred (fun () -> remove_stale_artifacts ~dir ~stale) *>>= fun () ->
-      if not (Path.Rel.Set.equal prev_targets targets) then (
-        Hashtbl.set (Misc.mod_persist (generated t)) ~key:gen_key ~data:targets;
-      );
-      return ruleset
+(*----------------------------------------------------------------------
+ check_for_non_local_rules
+----------------------------------------------------------------------*)
 
-let generate_ruleset : (t -> Gen_key.t -> Ruleset.t Builder.t) =
-  fun t gen_key ->
-    share_and_check_for_cycles t
-      ~key: gen_key
-      ~memo: (memo_generating t)
-      ~item: (DG.Item.Gen_key gen_key)
-      ~f: (fun t -> generate_ruleset t gen_key)
+let check_for_non_local_rules ~dir ~targets =
+  let targets = Path.Set.to_list targets in
+  match
+    List.filter targets ~f:(fun path -> not (Path.(dirname path = dir)))
+  with
+  | [] -> return ()
+  | _::_ as non_local_targets ->
+    error (Reason.Misc (
+      sprintf "non-local rule-targets generated for directory: [%s] - %s"
+        (Path.to_string dir)
+        (String.concat ~sep:" " (List.map non_local_targets ~f:Path.to_string))
+    ))
 
-let buildable_targets : (t -> dir:Path.t -> Path.Set.t Builder.t) =
+(*----------------------------------------------------------------------
+ dependent schemes
+----------------------------------------------------------------------*)
+
+let build_dependent_scheme : (
+  t -> int * Scheme.t Dep.t -> Scheme.t Builder.t
+) =
+  fun t (dep_u,scheme_dep) ->
+    jenga_root t *>>= fun (_,scheme_memo) ->
+    let key = {Dep_scheme_key. dep_u; fixpoint_iter = t.fixpoint_iter} in
+    share_builder ~memo:scheme_memo ~key ~f:(fun () ->
+      build_depends t scheme_dep *>>| fun (scheme,__proxy_map) ->
+      scheme
+    )
+
+(*----------------------------------------------------------------------
+schemes...
+----------------------------------------------------------------------*)
+
+let get_scheme : (t -> dir:Path.t -> Scheme.t Builder.t) =
+  let memo = Path.Table.create() in
+  fun t ~dir ->
+    share_builder ~memo ~key:dir ~f:(fun () ->
+      jenga_root t *>>= fun (env,_) ->
+      apply_user_function (fun () ->
+        Env.get_scheme env ~dir
+      )
+    )
+
+let scheme_rules : (t -> dir:Path.t -> Rule.t list Builder.t) =
   fun t ~dir ->
     match Path.case dir with
-    | `absolute _ -> return Path.Set.empty
-    | `relative dir ->
-      jenga_root t *>>= fun env1 ->
-      let gen_keys = Env1.gen_keys_for_directory env1 ~dir in
-      begin
-        Builder.all (
-          List.map gen_keys ~f:(fun gen_key ->
-            generate_ruleset t gen_key *>>| fun ruleset ->
-            Ruleset.targets ruleset
-          )) *>>| Path.Rel.Set.union_list
-      end *>>| fun targets ->
-      Path.Set.map targets ~f:Path.of_relative
+    | `absolute _ -> return []
+    | `relative _rel ->
+      let rec collect = fun s ->
+        match s with
+        | Scheme.Exclude (_,scheme) -> collect scheme
+        | Scheme.All schemes -> Builder.all (List.map schemes ~f:collect) *>>| List.concat
+        | Scheme.Dep u_scheme_dep -> build_dependent_scheme t u_scheme_dep *>>= collect
+        | Scheme.Rules ruleset -> return (Ruleset.rules ruleset)
+      in
+      get_scheme t ~dir *>>= fun scheme ->
+      collect scheme
+
+let find_alias_deps : (t -> Alias.t -> unit Dep.t Builder.t) =
+  fun t alias ->
+    let dir = Path.of_relative (Alias.directory alias) in
+    scheme_rules t ~dir *>>= fun rules ->
+    match Ruleset.lookup_alias (Ruleset.create rules) alias with
+    | [] -> error (Reason.No_definition_for_alias alias)
+    | _::_  as deps -> return (Dep.all_unit deps)
+
+let find_target_rule : (t -> Path.Rel.t -> Target_rule.t option Builder.t) =
+  fun t rel ->
+    let rec find_list = function
+      | [] -> return None
+      | scheme::schemes ->
+        find scheme *>>= function
+        | None -> find_list schemes
+        | Some tr -> return (Some tr)
+    and find = function
+      (* Dont traverse those sub-schemes which exclude the path being sought *)
+      | Scheme.Exclude (cond,scheme) ->
+          if cond rel
+          then return None
+          else find scheme
+      | Scheme.All schemes -> find_list schemes
+      | Scheme.Dep u_scheme_dep ->
+        build_dependent_scheme t u_scheme_dep *>>= fun scheme ->
+        find scheme
+      | Scheme.Rules ruleset ->
+        match (Ruleset.lookup_target ruleset rel) with
+        | `ok opt -> return opt
+        | `dup -> error (Reason.Multiple_rules_for_path rel)
+    in
+    let dir = Path.of_relative (Path.Rel.dirname rel) in
+    get_scheme t ~dir *>>= fun scheme ->
+    find scheme
+
+(*----------------------------------------------------------------------
+ targets
+----------------------------------------------------------------------*)
 
 let check_targets :
     (t -> Path.Rel.t list -> [ `ok of PPs.t | `missing of Path.Rel.t list] Builder.t) =
@@ -1623,21 +1731,24 @@ let build_target_rule :
   fun t tr ~demanded ->
     let need = Path.Rel.basename demanded in
     let targets = Target_rule.targets tr in
+    (* Any glob reference within rules has fixpoint semantics *)
+    let t = {t with fixpoint_iter = Fixpoint_iter.Star} in
     build_depends t (Target_rule.action_depends tr) *>>= fun (action,deps_proxy_map) ->
+    mtimes_of_proxy_map t deps_proxy_map *>>= fun mtimes ->
     prevent_action_overlap ~targets (
       (* The persistent caching is keyed of the [head_target] *)
       let head_target,other_targets = Target_rule.head_target_and_rest tr in
-      jenga_root t *>>= fun env1 ->
+      jenga_root t *>>= fun (env,_) ->
       let job = Action.job action in
       let run_and_cache rr =
         Builder.uncancellable (
-          run_action_for_targets t rr env1 action job ~targets ~need *>>= fun () ->
+          run_action_for_targets t rr env action job ~targets ~need *>>= fun () ->
           (* The cache is cleared AFTER the action has been run, and BEFORE we check the
              targets created by the action. Clearing the cache forces the files to be
              re-stated, without relying on any events from inotify to make this happen *)
           let () =
             List.iter targets ~f:(fun rel ->
-              Fs.clear_cache_for_target t.fs (Path.of_relative rel)
+              Fs.clear_watcher_cache t.fs (Path.of_relative rel)
             )
           in
           check_targets t targets *>>= function
@@ -1646,6 +1757,7 @@ let build_target_rule :
             match (Proxy_map.create_by_path path_tagged_proxys) with
             | `err _inconsistency -> error Reason.Inconsistent_proxies
             | `ok targets_proxy_map ->
+              check_mtimes_unchanged t mtimes *>>= fun () ->
               let rule_proxy = {
                 Rule_proxy.
                 targets = targets_proxy_map;
@@ -1712,50 +1824,38 @@ let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
      - If there is a rule, use it.
      - Otherwise, that path had better exists as source. *)
   fun t goal ->
-    jenga_root t *>>= fun env1 ->
-    match (Env1.lookup_gen_key env1 goal) with
-    | None ->
+    match goal with
+    | Goal.Alias alias ->
       begin
-        match goal with
-        | Goal.Alias _ -> error Reason.No_definition_for_alias
-        | Goal.Path demanded -> expect_source t demanded
+        find_alias_deps t alias *>>= fun depends ->
+        build_depends t depends *>>| fun ((),pm) -> pm
       end
-    | Some gen_key ->
-      generate_ruleset t gen_key *>>= fun ruleset ->
-      match goal with
-      | Goal.Alias alias ->
-        begin
-          match (Ruleset.lookup_alias ruleset alias) with
-          | None -> error Reason.No_definition_for_alias
-          | Some depends ->
-            build_depends t depends *>>| fun ((),pm) -> pm
-        end
-      | Goal.Path demanded ->
-        begin
-          match (Ruleset.lookup_target ruleset demanded) with
-          | Some tr ->
-            let head_target = Target_rule.head_target tr in
-            begin
-              if Path.Rel.equal demanded head_target
-              then
-                build_target_rule t tr ~demanded
-              else (
-                (* If not head target, add explicit dependence on it *)
-                build_sub_goal t (Goal.Path head_target) *>>= fun _ ->
-                build_target_rule t tr ~demanded
-              )
-            end
-            *>>= fun tagged ->
-            let (path,proxy) =
-              List.find_exn tagged ~f:(fun (path,_) ->
-                Path.equal path (Path.of_relative demanded)
-              )
-            in
-            let pm = Proxy_map.single (Pm_key.of_path path) proxy in
-            return pm
-          | None ->
-            expect_source t demanded
-        end
+    | Goal.Path demanded ->
+      begin
+        find_target_rule t demanded *>>= function
+        | Some tr ->
+          let head_target = Target_rule.head_target tr in
+          begin
+            if Path.Rel.equal demanded head_target
+            then
+              build_target_rule t tr ~demanded
+            else (
+              (* If not head target, add explicit dependence on it *)
+              build_sub_goal t (Goal.Path head_target) *>>= fun _ ->
+              build_target_rule t tr ~demanded
+            )
+          end
+          *>>= fun tagged ->
+          let (path,proxy) =
+            List.find_exn tagged ~f:(fun (path,_) ->
+              Path.equal path (Path.of_relative demanded)
+            )
+          in
+          let pm = Proxy_map.single (Pm_key.of_path path) proxy in
+          return pm
+        | None ->
+          expect_source t demanded
+      end
 
 let is_path_a_directory : (t -> Path.Rel.t -> bool Builder.t) =
   fun t path ->
@@ -1817,19 +1917,14 @@ let reflect_path : (t -> Path.t -> Reflected.Trip.t option Builder.t) =
           Message.message "Reflecting: %s" (Progress.Need.to_string need);
         )
       end;
-      jenga_root t *>>= fun env1 ->
-      match (Env1.lookup_gen_key env1 goal) with
-      | None -> return None (* env indicates no generator, so path must be source *)
-      | Some gen_key ->
-        generate_ruleset t gen_key *>>= fun ruleset ->
-        match (Ruleset.lookup_target ruleset rel) with
-        | None -> return None (* generator has no rule, so path must be source *)
-        | Some tr ->
-          let targets = List.map (Target_rule.targets tr) ~f:Path.of_relative in
-          reflect_depends t (Target_rule.action_depends tr) *>>| fun (action,deps) ->
-          let action = Action.job action in
-          let deps = Path.Set.to_list deps in
-          Some { Reflected.Trip. targets; deps; action; }
+      find_target_rule t rel *>>= function
+      | None -> return None (* scheme has no rule, so path must be source *)
+      | Some tr ->
+        let targets = List.map (Target_rule.targets tr) ~f:Path.of_relative in
+        reflect_depends t (Target_rule.action_depends tr) *>>| fun (action,deps) ->
+        let action = Action.job action in
+        let deps = Path.Set.to_list deps in
+        Some { Reflected.Trip. targets; deps; action; }
 
 let reflect_path : (t -> Path.t -> Reflected.Trip.t option Builder.t) =
   fun t path ->
@@ -1841,17 +1936,129 @@ let reflect_path : (t -> Path.t -> Reflected.Trip.t option Builder.t) =
 
 let reflect_alias : (t -> Alias.t -> Path.Set.t Builder.t) =
   fun t alias ->
-    let goal = Goal.Alias alias in
-    jenga_root t *>>= fun env1 ->
-    match (Env1.lookup_gen_key env1 goal) with
-    | None -> return Path.Set.empty (* env indicates no generator *)
-    | Some gen_key ->
-      generate_ruleset t gen_key *>>= fun ruleset ->
-      match (Ruleset.lookup_alias ruleset alias) with
-      | None -> return Path.Set.empty (* no definition for alias in this generator *)
-      | Some depends ->
-        reflect_depends t depends *>>| fun ((),set) ->
-        set
+    find_alias_deps t alias *>>= fun depends ->
+    reflect_depends t depends *>>| fun ((),set) ->
+    set
+
+(*----------------------------------------------------------------------
+ general builder fixpointing procedure
+----------------------------------------------------------------------*)
+
+let fixpoint : (
+  equal:('a -> 'a -> bool) ->
+  check_another_allowed : (int -> last:'a -> curr:'a -> unit Builder.t) ->
+  f:(int -> 'a Builder.t) ->
+  (* return fixpointed result & number of iterations to get there *)
+  ('a * int) Builder.t
+) =
+  fun ~equal ~check_another_allowed ~f ->
+    let rec iterate i ~last =
+      assert (Int.(i>=1));
+      f i *>>= fun curr ->
+      if equal last curr
+      then
+        return (curr,i)
+      else (
+        check_another_allowed i ~last ~curr *>>= fun () ->
+        iterate (i+1) ~last:curr
+      )
+    in
+    f 0 *>>= fun init ->
+    iterate 1 ~last:init
+
+(*----------------------------------------------------------------------
+ buildable_targets
+----------------------------------------------------------------------*)
+
+let pluralize_count n word =
+  sprintf "%d %s%s" n word (if Int.(n<>1) then "s" else "")
+
+let check_next_iteration_allowed t ~dir i ~last ~curr =
+  let n = Config.buildable_targets_fixpoint_max t.config in
+  if Int.(n = 0) then return () (* no limit *)
+  else if Int.(i > n)
+  then
+    let added_in_last_iteration = Path.Set.diff curr last in
+    error (Reason.Misc (
+      sprintf
+        "buildable_targets for directory [%s] failed to reach fixpoint after %s; \
+last iteration added: {%s}"
+        (Path.to_string dir)
+        (pluralize_count n "step")
+        (String.concat ~sep:","
+           (List.map (Path.Set.to_list added_in_last_iteration)
+              ~f:Path.to_string))))
+  else
+    return ()
+
+let fixpoint_buildable_targets : (t -> dir:Path.t -> Path.Set.t Builder.t) =
+  fun t ~dir ->
+    begin
+      fixpoint
+        ~equal:Path.Set.equal
+        ~check_another_allowed:(check_next_iteration_allowed t ~dir)
+        ~f:(fun i ->
+          let t = {t with fixpoint_iter = Iter i} in
+          t.buildable_targets t ~dir *>>= fun targets ->
+          return targets
+        )
+    end
+    *>>= fun (targets,iter_count) ->
+    assert (Int.(iter_count>=1));
+    (* The [iter_count] is always at least 1; and normally at least 2 *)
+    (* A count of 1 will only occur is there is nothing buildable *)
+    if Int.(iter_count=1) then assert (Path.Set.is_empty targets);
+    if Config.show_buildable_discovery t.config then (
+      if Path.Set.is_empty targets then (
+        Message.message "No buildable targets in: %s" (Path.to_string dir);
+      ) else (
+        (* subtract 1 from [iter_count] when reporting #steps for user *)
+        let steps = iter_count-1 in
+        assert (Int.(steps>=1));
+        Message.message "Discovered buildable targets in: %s [fixpoint after %s]"
+          (Path.to_string dir)
+          (pluralize_count steps "step")
+      )
+    );
+    determine_and_remove_stale_artifacts t ~dir ~targets *>>= fun () ->
+    check_for_non_local_rules ~dir ~targets *>>= fun () ->
+    return targets
+
+module Buildable_targets_key = struct
+  module T = struct
+    type t = {
+      dir : Path.t;
+      fixpoint_iter : Fixpoint_iter.t;
+    } with sexp,compare
+    let hash = Hashtbl.hash
+  end
+  include T
+  include Hashable.Make(T)
+end
+
+let buildable_targets : (t -> dir:Path.t -> Path.Set.t Builder.t) =
+  let memo = Buildable_targets_key.Table.create() in
+  fun t ~dir ->
+    let key = {Buildable_targets_key. dir; fixpoint_iter = t.fixpoint_iter} in
+    share_builder ~key ~memo ~f: (fun () ->
+      match t.fixpoint_iter with
+      | Star -> fixpoint_buildable_targets t ~dir
+      | Iter i ->
+        assert (Int.(i>=0));
+        if Int.(i = 0)
+        then return Path.Set.empty
+        else
+          let t = {t with fixpoint_iter = Iter (i-1)} in
+          scheme_rules t ~dir *>>= fun rules ->
+          let targets = List.concat_map rules ~f:Rule.targets in
+          let targets = List.map targets ~f:Path.of_relative in
+          let targets = Path.Set.of_list targets in
+          return targets
+    )
+
+(*----------------------------------------------------------------------
+ buildable
+----------------------------------------------------------------------*)
 
 let build_one_root_goal :
     (
@@ -1880,12 +2087,13 @@ let build_one_root_goal :
       memo;
       progress;
       jr_spec;
-      recurse_build_goal = build_goal;
-      recurse_reflect_path = reflect_path;
-      recurse_reflect_alias = reflect_alias;
-      recurse_buildable_targets = buildable_targets;
+      build_goal;
+      reflect_path;
+      reflect_alias;
+      buildable_targets;
       discovered_graph;
       node = dg_root;
+      fixpoint_iter = Fixpoint_iter.Star;
     } in
     build_goal t demanded
     *>>| fun (_ :Proxy_map.t) -> ()
@@ -1900,7 +2108,7 @@ let get_env_option :
       dg_root:DG.Node.t ->
       Config.t ->
       Progress.t ->
-      Env1.t option Tenacious.t
+      Env.t option Tenacious.t
     ) =
   fun ~jr_spec fs persist memo discovered_graph ~dg_root config progress ->
     let t = {
@@ -1910,19 +2118,20 @@ let get_env_option :
       memo;
       progress;
       jr_spec;
-      recurse_build_goal = build_goal;
-      recurse_reflect_path = reflect_path;
-      recurse_reflect_alias = reflect_alias;
-      recurse_buildable_targets = buildable_targets;
+      build_goal;
+      reflect_path;
+      reflect_alias;
+      buildable_targets;
       discovered_graph;
       node = dg_root;
+      fixpoint_iter = Fixpoint_iter.Star;
     } in
     let builder = jenga_root t
     in
     let tenacious =
       Tenacious.bind (Builder.expose builder) (function
       | Error _ -> Tenacious.return None
-      | Ok env1 -> Tenacious.return (Some env1)
+      | Ok (env,_) -> Tenacious.return (Some env)
       )
     in
     tenacious
@@ -2091,7 +2300,9 @@ let compact_zero_overhead () =
   Gc.tune ~space_overhead:prev_space_overhead ()
 
 let build_once :
-    (Config.t -> DG.t -> Progress.t -> unit Builder.t -> (Heart.t * int) Deferred.t) =
+    (Config.t -> DG.t -> Progress.t -> unit Builder.t ->
+     save_db_now:(unit -> unit Deferred.t) ->
+     (Heart.t * int) Deferred.t) =
   (* Make a single build using the top level tenacious builder
      Where a single build means we've done all we can
      (maybe we are complete, or maybe some targets are in error)
@@ -2099,13 +2310,13 @@ let build_once :
      And now we are just polling of file-system changes.
   *)
   let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-  fun config __dg progress top_builder ->
+  fun config __dg progress top_builder ~save_db_now ->
     let u = genU() in (* count of the times we reach polling *)
     let start_time = Time.now() in
 
     let top_tenacious = Builder.expose top_builder in
 
-    Tenacious.exec top_tenacious >>| fun (ore,heart) ->
+    Tenacious.exec top_tenacious >>= fun (ore,heart) ->
 
     (* to avoid reporting of stale errors etc... *)
     (*Progress.mask_unreachable progress dg;*)
@@ -2125,6 +2336,8 @@ let build_once :
     Progress.mask_unreachable progress ~is_reachable_error;
 
     let duration = Time.diff (Time.now()) start_time in
+
+    save_db_now() >>| fun () ->
 
     let snap = Progress.snap progress in
 
@@ -2169,9 +2382,9 @@ let build_once :
 let run_user_function_from_env_opt env_opt tag ~f =
   match env_opt with
   | None -> Deferred.unit
-  | Some env1 ->
+  | Some env ->
     Monitor.try_with (fun () ->
-      f env1
+      f env ()
     ) >>= function
     | Ok () -> Deferred.unit
     | Error exn ->
@@ -2184,7 +2397,7 @@ let build_forever =
   (* co-ordinate the build-forever process *)
 
   fun config progress ~jr_spec ~top_level_demands fs persist
-    ~when_polling ~when_rebuilding ->
+    ~save_db_now ~when_rebuilding ->
 
     let memo = Memo.create () in
     let discovered_graph = DG.create config in
@@ -2235,16 +2448,15 @@ let build_forever =
       Tenacious.exec get_env_opt >>= fun (env_opt,__heart) ->
 
       (* call user build_begin function *)
-      run_user_function_from_env_opt env_opt "build_begin" ~f:Env1.build_begin >>= fun () ->
+      run_user_function_from_env_opt env_opt "build_begin" ~f:Env.build_begin >>= fun () ->
 
       (* do the build once *)
-      build_once config discovered_graph progress top_builder >>= fun (heart,exit_code) ->
+      build_once config discovered_graph progress top_builder ~save_db_now >>= fun (heart,exit_code) ->
 
       (* call user build_end function *)
-      run_user_function_from_env_opt env_opt "build_end" ~f:Env1.build_end >>= fun () ->
+      run_user_function_from_env_opt env_opt "build_end" ~f:Env.build_end >>= fun () ->
 
       fin := true;
-      when_polling() >>= fun () ->
 
       match Config.poll_forever config with
       | false ->

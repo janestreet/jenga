@@ -33,5 +33,7 @@ if [ ! -x packages ]; then
     (cd packages; for x in $js_packages; do git clone https://github.com/janestreet/$x; done)
     (cd packages; git clone https://github.com/vincenthz/ocaml-inotify)
     (cd packages; git clone https://github.com/warrenharris/ounit)
-    (cd x-files; tar cf - .) | (cd packages; tar xf -)
+    (cd packages; hg init; hg ci -Aqm init)
 fi
+
+(cd x-files; tar cf - .) | (cd packages; tar xf -)

@@ -1,11 +1,14 @@
 
 open Core.Std
 
-(* [Goal.t] is the key to rule-generation. A directory paired with a string tag. *)
+(* [Gen_key.t] is the key used to select a [Scheme.t] for rule-generation.
+   Now just a [Path.Rel.t] *)
 
-type t = {tag : string; dir : Path.Rel.t;} with sexp, bin_io
+type t with sexp, compare, bin_io
 include Hashable_binable with type t := t
+include Comparable_binable with type t := t
 
-val create : tag:string -> dir:Path.Rel.t -> t
+val create : dir:Path.Rel.t -> t
 val to_string : t -> string
 val directory : t -> Path.Rel.t
+val of_goal : Goal.t -> t

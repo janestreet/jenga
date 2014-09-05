@@ -1,0 +1,4 @@
+(library
+ ((name pa_test_lib)
+  (libraries (sexplib))
+  (preprocess (((pps (pa_sexp_conv)) All)))))

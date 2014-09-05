@@ -1,0 +1,5 @@
+(library
+ ((name bin_prot)
+  (c_names (blit_stubs))
+  (preprocessor_deps (int_codes.mlh))
+  (preprocess (((command "cpp -undef -DARCH_SIXTYFOUR") (List (size write read type_class)))))))

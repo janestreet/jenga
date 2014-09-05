@@ -8,6 +8,15 @@ let dispatch = function
   | After_rules ->
     let env = BaseEnvLight.load () in
     let stdlib = BaseEnvLight.var_get "standard_library" env in
+    rule "gen-cat_api.ml"
+      ~deps:["lib/gen-cat_api.sh";"lib/api.mli"]
+      ~prod:"lib/cat_api.ml"
+      (fun _env _build ->
+        Cmd (S [A "/bin/sh";
+                P "lib/gen-cat_api.sh";
+                A "lib/api.mli";
+                Sh ">";
+                A "lib/cat_api.ml"]));
     rule "standalone"
       ~deps:["lib/jenga_lib.cmi"]
       ~prod:"bin/jenga_archive.c"

@@ -35,7 +35,6 @@ module Abs : sig
   type t with sexp, compare, bin_io
   val create : string -> t
   val to_string : t -> string
-  val relative : dir:t -> string -> t
 end
 
 (* [t] Type for relative or absolute path *)

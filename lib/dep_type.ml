@@ -15,9 +15,11 @@ type _ t =
 | Path : Path.t -> unit t
 | Source_if_it_exists : Path.t -> unit t
 | Contents : Path.t -> string t
-| Glob_listing : Fs.Glob.t -> Path.t list t
-| Glob_change : Fs.Glob.t -> unit t
 | Reflect_path : Path.t -> Reflected.Trip.t option t
 | Reflect_alias : Alias.t -> Path.Set.t t
 | Reflect_putenv : (string * string) list t
 | Buildable_targets : Path.t -> Path.Set.t t
+| Glob_listing_OLD : Fs.Glob.t -> Path.Set.t t
+| Glob_listing : Fs.Glob.t -> Path.Set.t t (* FS or buildable *)
+| Glob_change_OLD : Fs.Glob.t -> unit t
+| Glob_change : Fs.Glob.t -> unit t (* FS or buildable *)

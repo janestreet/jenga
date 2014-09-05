@@ -1,0 +1,3 @@
+(library
+ ((name tenacious_lifetime_lib)
+  (libraries (core async))))

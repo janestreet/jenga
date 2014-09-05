@@ -10,13 +10,13 @@ module Item = struct
   | Root
   | Goal of Goal.t
   | Reflect of Path.t
-  | Gen_key of Gen_key.t
+  (*| Buildable of Path.t*)
 
   let to_string = function
     | Root -> "ROOT"
-    | Goal dep -> (*sprintf "DEP: %s"*) (Goal.to_string dep)
+    | Goal goal -> sprintf "GOAL: %s" (Goal.to_string goal)
     | Reflect path -> sprintf "REFLECT: %s" (Path.to_string path)
-    | Gen_key g -> sprintf "GEN: %s" (Gen_key.to_string g)
+    (*| Buildable dir -> sprintf "BUILDABLE: %s" (Path.to_string dir)*)
 
 end
 

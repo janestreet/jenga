@@ -1,0 +1,4 @@
+(library
+ ((name pa_ounit_lib)
+  (libraries (oUnit))
+  (preprocess (((pps ()) All)))))

@@ -20,7 +20,7 @@ val build_forever :
   top_level_demands : Goal.t list ->
   Fs.t ->
   Persist.t ->
-  when_polling:(unit -> unit Deferred.t) ->
+  save_db_now:(unit -> unit Deferred.t) ->
   when_rebuilding:(unit -> unit Deferred.t) ->
   unit Deferred.t
 

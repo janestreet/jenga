@@ -12,9 +12,11 @@ type t = {
   show_actions_run : bool;
   show_actions_run_verbose : bool;
   show_checked : bool;
+  show_buildable_discovery : bool;
   show_reflecting : bool;
   show_considering : bool;
   show_reconsidering : bool;
+  show_glob_changed : bool;
   show_trace_messages : bool;
   debug_discovered_graph : bool;
   prefix_time : bool;
@@ -27,4 +29,5 @@ type t = {
   no_server : bool;
   demands : string list;
   no_notifiers : bool;
+  buildable_targets_fixpoint_max : int;
 } with fields

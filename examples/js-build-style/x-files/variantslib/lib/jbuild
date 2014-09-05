@@ -1,0 +1,3 @@
+(library
+ ((name variantslib)
+  (preprocess (((pps ()) All)))))

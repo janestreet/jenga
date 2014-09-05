@@ -64,7 +64,7 @@ end = struct
       ) with
       | Some t -> return t
       | None ->
-        Message.message "format of persistant state has changed; everything will rebuild";
+        Message.message "format of persistent state has changed; everything will rebuild";
         return (empty())
 
   let save_db t ~db_filename =
@@ -119,16 +119,15 @@ let save_if_changed t =
     trace "SAVE_DB: %s... done (%s)" (db_filename t) (Time.Span.to_string duration);
     return ()
 
-let save_now t =
-  (* ensuring that subsequent saves wait until any in-flight save is done *)
-  begin match t.save_status with
-  | `not_saving -> Deferred.unit
-  | `saving fin -> trace "save_now - waiting for in-flight save to complete"; fin
-  end >>= fun () ->
+let rec save_now t =
   match t.save_status with
-  | `saving _fin ->
-    (* someone beat us. shouldn't happen! *)
-    assert false; (*fin*)
+
+  | `saving wait ->
+    trace "waiting for in-flight save to complete";
+    wait >>= fun () ->
+    trace "doing save again";
+    save_now t
+
   | `not_saving ->
     let ivar = Ivar.create () in
     t.save_status <- `saving (Ivar.read ivar);
@@ -143,7 +142,6 @@ let save_periodically ~save_span t =
       Clock.after save_span >>= fun () ->
       if t.periodic_saving_enabled
       then (
-        trace "save_periodically, calling Persist.save_now...";
         save_now t >>= fun () ->
         loop ()
       )
@@ -159,7 +157,6 @@ let create_saving_periodically ~root_dir save_span =
 
 let disable_periodic_saving_and_save_now t =
   t.periodic_saving_enabled <- false;
-  trace "disable_periodic_saving_and_save_now, calling Persist.save_now...";
   save_now t
 
 let re_enable_periodic_saving t = t.periodic_saving_enabled <- true

@@ -1,0 +1,16 @@
+(library
+ ((name jenga_lib)
+  (libraries (async
+              async_inotify
+              async_parallel
+              core
+              fieldslib
+              ocaml_plugin
+              sexplib
+              tenacious_lib))))
+
+;; Embed the API into the library as a string
+(rule
+ ((targets (cat_api.ml))
+  (deps (gen-cat_api.sh api.mli))
+  (action "./${^} > ${@}")))

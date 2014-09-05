@@ -1,0 +1,39 @@
+
+(rule
+ ((targets (core_config.mlh core_config.h))
+  (deps (../config/discover.sh))
+  (action "
+cd ..
+config/discover.sh ${OCAMLC} lib/core_config.mlh lib/core_config.h -DLINUX_EXT -DPOSIX_TIMERS -DWORDEXP # ${ocaml_version}
+")))
+
+(library
+ ((name core)
+  (libraries
+   (core_kernel
+    sexplib_unix
+    ;;version_util_fallback
+))
+  (interfaces (core_kernel))
+  (extra_cflags (-D_LARGEFILE64_SOURCE))
+  ;; We omit [-pedantic] because
+  ;; [bigstring_recvmmsg_assume_fd_is_nonblocking_stub] in
+  ;; bigstring_stubs.c uses variable-length arrays rather than [alloca].
+  (avoid_cflags (-pedantic))
+  (library_flags (-cclib -lrt))
+  (c_names
+   (backtrace_stubs
+    bigstring_stubs
+    crc_stubs
+    iobuf_stubs
+    linux_ext_stubs
+    ocaml_utils_stubs
+    recvmmsg
+    signal_stubs
+    syslog_stubs
+    time_stamp_counter_stubs
+    time_stubs
+    timespec
+    unix_stubs))
+  (preprocess (((pps (JANE pa_macro)) All)))
+  (preprocessor_deps (version_defaults.mlh core_config.mlh))))

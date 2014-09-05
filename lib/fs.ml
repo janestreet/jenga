@@ -51,9 +51,19 @@ end
 let unix_lstat path =
   Effort.track lstat_counter (fun () ->
     try_with (fun () ->
+      (*Message.message "stat: %s" path;*)
       Unix.lstat path
     )
   )
+
+(*----------------------------------------------------------------------
+ Mtime
+----------------------------------------------------------------------*)
+
+module Mtime = struct
+  type t = float with sexp, bin_io, compare
+  let equal = equal_using_compare compare
+end
 
 (*----------------------------------------------------------------------
   Reduced Stat info
@@ -65,6 +75,7 @@ module Stats : sig
   val lstat : Path.t -> t Or_error.t Deferred.t
   val equal : t -> t -> bool
   val kind : t -> Kind.t
+  val mtime : t -> float
 
 end = struct
 
@@ -96,12 +107,13 @@ end = struct
     ino : int;
     kind : Kind.t;
     size : int64;
-    mtime : float;
+    mtime : Mtime.t;
   } with sexp, bin_io, compare
 
   let equal = equal_using_compare compare
 
   let kind t = t.kind
+  let mtime t = t.mtime
 
   let of_unix_stats u =
     let module U = Unix.Stats in
@@ -131,7 +143,6 @@ let is_digestable stats =
   | `File -> true
   | `Link -> true
   | _ -> false
-
 
 (*----------------------------------------------------------------------
  ensure_directory
@@ -260,6 +271,7 @@ end) : Compute_digest_sig = struct
 
   let of_file path =
     Effort.track digest_counter (fun () ->
+      (*Message.message "digest: %s" (Path.to_string path);*)
       let arg = Path.to_absolute_string path in
       let err s =
         let message = sprintf "%s %s : %s" prog arg s in
@@ -307,14 +319,17 @@ module Listing : sig
 
   type t with sexp, bin_io, compare
 
+  val of_file_paths_exn : dir:Path.t -> Path.t list -> t
+
   val equal : t -> t -> bool
   val run_ls : dir:Path.t -> t Or_error.t Deferred.t
-  val paths : t -> Path.t list
+  val paths : t -> Path.Set.t
 
   module Restriction : sig
     type t with sexp, bin_io
     val create : kinds:Kind.t list option -> Pattern.t -> t
     val to_string : t -> string
+    val pattern : t -> Pattern.t
     val compare : t -> t -> int
   end
 
@@ -323,16 +338,36 @@ module Listing : sig
 end = struct
 
   module Elem = struct
-    type t = {
-      base : string;
-      kind : Kind.t;
-    } with sexp, bin_io, compare
+    module T = struct
+      type t = {
+        base : string;
+        kind : Kind.t;
+      } with sexp, bin_io, compare
+    end
+    include T
+    include Comparable.Make_binable(T)
   end
 
   type t = {
     dir : Path.t;
     listing : Elem.t list;
   } with sexp, bin_io, compare
+
+  let compare t1 t2 =
+    let res = Path.compare t1.dir t2.dir in
+    if Int.(res<>0) then res
+    else
+      (* Allow differently ordering listings to be regarded as equal *)
+      Elem.Set.compare (Elem.Set.of_list t1.listing) (Elem.Set.of_list t2.listing)
+
+  let equal = equal_using_compare compare
+
+  let of_file_paths_exn ~dir paths =
+    let elems = List.map paths ~f:(fun path ->
+      assert (Path.(dirname path = dir));
+      {Elem. base = Path.basename path; kind = `File;}
+    ) in
+    {dir; listing = elems}
 
   let run_ls ~dir =
     File_access.enqueue (fun () ->
@@ -390,11 +425,10 @@ end = struct
     )
 
   let paths t =
-    List.map t.listing ~f:(fun e ->
-      Path.relative ~dir:t.dir e.Elem.base
-    )
-
-  let equal = equal_using_compare compare
+    Path.Set.of_list (
+      List.map t.listing ~f:(fun e ->
+        Path.relative ~dir:t.dir e.Elem.base
+      ))
 
   module Restriction = struct
     type t = {
@@ -403,6 +437,8 @@ end = struct
     } with sexp, bin_io, compare
 
     let create ~kinds pat = { kinds; pat; }
+
+    let pattern t = t.pat
 
     let to_string t =
       sprintf "%s %s"
@@ -435,6 +471,16 @@ end
  Watcher (inotify wrapper)
 ----------------------------------------------------------------------*)
 
+let break_cache_glass ?(show=false) cache path =
+  match Hashtbl.find cache path with
+  | None -> ()
+  | Some glass ->
+    if show then Message.file_changed ~desc:(Path.to_string path);
+    assert (not (Glass.is_broken glass));
+    (* remove glass from HT *before* breaking it *)
+    Hashtbl.remove cache path;
+    Glass.break glass
+
 module Real_watcher : sig
 
   type t
@@ -450,7 +496,7 @@ module Real_watcher : sig
     Path.t ->
     Heart.t Or_error.t Deferred.t
 
-  val clear_cache_for_target : t -> Path.t -> unit
+  val clear_watcher_cache : t -> Path.t -> unit
 
 end = struct
 
@@ -483,44 +529,23 @@ end = struct
       | Inotify.Event.Into s -> paths s
       | Inotify.Event.Move (s1,s2) -> paths s1 @ paths s2
 
-  let remove_and_break_glass cache path glass =
-    assert (not (Glass.is_broken glass));
-    (* remove glass from HT *before* breaking it *)
-    Hashtbl.remove cache path;
-    Glass.break glass
-
-  let clear_cache_for_target t path =
-    let cache = t.file_glass in
-    match Hashtbl.find cache path with
-    | None -> ()
-    | Some glass -> remove_and_break_glass cache path glass
-
-  let message_changed_external_to_jenga t path =
-    (* Show path events to which we are sensitized...
-       Don't show events for targets of currently running actions.
-       Will see events for externally changed files (i.e. edited source files
-       or removed generated files), but also for paths affected by a running
-       jenga action which are not declared as targets of that action. *)
-    if not (t.expect path) then (
-      Message.file_changed ~desc:(Path.to_string path)
-    )
+  let clear_watcher_cache t path =
+    break_cache_glass t.file_glass path;
+    break_cache_glass t.dir_glass (Path.dirname path)
 
   let suck_notifier_pipe t piper =
     don't_wait_for (
       Pipe.iter_without_pushback piper ~f:(fun event ->
         (*Message.unlogged "Watcher, event: %s" (Inotify.Event.to_string event);*)
         List.iter (paths_of_event t event) ~f:(fun path ->
-          begin match (Hashtbl.find t.dir_glass path) with
-          | None -> ()
-          | Some glass ->
-            remove_and_break_glass t.dir_glass path glass
-          end;
-          begin match (Hashtbl.find t.file_glass path) with
-          | None -> ()
-          | Some glass ->
-            message_changed_external_to_jenga t path;
-            remove_and_break_glass t.file_glass path glass
-          end
+          (* Show path events to which we are sensitized...
+             Don't show events for targets of currently running actions.
+             Will see events for externally changed files (i.e. edited source files
+             or removed generated files), but also for paths affected by a running
+             jenga action which are not declared as targets of that action. *)
+          let show = not (t.expect path) in
+          break_cache_glass ~show t.file_glass path;
+          break_cache_glass       t.dir_glass path (* why not show here? *)
         )))
 
   let create ~ignore ~expect =
@@ -573,7 +598,7 @@ module Blind_watcher : sig
   type t
   val create : unit -> t
 
-  val clear_cache_for_target : t -> Path.t -> unit
+  val clear_watcher_cache : t -> Path.t -> unit
 
   val dont_watch_file_or_dir : t ->
     what:[`file|`dir] ->
@@ -583,31 +608,24 @@ module Blind_watcher : sig
 end = struct
 
   type t = {
-    files : Glass.t Path.Table.t;
-    directories : Glass.t Path.Table.t;
+    file_glass : Glass.t Path.Table.t;
+    dir_glass : Glass.t Path.Table.t;
   }
+
+  let create () =
+    let file_glass = Path.Table.create () in
+    let dir_glass = Path.Table.create () in
+    let t = {file_glass; dir_glass} in
+    t
+
+  let clear_watcher_cache t path =
+    break_cache_glass t.file_glass path;
+    break_cache_glass t.dir_glass (Path.dirname path)
 
   let get_cache t ~what =
     match what with
-    | `file -> t.files
-    | `dir -> t.directories
-
-  let create () =
-    let files = Path.Table.create () in
-    let directories = Path.Table.create () in
-    let t = {files; directories} in
-    t
-
-  let clear_cache_for_target t path =
-    (* The [what] is always [`file] because [path] is a target - never a directory *)
-    let cache = get_cache t ~what:`file in
-    match Hashtbl.find cache path with
-    | None -> ()
-    | Some glass ->
-      assert (not (Glass.is_broken glass));
-      (* remove glass from HT *before* breaking it *)
-      Hashtbl.remove cache path;
-      Glass.break glass
+    | `file -> t.file_glass
+    | `dir -> t.dir_glass
 
   let dont_watch_file_or_dir t ~what path =
     let cache = get_cache t ~what in
@@ -640,7 +658,7 @@ module Watcher : sig
     Path.t ->
     Heart.t Or_error.t Deferred.t
 
-  val clear_cache_for_target : t -> Path.t -> unit
+  val clear_watcher_cache : t -> Path.t -> unit
 
 end = struct
 
@@ -658,13 +676,13 @@ end = struct
     | Real w -> Real_watcher.watch_file_or_dir w ~what path
     | Blind w -> return (Ok (Blind_watcher.dont_watch_file_or_dir w ~what path))
 
-  (* [clear_cache_for_target] - clears the cache to ensure the file will be stated
+  (* [clear_watcher_cache] - clears the cache to ensure the file will be stated
      again. Necessary when running without notifiers; sensible even with notifiers, to
      avoid relying on the delivery of inotify events. *)
-  let clear_cache_for_target t path =
+  let clear_watcher_cache t path =
     match t with
-    | Real w -> Real_watcher.clear_cache_for_target w path
-    | Blind w-> Blind_watcher.clear_cache_for_target w path
+    | Real w -> Real_watcher.clear_watcher_cache w path
+    | Blind w-> Blind_watcher.clear_watcher_cache w path
 
 end
 
@@ -776,7 +794,6 @@ let contents_file sm ~file =
     ) *>>| function
     | Error e -> `file_read_error e
     | Ok new_contents -> `contents new_contents
-
 
 (*----------------------------------------------------------------------
  Digest_persist - w.r.t stat->digest mapping
@@ -1052,7 +1069,11 @@ module Glob : sig
   val to_string : t -> string
   val compare : t -> t -> int
 
+  val dir : t -> Path.t
+  val pattern : t -> Pattern.t
+
   val exec : t ->
+    Config.t ->
     Listing_memo.t ->
     Persist.t ->
     Stat_memo.t ->
@@ -1083,6 +1104,9 @@ end = struct
 
   include T
   include Hashable.Make(T)
+
+  let dir t = t.dir
+  let pattern t = Listing.Restriction.pattern t.restriction
 
   let to_string t =
     sprintf "glob: %s/ %s"
@@ -1133,7 +1157,8 @@ end = struct
     | x ->
       Tenacious.return x
 
-  let exec glob lm per sm =
+  let exec glob config lm per sm =
+    let {Config.show_glob_changed; _} = config in
     Tenacious.lift (fun () ->
       let my_glass = Glass.create () in
       Tenacious.exec (exec_no_cutoff glob lm per sm) >>| fun (res,heart) ->
@@ -1143,7 +1168,9 @@ end = struct
         if (Listing_result.equal res res2)
         then loop heart
         else (
-          Message.file_changed ~desc:(to_string glob);
+          if show_glob_changed then (
+            Message.file_changed ~desc:(to_string glob);
+          );
           Glass.break my_glass
         )
       in
@@ -1161,7 +1188,7 @@ end
 module Glob_memo : sig
 
   type t
-  val create : unit -> t
+  val create : Config.t -> unit -> t
 
   val list_glob :
     t ->
@@ -1175,15 +1202,17 @@ end = struct
 
   type computation = Listing_result.t Tenacious.t
   type t = {
+    config : Config.t;
     cache : computation Glob.Table.t;
   }
 
   let list_glob t lm per sm glob =
     memoize t.cache ~key:glob (fun () ->
-      Glob.exec glob lm per sm
+      Glob.exec glob t.config lm per sm
     )
 
-  let create () = {
+  let create config () = {
+    config;
     cache = Glob.Table.create ();
   }
 
@@ -1196,7 +1225,7 @@ end
 module Memo : sig
 
   type t
-  val create : Watcher.t -> t
+  val create : Config.t -> Watcher.t -> t
 
   val contents_file :
     t ->
@@ -1215,6 +1244,11 @@ module Memo : sig
     Glob.t ->
     Listing_result.t Tenacious.t
 
+  val mtime_file :
+    t ->
+    file:Path.t ->
+    Mtime.t option Tenacious.t
+
 end = struct
 
   type t = {
@@ -1225,12 +1259,12 @@ end = struct
     gm : Glob_memo.t;
   }
 
-  let create watcher = {
+  let create config watcher = {
     sm = Stat_memo.create watcher ;
     cm = Contents_memo.create () ;
     dm = Digest_memo.create () ;
     lm = Listing_memo.create () ;
-    gm = Glob_memo.create () ;
+    gm = Glob_memo.create config () ;
   }
 
   let contents_file t ~file = Contents_memo.contents_file t.cm t.sm ~file
@@ -1238,6 +1272,11 @@ end = struct
   let digest_file t per ~file = Digest_memo.digest_file t.dm per t.sm ~file
 
   let list_glob t per glob = Glob_memo.list_glob t.gm t.lm per t.sm glob
+
+  let mtime_file t ~file =
+    Stat_memo.lstat t.sm ~what:`file file *>>| function
+    | Error _ -> None
+    | Ok stats -> Some (Stats.mtime stats)
 
 end
 
@@ -1272,7 +1311,9 @@ module Fs : sig
   val watch_sync_file : t -> Path.t -> Heart.t Deferred.t
   val nono : t -> bool
 
-  val clear_cache_for_target : t -> Path.t -> unit
+  val clear_watcher_cache : t -> Path.t -> unit
+
+  val mtime_file : t -> file:Path.t -> Mtime.t option Tenacious.t
 
 end = struct
 
@@ -1292,7 +1333,7 @@ end = struct
       | `absolute abs -> String.is_prefix ~prefix:tmp_jenga (Path.Abs.to_string abs)
     in
     Watcher.create ~nono ~ignore ~expect >>= fun watcher ->
-    let memo = Memo.create watcher in
+    let memo = Memo.create config watcher in
     let t = { nono; watcher; memo; persist; } in
     return t
 
@@ -1308,8 +1349,10 @@ end = struct
     | Ok heart -> return heart
     | Error e -> raise (Error.to_exn e)
 
-  let clear_cache_for_target t path =
-    Watcher.clear_cache_for_target t.watcher path
+  let clear_watcher_cache t path =
+    Watcher.clear_watcher_cache t.watcher path
+
+  let mtime_file t ~file = Memo.mtime_file t.memo ~file
 
 end
 
@@ -1320,6 +1363,12 @@ let ensure_directory (_:t) ~dir = (* why need t ? *)
   Tenacious.lift (fun () ->
     ensure_directory ~dir >>| unbreakable (* ?? *)
   )
+
+let mtime_file_right_now ~file =
+  Stats.lstat file >>| function
+  | Ok stats -> Some (Stats.mtime stats)
+  | Error _ -> None
+
 
 (*----------------------------------------------------------------------
  syncronize for delivery of inotify events when finish running an action

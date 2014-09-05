@@ -16,14 +16,19 @@ let simple_default ~dir paths =
     List.map ~f:Dep.path paths
   )
 
-let simple_rule ~targets ~deps action =
-  J.Rule.create ~targets (
-    Dep.all_unit (List.map ~f:Dep.path deps) *>>| fun () ->
-    action
-  )
+let simple_rule ~dir ~targets ~deps action =
+  let t_dir = (match targets with [] -> assert false | t1::_ -> dirname t1) in
+  if dir = t_dir then [
+    J.Rule.create ~targets (
+      Dep.all_unit (List.map ~f:Dep.path deps) *>>| fun () ->
+      action
+    )
+  ]
+  else []
 
 module Load_ninja (X : sig
 
+  val dir : J.Path.t (* generating rules in this directory *)
   val build_dot_ninja : J.Path.t
   val contents : string
 
@@ -556,8 +561,8 @@ end = struct
         let action = Rmacro.apply rmacro env in
         let targets = List.map outputs ~f:to_jpath in
         let deps = List.map (inputs @ implicit_deps @ order_only) ~f:to_jpath in
-        let jrule = simple_rule ~targets ~deps action in
-        [jrule], Env.empty, Renv.empty
+        let jrules = simple_rule ~dir ~targets ~deps action in
+        jrules, Env.empty, Renv.empty
 
       | N.Default targets ->
         let targets = eval_texts env targets in
@@ -606,19 +611,26 @@ let find_build_dot_ninja_upwards_from =
   in
   loop
 
-let scheme =
-  J.Scheme.create ~tag:"the-scheme" (fun ~dir ->
+let scheme ~dir =
+  J.Scheme.rules_dep (
     find_build_dot_ninja_upwards_from ~dir *>>= function
     | None -> return []
     | Some build_dot_ninja ->
       Dep.contents build_dot_ninja *>>| fun contents ->
       let module Loaded = Load_ninja (struct
+        let dir = dir
         let build_dot_ninja = build_dot_ninja
         let contents = contents
       end) in
       Loaded.rules
   )
 
-let env = J.Env.create ["**build.ninja",None; "**",Some scheme]
+let env =
+  J.Env.create (fun ~dir ->
+    J.Scheme.switch_glob [
+      "**build.ninja",J.Scheme.no_rules;
+      "**", scheme ~dir;
+    ]
+  )
 
 let setup () = Deferred.return env

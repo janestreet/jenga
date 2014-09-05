@@ -1,0 +1,4 @@
+(preprocessor
+ ((name pa_custom_printf)
+  (libraries (pa_type_conv))
+  (preprocess (((command "camlp4orf") (List (pa_custom_printf)))))))

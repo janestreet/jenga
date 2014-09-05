@@ -1,0 +1,3 @@
+(executables
+ ((names (ocaml_embed_compiler))
+  (libraries (async core ocaml_plugin sexplib))))

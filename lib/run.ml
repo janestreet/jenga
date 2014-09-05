@@ -40,7 +40,7 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
     | [] -> [ Goal.Alias (Alias.default ~dir:(Path.of_relative start_dir)) ]
     | demands -> List.map demands ~f:(Goal.parse_string ~dir:start_dir)
   in
-  let when_polling () =
+  let save_db_now () =
     Persist.disable_periodic_saving_and_save_now persist
   in
   let when_rebuilding () =
@@ -48,7 +48,7 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
   in
   let bs = Persist.build_persist persist in
   Build.build_forever config progress
-    ~jr_spec ~top_level_demands fs bs ~when_polling ~when_rebuilding
+    ~jr_spec ~top_level_demands fs bs ~save_db_now ~when_rebuilding
 
 let install_signal_handlers () =
   trace "install_signal_handlers..";
@@ -61,8 +61,20 @@ let install_signal_handlers () =
 (* for pre-init_logging errors *)
 let error fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt
 
+module For_user = struct
+
+  let the_installed_config = ref None
+  let install_config_for_user_rules config = the_installed_config := Some config
+
+  let config() =
+    match !the_installed_config with
+    | Some config -> config
+    | None -> assert false
+
+end
+
 let main config =
-  Description.For_user.install_config_for_user_rules config;
+  For_user.install_config_for_user_rules config;
 
   (* The jenga root discovery must run before we call Parallel.init *)
   let root_dir,jr_spec =

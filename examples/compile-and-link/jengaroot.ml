@@ -74,8 +74,8 @@ let link_files_by_concatenation ~sources ~target =
 let name_of_path path =
   fst (String.rsplit2_exn (Path.basename path) ~on:'.')
 
-let scheme =
-  Scheme.create ~tag:"the-scheme" (fun ~dir ->
+let scheme ~dir =
+  Scheme.rules_dep (
     (* Rule setup depends on all sources found in the directory *)
     let dot1s = Glob.create ~dir "*.1" in
     let n_max = 3 in
@@ -99,5 +99,5 @@ let scheme =
     return (compile_rules @ [link_rule; default_rule;])
   )
 
-let env = Env.create ["**", Some scheme]
+let env = Env.create scheme
 let setup () = Deferred.return env

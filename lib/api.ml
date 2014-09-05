@@ -13,17 +13,16 @@ module Reflected = Reflected
 module Reflect = Reflect
 
 module Rule = Rule
-module Generator = Description.Generator
-module Scheme = Description.Scheme
+module Scheme = Scheme
 module Env = Env
 
-let verbose() = Config.verbose (Description.For_user.config ())
+let verbose() = Config.verbose (Run.For_user.config ())
 
 exception Non_zero_status_from_action_run_now
 
 let run_action_now_output ~output action =
   let job = Action.job action in
-  let config = Description.For_user.config() in
+  let config = Run.For_user.config() in
   let need = "run_now" in
   let putenv = [] in
   Job.run job ~config ~need ~putenv ~output >>= function
@@ -36,3 +35,5 @@ let run_action_now =
 
 let run_action_now_stdout =
   run_action_now_output ~output:Job.Output.stdout
+
+let _ = Run.main

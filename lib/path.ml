@@ -111,7 +111,7 @@ module Rel = struct
     | _ -> extend dir ~seg
 
   let relative ~dir s =
-    if starts_with_slash s then failwithf "Path.relative, starts with / - %s" s ();
+    if starts_with_slash s then failwithf "Path.Rel.relative, starts with / - %s" s ();
     let segs = String.split s ~on:'/' in
     List.fold segs ~init:dir ~f:(fun dir seg -> relative_seg ~dir ~seg)
 
@@ -154,7 +154,9 @@ module Abs : sig
   type t with sexp, sexp, compare, bin_io
   val create : string -> t
   val to_string : t -> string
-  val relative : dir:t -> string -> t
+  val relative_seg : dir:t -> string -> t
+  val the_root : unit -> t
+  val dirname : t -> t
 
 end = struct
 
@@ -167,8 +169,16 @@ end = struct
 
   let to_string t = t
 
-  let relative ~dir s =
-    dir ^/ s
+  let the_root () = Root.get()
+
+  let dirname t =  Filename.dirname t
+
+  let relative_seg ~dir seg =
+    match seg with
+    | "" -> dir (* "foo//bar" == "foo/bar" *)
+    | "." -> dir
+    | ".." -> dirname dir
+    | _ -> dir ^/ seg
 
 end
 
@@ -208,10 +218,24 @@ let to_absolute_string t =
 
 let absolute s = of_absolute (Abs.create s)
 
-let relative ~dir s =
+let relative_seg ~dir ~seg =
   match (case dir) with
-  | `relative dir -> of_relative (Rel.relative ~dir s)
-  | `absolute dir -> of_absolute (Abs.relative ~dir s)
+  | `absolute dir -> of_absolute (Abs.relative_seg ~dir seg)
+  | `relative dir ->
+    match seg with
+    | "" -> of_relative dir (* "foo//bar" == "foo/bar" *)
+    | "." -> of_relative dir
+    | ".." ->
+      if Rel.is_root dir
+      then of_absolute (Abs.dirname (Abs.the_root ()))
+      else of_relative (Rel.dirname dir)
+    | _ ->
+      of_relative (Rel.extend dir ~seg)
+
+let relative ~dir s =
+  if starts_with_slash s then failwithf "Path.relative, starts with / - %s" s ();
+  let segs = String.split s ~on:'/' in
+  List.fold segs ~init:dir ~f:(fun dir seg -> relative_seg ~dir ~seg)
 
 let relative_or_absolute ~dir s =
   if starts_with_slash s

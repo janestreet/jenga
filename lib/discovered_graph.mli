@@ -11,7 +11,7 @@ module Item : sig
   | Root
   | Goal of Goal.t
   | Reflect of Path.t
-  | Gen_key of Gen_key.t
+  (*| Buildable of Path.t*)
 
   val to_string : t -> string
 

@@ -294,7 +294,7 @@ module Ocaml_version = struct
 
     *)
 
-    [ 3; 4; 29; 41; 44; 45; 48 ]
+    [ 3; 4; 29; 40; 41; 42; 44; 45; 48 ]
   ;;
 
   let ocamloptflags = []
@@ -623,11 +623,12 @@ let delete_tmpdir () =
           (sprintf "rm -rf %s; mkdir -p %s # %d"
              tmpdir tmpdir (Pid.to_int pid))))
 
-let setup_dot_ocaml_bin =
-  Scheme.create ~tag:".omake-ocaml-bin" (fun ~dir ->
-    assert (dir = Path.the_root);
-    delete_tmpdir () *>>| fun () ->
-    [write_string_rule ocaml_bin ~target:dot_ocaml_bin]
+let setup_dot_ocaml_bin ~dir =
+  Scheme.rules_dep (
+    if not (dir = Path.the_root) then return [] else (
+      delete_tmpdir () *>>| fun () ->
+      [write_string_rule ocaml_bin ~target:dot_ocaml_bin]
+    )
   )
 
 (*----------------------------------------------------------------------
@@ -674,8 +675,8 @@ let generate_jbuild_from_omakefile ~dir =
                ~args:["jbuild.gen"]
     )
 
-let setup_jbuild_generated =
-  Scheme.create ~tag:"jbuild.gen" (fun ~dir ->
+let setup_jbuild_generated ~dir=
+  Scheme.rules_dep (
     let omakefile = relative ~dir "OMakefile" in
     Dep.file_exists omakefile *>>| function
     | true -> [generate_jbuild_from_omakefile ~dir]
@@ -958,7 +959,7 @@ end = struct
 
   let libname_from_liblink_path ~dir =
     match String.rsplit2 (Path.to_string dir) ~on:'/' with
-    | None -> failwith "libname_from_liblink_path"
+    | None -> failwithf "libname_from_liblink_path: %s" (Path.to_string dir) ()
     | Some (_,name) -> name
 
   let make_liblink_rule ~remote_dir ~lib ~name =
@@ -2457,19 +2458,20 @@ let pack =
 let hg_version_out = root_relative "hg_version.out"
 let hg_version_sh = root_relative "bin/hg_version.sh"
 
-let hg_version_out_rule ~dir =
-  Rule.create ~targets:[hg_version_out] (
-    let hg_paths = [] in
-    let deps = (Dep.path hg_version_sh :: List.map hg_paths ~f:Dep.path) in
-    Dep.all_unit deps *>>= fun () ->
-    let action =
-      bashf ~dir "%s %s > %s"
-        (Path.to_string hg_version_sh)
-        (if version_util_support then "" else "--no-version-util")
-        (basename hg_version_out)
-    in
-    return action
-  )
+let hg_version_out_rules ~dir =
+  if dir <> Path.the_root then [] else [
+    Rule.create ~targets:[hg_version_out] (
+      let hg_paths = [] in
+      let deps = (Dep.path hg_version_sh :: List.map hg_paths ~f:Dep.path) in
+      Dep.all_unit deps *>>= fun () ->
+      let action =
+        bashf ~dir "%s %s > %s"
+          (Path.to_string hg_version_sh)
+          (if version_util_support then "" else "--no-version-util")
+          (basename hg_version_out)
+      in
+      return action)
+  ]
 
 let hg_version_base ~base = base ^ ".hg_version"
 
@@ -3868,7 +3870,7 @@ let directory_rules dc ~dir jbuilds =
     ];
     gen_build_rules dc ~dir jbuilds;
     generate_dep_rules dc ~dir jbuilds;
-    [hg_version_out_rule ~dir];
+    hg_version_out_rules ~dir;
     inline_tests_rules dc ~dir;
     inline_bench_rules dc ~dir;
     merlin_rules dc ~dir;
@@ -3880,7 +3882,7 @@ let directory_rules dc ~dir jbuilds =
 
 module Libmap_sexp : sig
 
-  val setup : Scheme.t
+  val setup : dir:Path.t -> Scheme.t
   val get : Libmap.t Dep.t
 
 end = struct
@@ -3903,10 +3905,10 @@ end = struct
       write_string_action (Sexp.to_string_hum sexp) ~target
     )
 
-  let setup =
-    Scheme.create ~tag:"libmap.sexp" (fun ~dir ->
-      return [libmap_sexp_rule ~dir]
-    )
+  let setup ~dir =
+    Scheme.rules [
+      libmap_sexp_rule ~dir
+    ]
 
   let load path =
     read_then_convert_string_via_reader
@@ -3929,11 +3931,12 @@ end
  setup_liblinks
 ----------------------------------------------------------------------*)
 
-let setup_liblinks =
-  Scheme.create ~tag:"liblinks" (fun ~dir ->
-    Libmap_sexp.get *>>= fun libmap ->
-    LL.rules ~dir libmap
-  )
+let setup_liblinks ~dir =
+  Scheme.rules_dep (
+    if dirname dir <> root_relative "lib" then return [] else (
+      Libmap_sexp.get *>>= fun libmap ->
+      LL.rules ~dir libmap
+    ))
 
 (*----------------------------------------------------------------------
   autogen: determine from rule targets (& ocamllex/yacc)
@@ -4058,10 +4061,10 @@ let create_directory_context ~dir jbuilds =
   in
   return dc
 
-let setup_main =
+let setup_main ~dir =
   (* Tag renamed: main -> main2 to workaround incorrect stale build artifact removal of
      libmap.sexp which used to be in this scheme but has now moved to a separate scheme *)
-  Scheme.create ~tag:"main2" (fun ~dir ->
+  Scheme.rules_dep (
     User_or_gen_config.load ~dir *>>= fun jbuilds ->
     (* If the check breaks, it will break as soon as the jbuild is loaded. It prevents
        building any files in a directory that is required by the current targets without
@@ -4127,18 +4130,19 @@ let env =
     )
     ~build_begin
     ~build_end
-    [
-      ".omake-ocaml-bin"                    , Some setup_dot_ocaml_bin;
-      "**jbuild-ignore"                     , None;
-      "**jbuild"                            , None;
-      "**OMakefile"                         , None;
-      "bin/*"                               , None;
-      "**/.hg/**"                           , None;
-      "**/jbuild.gen"                       , Some setup_jbuild_generated;
-      "libmap.sexp"                         , Some Libmap_sexp.setup;
-      "lib/*/*"                             , Some setup_liblinks;
-      "**"                                  , Some setup_main;
-    ]
+    (fun ~dir -> Scheme.switch_glob [
+      ".omake-ocaml-bin"                    , setup_dot_ocaml_bin ~dir;
+      "**jbuild-ignore"                     , Scheme.no_rules;
+      "**jbuild"                            , Scheme.no_rules;
+      "**OMakefile"                         , Scheme.no_rules;
+      "bin/*"                               , Scheme.no_rules;
+      "**/.hg/**"                           , Scheme.no_rules;
+      "**/jbuild.gen"                       , setup_jbuild_generated ~dir;
+      "libmap.sexp"                         , Libmap_sexp.setup ~dir;
+      "lib/*/*"                             , setup_liblinks ~dir;
+    ] ~def:(
+      setup_main ~dir)
+    )
 
 let setup () =
   Deferred.return env

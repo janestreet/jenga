@@ -6,6 +6,8 @@ open Async.Std
 
 include module type of Dep_type
 
+val to_string : 'a t -> string (* for debugging *)
+
 val return : 'a -> 'a t
 val bind : 'a t -> ('a -> 'b t) -> 'b t
 val map : 'a t -> ('a -> 'b) -> 'b t
@@ -25,14 +27,18 @@ val source_if_it_exists : Path.t -> unit t
 val contents : Path.t -> string t
 val contents_cutoff : Path.t -> string t
 
-val glob_listing : Fs.Glob.t -> Path.t list t
-val glob_change : Fs.Glob.t -> unit t
+val fs_glob_listing : Fs.Glob.t -> Path.t list t
+val fs_glob_change : Fs.Glob.t -> unit t
 
 val subdirs : dir:Path.t -> Path.t list t
 val file_exists : Path.t -> bool t
 
+val buildable_targets : dir:Path.t -> Path.t list t
+
+val glob_listing : Fs.Glob.t -> Path.t list t
+val glob_change : Fs.Glob.t -> unit t
+
+
 module List : sig
   val concat_map : 'a list -> f:('a -> 'b list t) -> 'b list t
 end
-
-val buildable_targets : dir:Path.t -> Path.t list t

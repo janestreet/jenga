@@ -4,7 +4,7 @@ hello-explicit
     A first example of using the jenga API.
     This is really an `anti' example showing how not to use jenga.
 
-make-style
+simple-make-style
 
     Shows how jenga can be setup to read simple static rule triple
     from a config file in a simple/terse make-style format.
@@ -24,9 +24,27 @@ compile-and-link
 
 simple-ocaml-build
 
-    An example to come soon...
+    Compiles and links a directory of .ml/i, using ocamldep for dependency discovery
 
+    
 js-build-style
 
     Build JS released packages using a jengaroot.ml based on JS's
     internal build rules.
+
+    
+better-make-style
+
+    Example to show the new fixpoint based discovery of buildable_targets
+    Using make-style config to drive.
+    
+    Improvements over `simple-make-style' include
+    - glob-dependencies (i.e. *.o)
+    - percent style rules (%.o : %.c)
+    - definition of @$ $< etc
+
+    This example also included rules to extract a real Makefile from jenga's rules,
+    forcing the build of only what is needed to discover the full static build.
+
+    jenga Makefile.extracted-from-jenga
+    make -f Makefile.extracted-from-jenga

@@ -1,3 +1,9 @@
+## 111.31.00
+
+- Switched API to composable generator schemes.
+- Support "-api" flag to show the embedded API.
+- New examples.
+
 ## 111.28.00
 
 - Fixed problem that caused `rule failed to generate targets`.

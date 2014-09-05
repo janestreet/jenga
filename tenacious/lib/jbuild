@@ -1,0 +1,8 @@
+(library
+ ((name tenacious_lib)
+  ;; used by jenga; dispatches to either:
+  ;; - existing ("sample" based) implementation, or
+  ;; - work in progress ("lifetime" based) implementation
+  (libraries (core async
+              tenacious_sample_lib
+              tenacious_lifetime_lib))))
