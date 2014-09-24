@@ -11,7 +11,7 @@ module Item : sig
   | Root
   | Goal of Goal.t
   | Reflect of Path.t
-  (*| Buildable of Path.t*)
+  | Dep_scheme of int
 
   val to_string : t -> string
 

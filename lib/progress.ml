@@ -163,6 +163,12 @@ module Snap = struct
         t.act
         (Finish_time_estimator.estimated_finish_time_string estimator)
 
+  let finished t =
+    Int.(<=) t.counts.Counts.todo 0
+
+  let error_code t =
+    t.counts.Counts.error
+
 end
 
 let all_effort =

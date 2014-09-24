@@ -10,13 +10,13 @@ module Item = struct
   | Root
   | Goal of Goal.t
   | Reflect of Path.t
-  (*| Buildable of Path.t*)
+  | Dep_scheme of int
 
   let to_string = function
     | Root -> "ROOT"
     | Goal goal -> sprintf "GOAL: %s" (Goal.to_string goal)
     | Reflect path -> sprintf "REFLECT: %s" (Path.to_string path)
-    (*| Buildable dir -> sprintf "BUILDABLE: %s" (Path.to_string dir)*)
+    | Dep_scheme dep_u -> sprintf "DEP-SCHEME: %d" dep_u
 
 end
 

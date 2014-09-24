@@ -472,7 +472,7 @@ module Dep_scheme_key = struct
 end
 
 module Scheme_memo = struct
-  type t = Scheme.t Builder.t Dep_scheme_key.Table.t
+  type t = (Scheme.t Builder.t * DG.Node.t) Dep_scheme_key.Table.t
 end
 
 
@@ -1246,11 +1246,13 @@ let run_action_for_stdout_if_necessary
     mtimes_of_proxy_map t deps *>>= fun mtimes ->
     let job = Action.job action in
     let run_and_cache rr =
-      run_action_for_stdout t rr env action job *>>= fun stdout ->
-      check_mtimes_unchanged t mtimes *>>= fun () ->
-      let output_proxy = {Output_proxy. deps; stdout;} in
-      Hashtbl.set (Misc.mod_persist (actioned t)) ~key:job ~data:output_proxy;
-      return stdout
+      Builder.uncancellable (
+        run_action_for_stdout t rr env action job *>>= fun stdout ->
+        check_mtimes_unchanged t mtimes *>>= fun () ->
+        let output_proxy = {Output_proxy. deps; stdout;} in
+        Hashtbl.set (Misc.mod_persist (actioned t)) ~key:job ~data:output_proxy;
+        return stdout
+      )
     in
     match (Hashtbl.find (actioned t) job) with
     | None -> run_and_cache RR.No_record_of_being_run_before
@@ -1523,7 +1525,8 @@ let build_dependent_scheme : (
   fun t (dep_u,scheme_dep) ->
     jenga_root t *>>= fun (_,scheme_memo) ->
     let key = {Dep_scheme_key. dep_u; fixpoint_iter = t.fixpoint_iter} in
-    share_builder ~memo:scheme_memo ~key ~f:(fun () ->
+    let item = DG.Item.Dep_scheme dep_u in
+    share_and_check_for_cycles t ~key ~memo:scheme_memo ~item ~f:(fun t ->
       build_depends t scheme_dep *>>| fun (scheme,__proxy_map) ->
       scheme
     )

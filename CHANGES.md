@@ -1,7 +1,20 @@
+## 112.01.00
+
+- Don't show noisy `glob..changed` messages except with `-show-glob-changed` flag.
+- Support shared build rules via `${jenga}/share`.
+- Detect cycle in dep scheme instead of hanging.
+- Made standalone actions atomic, just like actions associated with
+  target files.
+
+  Running actions and recording the result in the persistent
+  `.jenga.db` should be performed atomically for standalone actions,
+  as it is for actions which are associated with target files
+
+
 ## 111.31.00
 
 - Switched API to composable generator schemes.
-- Support "-api" flag to show the embedded API.
+- Support `-api` flag to show the embedded API.
 - New examples.
 
 ## 111.28.00

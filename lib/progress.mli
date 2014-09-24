@@ -43,7 +43,8 @@ module Snap : sig
 
   val to_string : t -> [`omake_style | `jem_style ] -> string
   val to_effort_string : t -> string
-
+  val finished: t -> bool
+  val error_code: t -> int
 end
 
 val snap : t -> Snap.t

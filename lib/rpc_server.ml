@@ -33,7 +33,7 @@ let really_go ~root_dir progress =
       )
   in
   let implementations =
-    Rpc.Implementations.create ~on_unknown_rpc:`Ignore ~implementations: [
+    Rpc.Implementations.create ~on_unknown_rpc:`Close_connection ~implementations: [
       progress_stream;
     ]
   in
