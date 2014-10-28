@@ -12,7 +12,7 @@ let simple_rule ~targets ~deps ~action =
     action)
 
 let bash ~dir command =
-  Action.shell ~dir ~prog:"bash" ~args:["-c"; command]
+  Action.process ~dir ~prog:"bash" ~args:["-c"; command]
 
 let uncomment s =
   match String.lsplit2 s ~on:'#' with None -> s | Some (s,_comment) -> s

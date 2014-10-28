@@ -77,19 +77,17 @@ let to_extra_lines = function
   | Mtimes_changed _
     -> []
 
-  | Running_job_raised exn
-  | Usercode_raised exn
-    -> [Exn.to_string exn]
-
-  | File_read_error  error
-  | Digest_error error
-    -> [Error.to_string_hum error]
+  | Running_job_raised sexp
+  | Usercode_raised sexp
+  | File_read_error sexp
+  | Digest_error sexp
+    -> [Sexp.to_string sexp]
 
   | Rule_failed_to_generate_targets paths
     -> List.map paths ~f:(fun path -> "- " ^ Path.Rel.to_string path)
 
-let messages ~tag t =
-  Message.error "%s: %s" tag (to_string_one_line t);
+let messages ~need t =
+  Message.error "%s: %s" need (to_string_one_line t);
   List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s)
 
 let message_summary config ~need t =

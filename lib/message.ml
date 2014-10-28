@@ -14,7 +14,7 @@ let build_system_message_tag =
 
 module Q : sig
 
-  val shell_escape : arg:string -> string
+  val shell_escape : string -> string
 
 end = struct
 
@@ -31,7 +31,7 @@ end = struct
     | c -> String.make 1 c
     ) ^ "'"
 
-  let shell_escape ~arg:s =
+  let shell_escape s =
     (* quote a string (if necessary) to prevent interpretation of any chars which have a
        special meaning to bash *)
     if String.exists s ~f:is_special_char_to_bash
@@ -79,27 +79,27 @@ module Job_start = struct
     where : string;
     prog : string;
     args : string list;
-  } with fields, sexp_of
+  } with bin_io, fields, sexp_of
 end
 
 module Job_finish = struct
   type t = {
     outcome : [`success | `error of string];
     duration : Time.Span.t;
-  } with fields, sexp_of
+  } with bin_io, fields, sexp_of
 end
 
 module Job_output = struct
   type t = {
     stdout : string list;
     stderr : string list;
-  } with fields, sexp_of
+  } with bin_io, fields, sexp_of
 end
 
 module Job_summary = struct
 
   type t = Job_start.t * Job_finish.t * Job_output.t
-  with sexp_of
+  with bin_io, sexp_of
 
   let output_with ~put (
     {Job_start. where; need; stdout_expected=_; prog; args; uid=_},
@@ -110,7 +110,7 @@ module Job_summary = struct
     (* print out the command in a format suitable for cut&pasting into bash
        (except for the leading "+")
     *)
-    let args = List.map args ~f:(fun arg -> Q.shell_escape ~arg) in
+    let args = List.map args ~f:(fun arg -> Q.shell_escape arg) in
     put (sprintf "+ %s %s" prog (String.concat ~sep:" " args));
     List.iter stdout ~f:put;
     List.iter stderr ~f:put;

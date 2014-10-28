@@ -31,6 +31,7 @@ module Glob : sig (* glob specification *)
   include Hashable with type t := t
   val dir : t -> Path.t
   val pattern : t -> Pattern.t
+  val kind_allows_file : t -> bool
   val to_string : t -> string
   val create : dir:Path.t -> ?kinds: Kind.t list -> string -> t
   val create_from_path : kinds:Kind.t list option -> Path.t -> t
@@ -48,7 +49,7 @@ module Persist : sig
 end
 
 type t (* handle to the file-system *)
-val create : Config.t -> Persist.t -> path_locked:(Path.Rel.t -> bool) -> t Deferred.t
+val create : Config.t -> Persist.t -> t Deferred.t
 
 module Contents_result : sig
   type t = [
@@ -86,7 +87,9 @@ val digest_file : t -> file:Path.t -> Digest_result.t Tenacious.t
 val list_glob : t -> Glob.t -> Listing_result.t Tenacious.t
 val ensure_directory : t -> dir:Path.t -> Ensure_directory_result.t Tenacious.t
 
-val sync_inotify_delivery : t -> sync_contents:string -> 'a Tenacious.t -> 'a Tenacious.t
+(** Locks [targets] for writing and masks the corresponding 'file changed' messages *)
+val lock_targets_and_mask_updates :
+  t -> targets:Path.Rel.t list -> (unit -> 'a Deferred.t) -> 'a Deferred.t
 
 val clear_watcher_cache : t -> Path.t -> unit
 

@@ -22,7 +22,9 @@ let to_string : type a. a t -> string = function
 | Reflect_path _x -> "Reflect_path"
 | Reflect_alias _x -> "Reflect_alias"
 | Reflect_putenv -> "Reflect_putenv"
+| On_filesystem path -> sprintf "On_filesystem: %s" (Path.to_string path)
 | Buildable_targets path -> sprintf "Buildable_targets: %s" (Path.to_string path)
+| Source_files path -> sprintf "Source_files: %s" (Path.to_string path)
 | Glob_listing_OLD x -> sprintf "Glob_listing_OLD: %s" (Glob.to_string x)
 | Glob_listing x -> sprintf "Glob_listing: %s" (Glob.to_string x)
 | Glob_change_OLD x -> sprintf "Glob_change_OLD: %s" (Glob.to_string x)
@@ -71,8 +73,14 @@ let action a =
 let contents_cutoff p =
   cutoff ~equal:String.equal (contents p)
 
+let on_filesystem ~dir =
+  On_filesystem dir *>>| Path.Set.to_list
+
 let buildable_targets ~dir =
   Buildable_targets dir *>>| Path.Set.to_list
+
+let source_files ~dir =
+  Source_files dir *>>| Path.Set.to_list
 
 let glob_listing g = Glob_listing g *>>| Path.Set.to_list
 let glob_change g = Glob_change g

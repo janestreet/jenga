@@ -11,6 +11,7 @@ val re_enable_periodic_saving : t -> unit
 
 val fs_persist : t -> Fs.Persist.t
 val build_persist : t -> Build.Persist.t
+val quality : t -> Build.Persistence_quality.t
 
 (* internal state of the persist module, used for offline inspection *)
 module State : sig

@@ -330,6 +330,7 @@ module Listing : sig
     val create : kinds:Kind.t list option -> Pattern.t -> t
     val to_string : t -> string
     val pattern : t -> Pattern.t
+    val kind_allows_file : t -> bool
     val compare : t -> t -> int
   end
 
@@ -372,57 +373,57 @@ end = struct
   let run_ls ~dir =
     File_access.enqueue (fun () ->
       let path_string = Path.to_string dir in
-      Effort.track ls_counter (fun () ->
-        try_with (fun () -> Unix.opendir path_string) >>= function
-        | Error exn -> return (Error (Error.of_exn exn)) (* opendir failed *)
-        | Ok dir_handle ->
-          (* opendir succeeded, we must be sure to close *)
-          let close () =
-            try_with (fun () -> Unix.closedir dir_handle) >>| function | Ok () -> ()
-            | Error exn ->
-              Message.error "Unix.closedir failed: %s\n%s" path_string (Exn.to_string exn)
-          in
-          (* catch all exns while processing so we can close in every case *)
-          try_with (fun () ->
-            let rec loop acc =
-              try_with (fun () -> Unix.readdir dir_handle) >>= function
-              | Ok "." -> loop acc
-              | Ok ".." -> loop acc
-              | Ok base ->
-                begin
-                  let path_string = Path.to_string dir ^ "/" ^ base in
-                  unix_lstat path_string >>= function
-                  | Error _e ->
-                    (* File disappeared between readdir & lstat system calls.
-                       Handle as if readdir never told as about it *)
-                    loop acc
-                  | Ok u ->
-                    let kind = u.Unix.Stats.kind in
-                    loop ({Elem.base;kind} :: acc)
-                end
+      Locking.lock_directory_for_listing ~dir (fun () ->
+        Effort.track ls_counter (fun () ->
+          try_with (fun () -> Unix.opendir path_string) >>= function
+          | Error exn -> return (Error (Error.of_exn exn)) (* opendir failed *)
+          | Ok dir_handle ->
+            (* opendir succeeded, we must be sure to close *)
+            let close () =
+              try_with (fun () -> Unix.closedir dir_handle) >>| function | Ok () -> ()
               | Error exn ->
-                match Monitor.extract_exn exn with
-                | End_of_file ->
-                  (* no more filenames - normal; we are finished listing *)
-                  return { dir; listing = acc }
-                | exn ->
-                  (* some other unexpected error; raise to outer handler *)
-                  raise exn
+                Message.error "Unix.closedir failed: %s\n%s" path_string (Exn.to_string exn)
             in
-            loop []
+            (* catch all exns while processing so we can close in every case *)
+            try_with (fun () ->
+              let rec loop acc =
+                try_with (fun () -> Unix.readdir dir_handle) >>= function
+                | Ok "." -> loop acc
+                | Ok ".." -> loop acc
+                | Ok base ->
+                  begin
+                    let path_string = Path.to_string dir ^ "/" ^ base in
+                    unix_lstat path_string >>= function
+                    | Error _e ->
+                      (* File disappeared between readdir & lstat system calls.
+                         Handle as if readdir never told as about it *)
+                      loop acc
+                    | Ok u ->
+                      let kind = u.Unix.Stats.kind in
+                      loop ({Elem.base;kind} :: acc)
+                  end
+                | Error exn ->
+                  match Monitor.extract_exn exn with
+                  | End_of_file ->
+                    (* no more filenames - normal; we are finished listing *)
+                    return { dir; listing = acc }
+                  | exn ->
+                    (* some other unexpected error; raise to outer handler *)
+                    raise exn
+              in
+              loop []
 
-          ) >>= fun res ->
-          (* convert exn -> Or_error *)
-          let ore =
-            match res with
-            | Error exn -> Error (Error.of_exn exn)
-            | Ok x -> Ok x
-          in
-          (* close in every case *)
-          close () >>= fun () ->
-          return ore
-      )
-    )
+            ) >>= fun res ->
+            (* convert exn -> Or_error *)
+            let ore =
+              match res with
+              | Error exn -> Error (Error.of_exn exn)
+              | Ok x -> Ok x
+            in
+            (* close in every case *)
+            close () >>= fun () ->
+            return ore
+        )))
 
   let paths t =
     Path.Set.of_list (
@@ -439,6 +440,11 @@ end = struct
     let create ~kinds pat = { kinds; pat; }
 
     let pattern t = t.pat
+
+    let kind_allows_file t =
+      match t.kinds with
+      | None -> true
+      | Some kinds -> List.mem kinds `File
 
     let to_string t =
       sprintf "%s %s"
@@ -1071,6 +1077,7 @@ module Glob : sig
 
   val dir : t -> Path.t
   val pattern : t -> Pattern.t
+  val kind_allows_file : t -> bool
 
   val exec : t ->
     Config.t ->
@@ -1107,6 +1114,7 @@ end = struct
 
   let dir t = t.dir
   let pattern t = Listing.Restriction.pattern t.restriction
+  let kind_allows_file t = Listing.Restriction.kind_allows_file t.restriction
 
   let to_string t =
     sprintf "glob: %s/ %s"
@@ -1291,7 +1299,7 @@ let tmp_jenga =
 module Fs : sig
 
   type t
-  val create : Config.t -> Persist.t -> path_locked:(Path.Rel.t -> bool) -> t Deferred.t
+  val create : Config.t -> Persist.t -> t Deferred.t
 
   val contents_file :
     t ->
@@ -1324,12 +1332,12 @@ end = struct
     persist : Persist.t;
   } with fields
 
-  let create config persist ~path_locked =
+  let create config persist =
     let nono = not System.has_inotify || Config.no_notifiers config in
     let ignore = Path.is_special_jenga_path in
     let expect path =
       match Path.case path with
-      | `relative rel -> path_locked rel
+      | `relative rel -> Locking.is_action_running_for_target rel
       | `absolute abs -> String.is_prefix ~prefix:tmp_jenga (Path.Abs.to_string abs)
     in
     Watcher.create ~nono ~ignore ~expect >>= fun watcher ->
@@ -1375,7 +1383,7 @@ let mtime_file_right_now ~file =
 ----------------------------------------------------------------------*)
 
 let pid_string = Pid.to_string (Unix.getpid ())
-let genU1 = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u)
+let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u)
 
 let created_but_not_deleted = Bag.create ()
 let () =
@@ -1403,11 +1411,12 @@ let heart_broken ~timeout heart =
     choice (Clock.after timeout) (fun () -> `timeout);
   ]
 
-let sync_inotify_delivery
-    : (t -> sync_contents:string -> 'a Tenacious.t -> 'a Tenacious.t) =
-
-  (* After a tenacious is run, synchronise until all inotify events triggered while
-     running have been delivered (and acted upon) by this process
+(** Wait for all inotify events generated by actions up until
+    now to get processed.
+*)
+let sync_inotify_delivery : (t -> unit Deferred.t) =
+  (* After a deferred computation is run, synchronise until all inotify events triggered
+     while running have been delivered (and acted upon) by this process
 
      Do this by causing and waiting for a specific file-events:
      - the creation & removal of a temp file especially created for the purpose.
@@ -1420,17 +1429,13 @@ let sync_inotify_delivery
      - a counter (unique to the pid), incremented for each synced tenacious
      - a counter (unique to a synced tenacious), incremented for each rerun.
   *)
-  fun t ~sync_contents tenacious ->
-    if Fs.nono t then tenacious else (* no notifiers, so cant/dont sync *)
-    let u1 = genU1 () in
-    let genU2 = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-    Tenacious.lift (fun () ->
-      let u2 = genU2 () in
-      let path_string = sprintf "%s/jenga-%s-%d-%d.sync" tmp_jenga pid_string u1 u2 in
+  fun t ->
+    if Fs.nono t then return () else (* no notifiers, so cant/dont sync *)
+      let u = genU () in
+      let path_string = sprintf "%s/jenga-%s-%d.sync" tmp_jenga pid_string u in
       let path = Path.absolute path_string in
       (* Setup watcher for sync-file *)
       watch_sync_file t path >>= fun created_heart ->
-
       (* setup remove()... *)
       let remove () =
         (* ensure creation event has happened.. *)
@@ -1438,7 +1443,6 @@ let sync_inotify_delivery
         | `broken -> ()
         | `timeout -> Message.error "lost inotify event for creation of: %s" path_string
         end >>= fun () ->
-
         (* Setup new watcher; unlink the file; wait for the event *)
         watch_sync_file t path >>= fun deleted_heart ->
         File_access.enqueue (fun () ->
@@ -1449,26 +1453,27 @@ let sync_inotify_delivery
         | `timeout -> Message.error "lost inotify event for unlink of: %s" path_string
         end
       in
-
       (* create the sync-file *)
       let bag_elem = Bag.add created_but_not_deleted (path_string,remove) in
-
       unless_shutting_down ~f:(fun () ->
         File_access.enqueue (fun () ->
-          Writer.save path_string ~contents:sync_contents
+          Writer.save path_string ~contents:""
         )
       ) >>= fun () ->
-
-      (* run the tenacious *)
-      Tenacious.exec tenacious >>= fun res ->
-
       (* remove the sync-file.. *)
       unless_shutting_down ~f:(fun () ->
         Bag.remove created_but_not_deleted bag_elem;
         remove ()
-      ) >>= fun () ->
-
+      )
       (* Now we are synchronised! *)
-      return res
-    )
 
+let lock_targets_and_mask_updates t ~targets f =
+  Locking.lock_targets_for_action ~targets (fun () ->
+    f () >>= fun res ->
+    (* After running an action, synchronise until all inotify events triggered while the
+       action was run have been delivered (and acted upon) by this process.
+
+       This allows [fs.ml] to call [Locking.is_action_running_for_target] to avoid
+       writing "changed" message for files targeted by this action. *)
+    sync_inotify_delivery t >>| fun () ->
+    res)

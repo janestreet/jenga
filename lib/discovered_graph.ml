@@ -11,12 +11,16 @@ module Item = struct
   | Goal of Goal.t
   | Reflect of Path.t
   | Dep_scheme of int
+  | Artifacts of Path.t
+  | Buildable of Path.t
 
   let to_string = function
     | Root -> "ROOT"
     | Goal goal -> sprintf "GOAL: %s" (Goal.to_string goal)
     | Reflect path -> sprintf "REFLECT: %s" (Path.to_string path)
     | Dep_scheme dep_u -> sprintf "DEP-SCHEME: %d" dep_u
+    | Artifacts dir -> sprintf "ARTIFACTS: %s" (Path.to_string dir)
+    | Buildable dir -> sprintf "BUILDABLE: %s" (Path.to_string dir)
 
 end
 

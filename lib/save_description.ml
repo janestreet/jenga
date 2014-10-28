@@ -22,10 +22,10 @@ let bashf ~dir fmt =
 let job {contents;target;chmod_x} =
     (* By escaping newlines & using "echo -e", we avoid embedded newlines which are tricky
        to escape if we later extract a Makefile *)
-  let base = Message.Q.shell_escape ~arg:(Path.basename target) in
+  let base = Message.Q.shell_escape (Path.basename target) in
   bashf ~dir:(Path.dirname target)
     "echo -n -e %s > %s%s"
-    (Message.Q.shell_escape ~arg:(escape_backslashes_and_newlines contents))
+    (Message.Q.shell_escape (escape_backslashes_and_newlines contents))
     base
     (if chmod_x then sprintf "; chmod +x %s" base else "")
 

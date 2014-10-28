@@ -46,8 +46,6 @@ let run t ~message ~output ~putenv ~progress ~config ~need =
 let process ~dir ~prog ~args =
   Process (Job.create ~dir ~prog ~args)
 
-let shell = process
-
 let save1 ~contents ~target ~chmod_x =
   Save (Save_description.create ~contents ~target ~chmod_x)
 

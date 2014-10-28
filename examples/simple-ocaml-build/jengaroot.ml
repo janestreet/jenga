@@ -8,7 +8,7 @@ let relative = Path.relative
 let basename = Path.basename
 let depend xs = Dep.all_unit (List.map xs ~f:Dep.path)
 
-let bash ~dir command_string = Action.shell ~dir ~prog:"bash" ~args:["-c"; command_string]
+let bash ~dir command_string = Action.process ~dir ~prog:"bash" ~args:["-c"; command_string]
 let bashf ~dir fmt = ksprintf (fun str -> bash ~dir str) fmt
 
 let read_sexp ~t_of_sexp string =

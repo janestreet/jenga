@@ -24,6 +24,7 @@ module State : sig
   val fs_persist : t -> Fs.Persist.t
   val build_persist : t -> Build.Persist.t
 
+  val load_db_with_quality : db_filename:string -> (t * Build.Persistence_quality.t) Deferred.t
   val load_db : db_filename:string -> t Deferred.t
   val save_db : t -> db_filename:string -> unit Deferred.t
 
@@ -45,11 +46,11 @@ end = struct
 
   let max_len = 800 * 1024 * 1024 (* default 100Mb is too small *)
 
-  let load_db ~db_filename =
+  let load_db_with_quality ~db_filename =
     Sys.file_exists db_filename >>= function
     | `No | `Unknown ->
       trace "load: %s: does not exist" db_filename;
-      return (empty())
+      return (empty(), `initial)
     | `Yes ->
     try_with (fun () ->
       Reader.with_file db_filename ~f:(fun r ->
@@ -62,10 +63,11 @@ end = struct
         | Ok `Eof -> trace "load: %s: `Eof" db_filename; None
         | Error exn -> trace "load: %s:\n%s" db_filename (Exn.to_string exn); None
       ) with
-      | Some t -> return t
-      | None ->
-        Message.message "format of persistent state has changed; everything will rebuild";
-        return (empty())
+      | Some t -> return (t, `good)
+      | None -> return (empty(), `format_changed)
+
+  let load_db ~db_filename =
+    load_db_with_quality ~db_filename >>| fun (x,_quality) -> x
 
   let save_db t ~db_filename =
     Effort.track Progress.persist_saves_done (fun () ->
@@ -80,6 +82,7 @@ end
 
 type t = {
   state_mem : State.t;
+  quality : Build.Persistence_quality.t;
   db_filename : string;
   mutable save_status : [ `saving of unit Deferred.t | `not_saving ];
   mutable periodic_saving_enabled : bool;
@@ -87,6 +90,7 @@ type t = {
 
 let fs_persist t = State.fs_persist t.state_mem
 let build_persist t = State.build_persist t.state_mem
+let quality t = t.quality
 
 let db_filename t = t.db_filename
 
@@ -94,11 +98,15 @@ let create ~root_dir =
   let db_filename = root_dir ^/ Misc.db_basename in
 
   trace "LOAD_DB: %s..." db_filename;
-  time_async (fun () -> State.load_db ~db_filename) >>= fun (state,duration) ->
-  trace "LOAD_DB: %s... done (%s)" db_filename (Time.Span.to_string duration);
+  time_async (fun () -> State.load_db_with_quality ~db_filename)
+  >>= fun ((state,quality),duration) ->
+  trace "LOAD_DB: %s... done (%s), quality=%s"
+    db_filename (Time.Span.to_string duration)
+    (Build.Persistence_quality.to_string quality);
 
   let t = {
     state_mem = state;
+    quality;
     db_filename;
     save_status = `not_saving;
     periodic_saving_enabled = true;

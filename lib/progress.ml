@@ -12,6 +12,7 @@ module Status = struct
   | Todo
   | Built
   | Error of Reason.t list (* empty list means failure in deps *)
+  with bin_io
 end
 
 module Need = struct
@@ -57,25 +58,12 @@ let set_status t need status =
   Hashtbl.set t.status ~key:need ~data:status
 
 let mask_unreachable t ~is_reachable_error = t.is_reachable_error <- is_reachable_error
-let unmask_everything t = t.is_reachable_error <- all_reachable
 
-let iter_masked t ~f = (* dont apply f to unreachable errors *)
+let iter_masked t ~f = (* don't apply f to unreachable errors *)
   Hashtbl.iter t.status ~f:(fun ~key ~data:status ->
     match status with
     | Status.Error _ -> if t.is_reachable_error key then f ~key ~data:status else ()
     | _ -> f ~key ~data:status
-  )
-
-let message_errors config t =
-  iter_masked t ~f:(fun ~key:need ~data:status ->
-    match status with
-    | Status.Error reasons ->
-      List.iter reasons ~f:(fun reason ->
-        match reason with
-        | Reason.Shutdown -> () (* suppress these *)
-        | _ -> Reason.message_summary config ~need:(Need.to_string need) reason
-      )
-    | _ -> ()
   )
 
 module Counts = struct
@@ -225,3 +213,33 @@ polling for file-system changes. Note: \"finished\" does not necessary
 mean that the build was successful. Trailing \"?\"s indicate jem has not
 heard from jenga for more than half a second."
 
+module Update = struct
+  (* An [Update.t] expresses the change in status for some [Need.t], or the removal of any
+     status information for a [Need.t]. *)
+  type t = Set of Need.t * Status.t | Remove of Need.t with bin_io
+
+  module State = struct
+    (* An [Update.State.t] records the state-information, as sent to a given RPC
+       client. *)
+    type t = Status.t Need.Table.t
+    let create () = Need.Table.create ()
+  end
+end
+
+let updates t state =
+  (* [update t state] computes a list of [Update.t] values (to be sent to an RPC client)
+     by comparing the current state: [t.status], with the state known by the client:
+     [state].  The client [state] is updated to reflect that it is now `up to date', for
+     next time. *)
+  let updates = Queue.create () in
+  Hashtbl.merge_into ~src:t.status ~dst:state ~f:(fun ~key src dst ->
+    if match dst with None -> true | Some dst -> not (phys_equal src dst) then
+      Queue.enqueue updates (Update.Set (key,src));
+    Some src);
+  Hashtbl.iter state ~f:(fun ~key:dst ~data:_ ->
+    if not (Hashtbl.mem t.status dst) then
+      (Hashtbl.remove state dst;
+       Queue.enqueue updates (Remove dst)));
+  Queue.to_list updates
+
+module Updates = struct type t = Update.t list with bin_io end

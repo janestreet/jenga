@@ -18,6 +18,7 @@ type t = {
   show_reconsidering : bool;
   show_glob_changed : bool;
   show_trace_messages : bool;
+  show_error_dependency_paths : bool;
   debug_discovered_graph : bool;
   prefix_time : bool;
   delay_for_dev : Time.Span.t option;

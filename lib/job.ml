@@ -19,7 +19,7 @@ let create ~dir ~prog ~args = { dir ; prog; args; }
 let dir t = t.dir
 
 let string_for_sh {dir=_;prog;args} =
-  let args = List.map args ~f:(fun arg -> Message.Q.shell_escape ~arg) in
+  let args = List.map args ~f:(fun arg -> Message.Q.shell_escape arg) in
   sprintf "%s %s" prog (String.concat ~sep:" " args)
 
 module Output = struct

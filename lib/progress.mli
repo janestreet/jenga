@@ -28,10 +28,8 @@ val create : Config.t -> t
 val enqueue_job : t -> (unit -> 'a Deferred.t) -> 'a Deferred.t
 
 val set_status : t -> Need.t -> Status.t -> unit
-val message_errors : Config.t -> t -> unit
 
 val mask_unreachable : t -> is_reachable_error:(Need.t -> bool) -> unit
-val unmask_everything : t -> unit
 
 module Snap : sig
 
@@ -52,3 +50,16 @@ val reset_effort : unit -> unit
 
 val readme : unit -> string
 
+(** A snapshot of the status table would be large. *)
+module Update : sig
+  type t = Set of Need.t * Status.t | Remove of Need.t with bin_io
+
+  module State : sig
+    type t
+    val create : unit -> t
+  end
+end
+
+module Updates : sig type t = Update.t list with bin_io end
+
+val updates : t -> Update.State.t -> Updates.t

@@ -27,5 +27,5 @@ val run : t ->
    ]
   ) Result.t Deferred.t
 
-val shell : dir:Path.t -> prog:string -> args:string list -> t
+val process : dir:Path.t -> prog:string -> args:string list -> t
 val save : ?chmod_x:unit -> string -> target:Path.t -> t

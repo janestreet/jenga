@@ -31,8 +31,7 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
   Forker.init config;
   Fs.Digester.init config;
   Persist.create_saving_periodically ~root_dir db_save_span >>= fun persist ->
-  let path_locked = Build.path_locked in
-  Fs.create config (Persist.fs_persist persist) ~path_locked >>= fun fs ->
+  Fs.create config (Persist.fs_persist persist) >>= fun fs ->
   let progress = Progress.create config in
   Rpc_server.go config ~root_dir progress >>= fun () ->
   let top_level_demands =
@@ -47,8 +46,9 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
     return (Persist.re_enable_periodic_saving persist)
   in
   let bs = Persist.build_persist persist in
+  let pq = Persist.quality persist in
   Build.build_forever config progress
-    ~jr_spec ~top_level_demands fs bs ~save_db_now ~when_rebuilding
+    ~jr_spec ~top_level_demands fs bs pq ~save_db_now ~when_rebuilding
 
 let install_signal_handlers () =
   trace "install_signal_handlers..";

@@ -3,38 +3,51 @@ open Core.Std
 open Async.Std
 
 let make_periodic_pipe_writer span ~aborted ~f =
-  let (r,w) = Pipe.create () in
-  don't_wait_for (
-    let rec loop () =
-      let value = f() in
-      choose [
-        choice aborted (fun () -> `aborted);
-        choice (
-          Pipe.write w value >>= fun () ->
-          Clock.after span
-        ) (fun () -> `again)
-      ]
-      >>= function
-      | `aborted -> return ()
-      | `again -> loop ()
-    in
-    loop ()
-  );
+  let r =
+    Pipe.init (fun w ->
+      let rec loop () =
+        let value = f () in
+        choose [
+          choice aborted (fun () -> `aborted);
+          choice
+            (
+              Pipe.write w value
+              >>= fun () ->
+              Clock.after span
+            )
+            (fun () -> `again)
+        ]
+        >>= function
+        | `aborted -> return ()
+        | `again -> loop ()
+      in
+      loop ()
+    )
+  in
   return (Ok r)
 
 let really_go ~root_dir progress =
   let progress_report_span = sec (0.3) in
   let progress_stream =
     Rpc.Pipe_rpc.implement Rpc_intf.progress_stream
-      (fun () () ~aborted ->
-        make_periodic_pipe_writer progress_report_span ~aborted ~f:(fun () ->
-          Progress.snap progress
-        )
+      (fun (_ : Progress.Update.State.t) () ~aborted ->
+         make_periodic_pipe_writer progress_report_span ~aborted ~f:(fun () ->
+           Progress.snap progress
+         )
+      )
+  in
+  let update_stream =
+    Rpc.Pipe_rpc.implement Rpc_intf.update_stream
+      (fun state () ~aborted ->
+         make_periodic_pipe_writer progress_report_span ~aborted ~f:(fun () ->
+           Progress.updates progress state
+         )
       )
   in
   let implementations =
     Rpc.Implementations.create ~on_unknown_rpc:`Close_connection ~implementations: [
       progress_stream;
+      update_stream;
     ]
   in
   match implementations with
@@ -43,9 +56,10 @@ let really_go ~root_dir progress =
     let start_server () =
       Tcp.Server.create Tcp.on_port_chosen_by_os ~on_handler_error:`Ignore
         (fun _addr reader writer ->
-          Rpc.Connection.server_with_close reader writer ~implementations
-            ~connection_state:()
-            ~on_handshake_error:`Ignore)
+           Rpc.Connection.server_with_close reader writer ~implementations
+             ~connection_state:(fun (_ : Rpc.Connection.t) ->
+               Progress.Update.State.create ())
+             ~on_handshake_error:`Ignore)
     in
     start_server () >>= fun inet ->
     let port = Tcp.Server.listening_on inet in

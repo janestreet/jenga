@@ -8,7 +8,7 @@ let ( *>>= ) = Dep.bind
 let relative = Path.relative
 
 let bash ~dir command =
-  Action.shell ~dir ~prog:"bash" ~args:["-c"; command]
+  Action.process ~dir ~prog:"bash" ~args:["-c"; command]
 
 let slice s a b = if a = b then "" else String.slice s a b
 

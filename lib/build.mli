@@ -7,6 +7,11 @@ module Persist : sig
   val create : unit -> t
 end
 
+module Persistence_quality : sig
+  type t = [`initial | `format_changed | `good]
+  val to_string : t -> string
+end
+
 module Jr_spec : sig
   type t
   val in_root_dir : t
@@ -20,10 +25,9 @@ val build_forever :
   top_level_demands : Goal.t list ->
   Fs.t ->
   Persist.t ->
+  Persistence_quality.t ->
   save_db_now:(unit -> unit Deferred.t) ->
   when_rebuilding:(unit -> unit Deferred.t) ->
   unit Deferred.t
 
 val exit_code_upon_control_c : int ref
-
-val path_locked : Path.Rel.t -> bool

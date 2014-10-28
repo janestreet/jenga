@@ -47,8 +47,40 @@ end
 
 module Action : sig
   type t
-  val shell : dir:Path.t -> prog:string -> args:string list -> t
+  (* [process ~dir ~prog ~args] - constructs an action, that when run causes a new process
+     to be created to run [prog], passing [args], in [dir].
+     No shell (sh, bash.. ) is invoked! *)
+  val process : dir:Path.t -> prog:string -> args:string list -> t
   val save : ?chmod_x:unit -> string -> target:Path.t -> t
+end
+
+module Shell : sig
+
+  (* [Shell.escape arg] quotes a string (if necessary) to avoid interpretation of
+     characters which are special to the shell.
+
+     [Shell.escape] is used internally by jenga when displaying the "+" output lines,
+     which show what commands are run; seen by the user when running [jenga -verbose] or
+     if the command results in a non-zero exit code. It is exposed in the API since it is
+     useful when constructing actions such as: [Action.progress ~dir ~prog:"bash" ~args],
+     which should ensure [args] are suitably quoted.
+
+     Examples:
+     (1) escape "hello" -> "hello"
+     (2) escape "foo bar" -> "'foo bar'"
+     (3) escape "foo'bar" -> "'foo'\\''bar'"
+
+     Note the [arg] and result strings in the above examples are expressed using ocaml
+     string literal syntax; in particular, there is only single backslash in the result of
+     example 3.
+
+     Example (1): No quoting is necessary.  Example (2): simple single quoting is used,
+     since [arg] contains a space, which is special to the shell.  Example (3): the result
+     is single quoted; the embedded single quote is handled by: un-quoting, quoting using
+     a bashslash, then re-quoting.
+  *)
+  val escape : string -> string
+
 end
 
 module Dep : sig (* The jenga monad *)
@@ -92,6 +124,11 @@ module Dep : sig (* The jenga monad *)
   end
 
   val buildable_targets : dir:Path.t -> Path.t list t
+
+  (* [source_files ~dir]
+     files_on_filesystem ~dir \ buildable_targets ~dir
+  *)
+  val source_files : dir:Path.t -> Path.t list t
 
 end
 
@@ -151,12 +188,26 @@ end
 module Env : sig
   type t = Env.t
   val create :
+    ?run_when_persist_format_has_changed:Action.t ->
     ?putenv:(string * string) list ->
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?build_begin : (unit -> unit Deferred.t) ->
     ?build_end : (unit -> unit Deferred.t) ->
+
+    (* [create ~artifacts ...]
+
+       Optional [artifacts] allows specification, on a per-directory basis, which paths
+       are to be regarded as artifacts, and hence become candidates for deletion as
+       stale-artifacts, if there is no build rule.
+
+       If [artifacts] is not provided, jenga will determine artifacts using it's own
+       knowledge of what was previously built, as recorded in .jenga.db. *)
+    ?artifacts: (dir:Path.t -> Path.t list Dep.t) ->
+
+    (* [create f] - Mandatory argument [f] specifies, per-directory, the rule-scheme. *)
     (dir:Path.t -> Scheme.t) ->
     t
+
 end
 
 val verbose : unit -> bool

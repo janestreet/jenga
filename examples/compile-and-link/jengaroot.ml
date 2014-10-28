@@ -38,7 +38,7 @@ let simple_rule ~targets ~deps ~action =
 let cp_rule ~source ~target =
   simple_rule ~targets:[target] ~deps:[Dep.path source]
     ~action:(
-      Action.shell ~dir:(Path.dirname target)
+      Action.process ~dir:(Path.dirname target)
         ~prog:"/bin/cp"
         ~args:[
           (Path.basename source);
@@ -61,7 +61,7 @@ let compile_stages ~dir ~name ~n_stages =
 let link_files_by_concatenation ~sources ~target =
   simple_rule ~targets:[target] ~deps:(List.map sources ~f:Dep.path)
     ~action:(
-      Action.shell ~dir:(Path.dirname target)
+      Action.process ~dir:(Path.dirname target)
         ~prog:"/bin/bash"
         ~args:[
           "-c";

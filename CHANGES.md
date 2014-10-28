@@ -1,3 +1,22 @@
+## 112.06.00
+
+- Support for user control of stale-artifact deletion, by allowing
+  specification of an artifact-determination policy.
+- Expose jenga's internal (and better - only quotes when necessary)
+  definition of `Shell.escape` in `Api`
+- Removed `Action.shell` from the API, superseded by `Action.process`.
+- Changed RPC interface as needed for build manager to switch from
+  scraping error messages to RPCs.
+- Fixed jenga's per-rule memo table, which mistakenly kept stale values.
+- Show what target is being demanded, useful for debugging rules.
+- Run user action when persistent format changes.
+- When filtering buildable targets by globs, pay attention to the kinds
+  allowed by the glob.
+
+    Specifically, if the kinds don't include `` `File `` (i.e. only
+    include `` `Directory ``) then we should not see any
+    `buildable_targets` in the filtered list.
+
 ## 112.01.00
 
 - Don't show noisy `glob..changed` messages except with `-show-glob-changed` flag.
@@ -9,7 +28,6 @@
   Running actions and recording the result in the persistent
   `.jenga.db` should be performed atomically for standalone actions,
   as it is for actions which are associated with target files
-
 
 ## 111.31.00
 

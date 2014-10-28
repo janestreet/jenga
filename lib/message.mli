@@ -3,11 +3,11 @@ open Core.Std
 open Async.Std
 
 module Q : sig
-  val shell_escape : arg:string -> string
+  val shell_escape : string -> string
 end
 
-module Job_start : sig type t end
-module Job_summary : sig type t end
+module Job_start   : sig type t with bin_io end
+module Job_summary : sig type t with bin_io end
 
 val init_logging : Config.t -> log_filename:string -> unit
 

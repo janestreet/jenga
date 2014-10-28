@@ -469,7 +469,7 @@ let shell_escape s =
 ----------------------------------------------------------------------*)
 
 let bash ~dir command_string =
-  Action.shell ~dir ~prog:"bash" ~args:[
+  Action.process ~dir ~prog:"bash" ~args:[
     "-e"; "-u"; "-o"; "pipefail";
     "-c"; command_string
   ]
@@ -671,7 +671,7 @@ let generate_jbuild_from_omakefile ~dir =
   ]
   in
   Rule.create1 ~targets:[target] ~deps
-    ~action:(Action.shell ~dir ~prog:(dotdot ~dir gen_jbuild)
+    ~action:(Action.process ~dir ~prog:(dotdot ~dir gen_jbuild)
                ~args:["jbuild.gen"]
     )
 
@@ -808,7 +808,7 @@ let compile_knot ~libname ~dir =
   let targets = [cmi] in
   Rule.create ~targets (
     Dep.path mli_gen *>>| fun () ->
-    Action.shell
+    Action.process
       ~dir
       ~prog:ocamlopt_prog
       ~args:(List.concat [
@@ -1578,7 +1578,7 @@ let compile_c_1 ~cflags ~autogen ~dir name =
     @ ["-c"; name ^ ".c"; "-o"; name ^ ".o"]
   in
   Rule.create1 ~deps ~targets ~action:(
-    Action.shell ~dir ~prog:cc_prog ~args
+    Action.process ~dir ~prog:cc_prog ~args
   )
 
 let compile_c ~cflags ~autogen ~dir names =
@@ -1598,7 +1598,7 @@ let compile_cxx ~cxxflags ~autogen ~dir names ~cxx_suf =
       @ ["-c"; name ^ cxx_suf; "-o"; name ^ ".o"]
     in
     Rule.create1 ~deps ~targets ~action:(
-      Action.shell ~dir ~prog:cxx_prog ~args
+      Action.process ~dir ~prog:cxx_prog ~args
     )
   )
 
@@ -1642,7 +1642,7 @@ let ocamllex_rule ~dir name =
     ~deps:[ocaml_bin_dep; Dep.path mll]
     ~targets:[ml]
     ~action:(
-      Action.shell ~dir ~prog:"ocamllex" ~args:["-q"; basename mll]
+      Action.process ~dir ~prog:"ocamllex" ~args:["-q"; basename mll]
     )
 
 let ocamlyacc_rule ~dir name =
@@ -1654,7 +1654,7 @@ let ocamlyacc_rule ~dir name =
     ~deps:[Dep.path mly ; ocaml_bin_dep]
     ~targets:[ml;mli]
     ~action:(
-      Action.shell ~dir ~prog:"ocamlyacc" ~args:["-q"; basename mly]
+      Action.process ~dir ~prog:"ocamlyacc" ~args:["-q"; basename mly]
     )
 
 
@@ -1696,7 +1696,7 @@ let gen_dfile mc ~name ~suf ~dsuf =
      in
      Dep.action_stdout
        (Dep.all_unit (ocaml_bin_dep :: Dep.path source :: pp_deps)
-        *>>| fun () -> Action.shell ~dir ~prog:ocamldep_prog
+        *>>| fun () -> Action.process ~dir ~prog:ocamldep_prog
                          ~args:("-modules" :: pp_opt @
                                    (if is_ml_wrap then ["-impl"] else []) @
                                    [basename source]))
@@ -1778,7 +1778,7 @@ let compile_mli mc ~name =
 
     Dep.all_unit deps *>>= fun () ->
     return (
-      Action.shell
+      Action.process
         ~dir
         ~prog:ocamlc_prog
         ~args:(List.concat [
@@ -1867,7 +1867,7 @@ let native_compile_ml mc ~name =
 
     Dep.all_unit deps *>>= fun () ->
     return (
-      Action.shell
+      Action.process
         ~dir
         ~prog:ocamlopt_prog
         ~args:(List.concat [
@@ -2163,7 +2163,7 @@ let share_preprocessor dc ~dir name = (* .cmx/.o -> .cmxs *)
   let flags = ocamlflags @ ocamloptflags in
   let flags = if must_be_sharable then remove_nodynlink flags else flags in
   Rule.create1 ~deps:[ocaml_bin_dep; Dep.path cmx; Dep.path o] ~targets:[cmxs] ~action:(
-    Action.shell ~dir ~prog:ocamlopt_prog ~args:(
+    Action.process ~dir ~prog:ocamlopt_prog ~args:(
       flags @ ["-shared"; "-o"; basename cmxs; basename cmx]
     )
   )
@@ -2396,14 +2396,14 @@ let ocaml_archive dc ~dir ~impls ~libname =
          | _ :: _ :: _ -> Ordering.sort (pack_order_file ~dir ~libname) unsorted_mod_args
          end *>>| fun sorted_mod_args ->
          let sorted_mod_args = sorted_mod_args @ [libname ^ mod_] in
-         Action.shell ~dir ~prog:ocamlcomp ~args:(
+         Action.process ~dir ~prog:ocamlcomp ~args:(
            ocamlflags @ ocamlcompflags
            @ sorted_mod_args
            @ ocamllibflags
            @ ["-a"; "-o"; libname ^ lib ]))))
 
 let pack =
-  let native_action ~dir ~prog ~args ~target:_ = Action.shell ~dir ~prog ~args in
+  let native_action ~dir ~prog ~args ~target:_ = Action.process ~dir ~prog ~args in
   let tmpdir = ".tempdir_for_cmo_packing" in
   let bytecode_action ~dir ~prog ~args ~target =
     (* Build the packed .cmo in a temporary sub-dir to avoid clashing with native
@@ -2484,7 +2484,7 @@ let hg_version_rules ~dir ~exe =
   let o_rule =
     Rule.create1 ~targets:[o] ~deps:[ocaml_bin_dep; Dep.path c]
       ~action:(
-        Action.shell ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
+        Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
       )
   in
   let c_rule =
@@ -2540,7 +2540,7 @@ let build_info_rules ~dir ~name ~ext ~sexp_dep =
   let o_rule =
     Rule.create1 ~targets:[o] ~deps:[ocaml_bin_dep; Dep.path c]
       ~action:(
-        Action.shell ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
+        Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
       )
   in
   let c_rule =
@@ -2692,7 +2692,7 @@ let utopdeps_rules ~dir ~libname =
   let o_rule =
     Rule.create1 ~targets:[o] ~deps:[ocaml_bin_dep; Dep.path c]
       ~action:(
-        Action.shell ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
+        Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
       )
   in
   let c_rule =
@@ -3069,7 +3069,7 @@ end = struct
         Dep.path unchecked *>>= fun () ->
         Dep.action_stdout (
           Dep.all_unit [Dep.path dynamic_lib_deps_sh; Dep.path unchecked] *>>| fun () ->
-          Action.shell ~dir:Path.the_root
+          Action.process ~dir:Path.the_root
             ~prog:(Path.to_string dynamic_lib_deps_sh)
             ~args:[Path.to_string unchecked]
         ) *>>| fun stdout ->
@@ -3417,7 +3417,7 @@ let run_inline_action ~dir ~user_deps filename =
   Dep.action
     (Dep.all_unit (List.map sources ~f:Dep.path)
      *>>| fun () ->
-     Action.shell ~dir ~prog:(dotdot ~dir time_limit)
+     Action.process ~dir ~prog:(dotdot ~dir time_limit)
        ~args:["300"; "./" ^ filename])
 
 let run_inline_tests_action ~dir ~user_deps =

@@ -7,7 +7,9 @@ module Path = Path
 module Kind = Fs.Kind
 module Glob = Fs.Glob
 module Alias = Alias
+
 module Action = Action
+
 module Dep = Dep
 module Reflected = Reflected
 module Reflect = Reflect
@@ -15,6 +17,16 @@ module Reflect = Reflect
 module Rule = Rule
 module Scheme = Scheme
 module Env = Env
+
+module Artifact_policy = Artifact_policy
+
+module Shell = struct
+  let escape = Message.Q.shell_escape
+  let check arg result = String.(escape arg = result)
+  TEST = (check "hello" "hello")
+  TEST = (check "foo bar" "'foo bar'")
+  TEST = (check "foo'bar" "'foo'\\''bar'")
+end
 
 let verbose() = Config.verbose (Run.For_user.config ())
 

@@ -33,7 +33,9 @@ val fs_glob_change : Fs.Glob.t -> unit t
 val subdirs : dir:Path.t -> Path.t list t
 val file_exists : Path.t -> bool t
 
+val on_filesystem : dir:Path.t -> Path.t list t
 val buildable_targets : dir:Path.t -> Path.t list t
+val source_files : dir:Path.t -> Path.t list t
 
 val glob_listing : Fs.Glob.t -> Path.t list t
 val glob_change : Fs.Glob.t -> unit t

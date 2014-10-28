@@ -89,7 +89,8 @@ let run exit_on_finish ~root_dir =
         let where_to_connect = Tcp.to_host_and_port host port in
         try_with (fun () ->
           Tcp.with_connection where_to_connect (fun _ reader writer ->
-            Rpc.Connection.create reader writer ~connection_state:() >>= function
+            Rpc.Connection.create reader writer ~connection_state:(Fn.const ())
+            >>= function
             | Error exn ->
               (* when does this ever come?.. *)
               message !"with_rpc_connection: %s\n%{Exn}" server_name exn;

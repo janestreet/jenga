@@ -12,6 +12,8 @@ module Item : sig
   | Goal of Goal.t
   | Reflect of Path.t
   | Dep_scheme of int
+  | Artifacts of Path.t
+  | Buildable of Path.t
 
   val to_string : t -> string
 

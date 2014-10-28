@@ -20,23 +20,35 @@ let putenv_for_path =
     replacement_path
 
 type t = {
+  run_when_persist_format_has_changed : Action.t option;
   putenv : (string * string) list;
   build_begin : unit -> unit Deferred.t;
   build_end : unit -> unit Deferred.t;
+  artifacts_policy : Artifact_policy.t;
   scheme_for_dir : (dir:Path.t -> Scheme.t);
 } with fields
 
 let create
+    ?run_when_persist_format_has_changed
     ?(putenv=[])
     ?command_lookup_path
     ?(build_begin=(fun () -> Deferred.return ()))
     ?(build_end=(fun () -> Deferred.return ()))
+    ?artifacts
     scheme_for_dir =
   let putenv = putenv @
     match command_lookup_path with
     | None -> []
     | Some spec -> [("PATH",putenv_for_path spec)]
   in
-  {putenv; build_begin; build_end; scheme_for_dir}
+  let artifacts_policy =
+    match artifacts with
+    | None -> Artifact_policy.Use_persistent_state
+    | Some artifacts -> Artifact_policy.Artifacts artifacts
+  in
+  {
+    run_when_persist_format_has_changed;
+    putenv; build_begin; build_end; artifacts_policy; scheme_for_dir
+  }
 
 let get_scheme t ~dir = t.scheme_for_dir ~dir
