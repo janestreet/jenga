@@ -2,6 +2,19 @@
 (* OASIS_STOP *)
 # 4 "myocamlbuild.ml"
 
+(* This list is copied from the jenga/root.ml file used at Jane Street. It should be
+   enough for most cases. *)
+let stdlib_cmi_to_embed =
+  [ "pervasives.cmi"
+  ; "camlinternalLazy.cmi"
+  ; "camlinternalMod.cmi"
+  ; "camlinternalOO.cmi"
+  ; "camlinternalFormatBasics.cmi"
+  ; "lexing.cmi"
+  ; "printf.cmi"
+  ; "digest.cmi"
+  ]
+
 let dispatch = function
   | Before_options ->
     Options.make_links := false
@@ -25,18 +38,20 @@ let dispatch = function
         let ocamlopt = Command.search_in_path "ocamlopt.opt" in
         let camlp4o = Command.search_in_path "camlp4o.opt" in
         let cmi_list =
-          stdlib / "pervasives.cmi"
-          :: "lib/jenga_lib.cmi"
-          :: List.map (fun pkg -> (Findlib.query pkg).Findlib.location / pkg ^ ".cmi") [
-            "core";
-            "core_kernel";
-            "async";
-            "async_kernel";
-            "async_unix";
-            "sexplib";
-            "fieldslib";
-            "ocaml_plugin";
-          ]
+          List.concat
+            [ List.map (fun fn -> stdlib / fn) stdlib_cmi_to_embed
+            ; [ "lib/jenga_lib.cmi" ]
+            ; List.map (fun pkg -> (Findlib.query pkg).Findlib.location / pkg ^ ".cmi")
+                [ "core"
+                ; "core_kernel"
+                ; "async"
+                ; "async_kernel"
+                ; "async_unix"
+                ; "sexplib"
+                ; "fieldslib"
+                ; "ocaml_plugin"
+                ]
+            ]
         in
         let cmxs_list =
           (stdlib / "bigarray.cmxs") ::
