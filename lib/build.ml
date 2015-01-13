@@ -230,7 +230,7 @@ module Problem : sig
 
 end = struct
 
-  module Id = Unique_id.Int(struct end)
+  module Id = Unique_id.Int()
 
   (**
     [reasons] contains all errors collected transitively together with
@@ -701,7 +701,9 @@ let remove_stale_artifact : (
     ) else
       try_with (fun () -> Sys.remove path_string) >>= function
       | Ok () ->
-        Message.message "Removed stale build artifact: %s" path_string;
+        if Config.show_actions_run t.config then (
+          Message.message "Removed stale build artifact: %s" path_string;
+        );
         Fs.clear_watcher_cache t.fs path;
         Deferred.return ()
       | Error _ ->
@@ -744,7 +746,11 @@ let determine_and_remove_stale_artifacts : (
 ----------------------------------------------------------------------*)
 
 let on_filesystem t ~dir =
-  let glob = Fs.Glob.create ~dir ~kinds:[`File] "*" in
+  (* Treat symbolic-links the same as regular files.
+     To allow [source_files] to be used in user-rule for [artifacts].
+     Means symbolic-links to directories are not handled correctly.
+     But matches [Fs.is_digestable] which also handles [`Link] and [`File] the same. *)
+  let glob = Fs.Glob.create ~dir ~kinds:[`File;`Link] "*" in
   glob_fs_only t glob
 
 let buildable_targets_and_clean_when_fixed : (t -> dir:Path.t -> Path.Set.t Builder.t) =
@@ -1618,13 +1624,14 @@ let check_for_non_local_rules ~dir ~targets =
  dependent schemes
 ----------------------------------------------------------------------*)
 
+(* [dir] is for error reporting *)
 let build_dependent_scheme : (
-  t -> int * Scheme.t Dep.t -> Scheme.t Builder.t
+  t -> dir:Path.t -> int * Scheme.t Dep.t -> Scheme.t Builder.t
 ) =
-  fun t (dep_u,scheme_dep) ->
+  fun t ~dir (dep_u,scheme_dep) ->
     jenga_root t *>>= fun (_,scheme_memo) ->
     let key = {Dep_scheme_key. dep_u; fixpoint_iter = t.fixpoint_iter} in
-    let item = DG.Item.Dep_scheme dep_u in
+    let item = DG.Item.Dep_scheme (dir, dep_u) in
     share_and_check_for_cycles t ~key ~memo:scheme_memo ~item ~f:(fun t ->
       build_depends t scheme_dep *>>| fun (scheme,__proxy_map) ->
       scheme
@@ -1653,7 +1660,7 @@ let scheme_rules : (t -> dir:Path.t -> Rule.t list Builder.t) =
         match s with
         | Scheme.Exclude (_,scheme) -> collect scheme
         | Scheme.All schemes -> Builder.all (List.map schemes ~f:collect) *>>| List.concat
-        | Scheme.Dep u_scheme_dep -> build_dependent_scheme t u_scheme_dep *>>= collect
+        | Scheme.Dep u_scheme_dep -> build_dependent_scheme ~dir t u_scheme_dep *>>= collect
         | Scheme.Rules ruleset -> return (Ruleset.rules ruleset)
       in
       get_scheme t ~dir *>>= fun scheme ->
@@ -1669,6 +1676,7 @@ let find_alias_deps : (t -> Alias.t -> unit Dep.t Builder.t) =
 
 let find_target_rule : (t -> Path.Rel.t -> Target_rule.t option Builder.t) =
   fun t rel ->
+    let dir = Path.of_relative (Path.Rel.dirname rel) in
     let rec find_list = function
       | [] -> return None
       | scheme::schemes ->
@@ -1683,14 +1691,13 @@ let find_target_rule : (t -> Path.Rel.t -> Target_rule.t option Builder.t) =
           else find scheme
       | Scheme.All schemes -> find_list schemes
       | Scheme.Dep u_scheme_dep ->
-        build_dependent_scheme t u_scheme_dep *>>= fun scheme ->
+        build_dependent_scheme ~dir t u_scheme_dep *>>= fun scheme ->
         find scheme
       | Scheme.Rules ruleset ->
         match (Ruleset.lookup_target ruleset rel) with
         | `ok opt -> return opt
         | `dup -> error (Reason.Multiple_rules_for_path rel)
     in
-    let dir = Path.of_relative (Path.Rel.dirname rel) in
     get_scheme t ~dir *>>= fun scheme ->
     find scheme
 
@@ -2331,6 +2338,34 @@ let watch_for_deadlock ~deadlock_found ~fin dg =
   loop ()
 
 (*----------------------------------------------------------------------
+ gc_full_major_and_show_stats
+----------------------------------------------------------------------*)
+
+let live_kb =
+  let words_per_kb = 1024 / 8 in
+  fun () ->
+    let stat = Gc.stat () in
+    let live_kb = stat.Gc.Stat.live_words / words_per_kb in
+    live_kb
+
+let _live_kb_delta =
+  let last = ref 0 in
+  fun () ->
+    let current = live_kb () in
+    let delta = current - !last in
+    last := current;
+    delta
+
+let gc_full_major_and_show_stats =
+  fun () ->
+    Gc.full_major(); (* might run finalizers, so.. *)
+    Gc.full_major(); (* GC again *)
+    (*Message.message "Live(Kb-delta) %d #HeartWatching %d"
+      (live_kb_delta ())
+      (Tenacious.Heart.Watching.count())*)
+    ()
+
+(*----------------------------------------------------------------------
   build_once
 ----------------------------------------------------------------------*)
 
@@ -2380,7 +2415,7 @@ let build_once :
     let () =
       (* NO point doing the GC unless we are in polling mode *)
       if Config.poll_forever config then (
-        Gc.full_major();
+        gc_full_major_and_show_stats();
         let percentage_live =
           let stat = Gc.stat () in
           let live = stat.Gc.Stat.live_words in

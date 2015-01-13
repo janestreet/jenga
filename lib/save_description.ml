@@ -31,4 +31,7 @@ let job {contents;target;chmod_x} =
 
 let run {contents;target;chmod_x} =
   let perm = if chmod_x then Some 0o777 else None in
-  Writer.save ?perm (Path.to_string target) ~contents
+  Effort.track Progress.saves_run (fun () ->
+    File_access.enqueue (fun () ->
+      Writer.save ?perm (Path.to_string target) ~contents
+    ))

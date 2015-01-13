@@ -11,7 +11,7 @@ module Item : sig
   | Root
   | Goal of Goal.t
   | Reflect of Path.t
-  | Dep_scheme of int
+  | Dep_scheme of (Path.t * int)
   | Artifacts of Path.t
   | Buildable of Path.t
 

@@ -71,18 +71,13 @@ let recusive_default ~dir =
     List.map subs ~f:(fun sub -> Dep.alias (Alias.create ~dir:sub "DEFAULT")))]
 
 let scheme ~dir =
-  Scheme.rules_dep (
-    let path = Path.relative ~dir "make.conf" in
-    Dep.all [
-      make_style_rules path;
-      recusive_default ~dir;
-    ] *>>| List.concat)
+  Scheme.exclude (fun path -> Path.basename path = "make.conf") (
+    Scheme.rules_dep (
+      let path = Path.relative ~dir "make.conf" in
+      Dep.all [
+        make_style_rules path;
+        recusive_default ~dir;
+      ] *>>| List.concat))
 
-let env =
-  Env.create (fun ~dir ->
-    Scheme.switch_glob [
-      "**make.conf",Scheme.no_rules;
-      "**", scheme ~dir
-    ])
-
+let env = Env.create scheme
 let setup () = Deferred.return env

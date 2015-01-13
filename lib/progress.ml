@@ -4,7 +4,8 @@ open Async.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
 let persist_saves_done = Effort.Counter.create "db-save" (* for use in persist.ml *)
-let actions_run = Effort.Counter.create "act" (* for use in build.ml *)
+let actions_run = Effort.Counter.create "act" (* for use in action.ml *)
+let saves_run = Effort.Counter.create "save" (* for use in save_description.ml *)
 let considerations_run = Effort.Counter.create "con" (* for use in build.ml *)
 
 module Status = struct
@@ -125,6 +126,7 @@ module Snap = struct
     waiting : int;
     all_effort : Effort.Counts.t;
     con : int;
+    save : int;
     act : int;
   } with bin_io, fields
 
@@ -144,10 +146,11 @@ module Snap = struct
     | `jem_style ->
       let todo = Counts.todo t.counts in
       Finish_time_estimator.push_todo estimator todo;
-      sprintf "%s j=%d+%d con=%d act=%d%s"
+      sprintf "%s j=%d+%d con=%d save=%d act=%d%s"
         (Counts.to_string t.counts)
         t.running t.waiting
         t.con
+        t.save
         t.act
         (Finish_time_estimator.estimated_finish_time_string estimator)
 
@@ -171,6 +174,7 @@ let all_effort =
 
 let act_effort =
   Effort.create [
+    saves_run;
     actions_run;
     considerations_run;
   ]
@@ -182,6 +186,7 @@ let snap t = {
   waiting = Throttle.num_jobs_waiting_to_start t.job_throttle;
   all_effort = Effort.snap all_effort;
   con = Effort.get considerations_run;
+  save = Effort.get saves_run;
   act = Effort.get actions_run;
 }
 

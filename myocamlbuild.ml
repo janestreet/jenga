@@ -81,7 +81,51 @@ let dispatch = function
                 camlp4;
                 A "-cc"; A ocamlopt;
                 S (List.map (fun cmi -> A cmi) cmi_list);
-                A "-o"; A "bin/jenga_archive.c"]))
+                A "-o"; A "bin/jenga_archive.c"]));
+
+
+    let hack = "ugly_hack_to_workaround_ocamlbuild_nightmare" in
+    mark_tag_used hack;
+    dep [hack] [hack];
+
+    let lib_core_mods =
+      [ "heart_interface"
+      ; "heart"
+      ; "interface"
+      ; "ring"
+      ; "tenacious"
+      ; "test_hearts"
+      ; "test_ring"
+      ; "test_tenacious"
+      ; "weak_ref"
+      ]
+    in
+
+    let add_exts l exts =
+      List.concat (List.map (fun fn ->
+        let fn = "tenacious/lib/" ^ fn in
+        List.map (fun ext -> fn ^ ext)  exts)
+        l)
+    in
+
+    rule hack
+      ~prod:hack
+      ~deps:(add_exts lib_core_mods [".cmx"; ".cmi"; ".cmo"])
+      (fun _ _ ->
+         let to_remove =
+           add_exts lib_core_mods [ ".cmx"
+                                  ; ".cmi"
+                                  ; ".cmo"
+                                  ; ".ml"
+                                  ; ".mli"
+                                  ; ".ml.depends"
+                                  ; ".mli.depends"
+                                  ; ".o"
+                                  ]
+         in
+         Seq
+           [ Seq (List.map rm_f to_remove)
+           ; Echo ([], hack) ])
 
   | _ ->
     ()

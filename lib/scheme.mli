@@ -17,4 +17,3 @@ val exclude : (Path.t -> bool) -> t -> t
 val rules_dep : Rule.t list Dep.t -> t
 val contents : Path.t -> (string -> t)-> t
 val no_rules : t
-val switch_glob : ?def:t -> (string * t) list -> t

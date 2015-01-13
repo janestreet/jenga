@@ -4,6 +4,7 @@ open Async.Std
 
 val persist_saves_done : Effort.Counter.t
 val actions_run : Effort.Counter.t
+val saves_run : Effort.Counter.t
 val considerations_run : Effort.Counter.t
 
 module Need : sig

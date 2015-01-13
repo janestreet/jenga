@@ -58,6 +58,9 @@ let file_exists path =
   fs_glob_listing (Glob.create_from_path ~kinds:None path)
   *>>| function | [] -> false | _::_ -> true
 
+let file_existence path =
+  fs_glob_change (Glob.create_from_path ~kinds:None path)
+
 let both : ('a t -> 'b t -> ('a * 'b) t) =
   fun a b ->
     all [

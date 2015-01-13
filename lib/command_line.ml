@@ -95,11 +95,6 @@ let show_reconsidering =
   +> Spec.flag "show-reconsidering" ~aliases:["recon"] Spec.no_arg
     ~doc:" Mainly for debug. Show when deps are re-considered"
 
-let show_glob_changed =
-  Spec.step (fun m x -> m ~show_glob_changed:x)
-  +> Spec.flag "show-glob-changed" ~aliases:["glob"] Spec.no_arg
-    ~doc:" Mainly for debug. Show when glob-deps are triggered by file-system changes"
-
 let show_error_dependency_paths =
   Spec.step (fun m x -> m ~show_error_dependency_paths:x)
   +> Spec.flag "show-error-dependency-paths" Spec.no_arg
@@ -217,7 +212,6 @@ let go_command =
     ++ show_reflecting
     ++ show_considering
     ++ show_reconsidering
-    ++ show_glob_changed
     ++ show_trace_messages
     ++ show_error_dependency_paths
     ++ debug_discovered_graph
@@ -256,7 +250,6 @@ let go_command =
       ~show_reflecting
       ~show_considering
       ~show_reconsidering
-      ~show_glob_changed
       ~show_trace_messages
       ~show_error_dependency_paths
       ~debug_discovered_graph
@@ -293,7 +286,6 @@ let go_command =
           show_buildable_discovery;
           show_reflecting;
           show_reconsidering;
-          show_glob_changed;
           show_trace_messages;
           show_error_dependency_paths;
           debug_discovered_graph;

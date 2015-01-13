@@ -195,9 +195,6 @@ let __getenv_enumeration varname ~choices ~default ~to_string =
     message "and then C-c C-c to restart your build.";
     err()
 
-let version_util_support =
-  getenv_bool "VERSION_UTIL_SUPPORT" ~default:false
-
 let link_executables =
   getenv_bool "LINK_EXECUTABLES" ~default:true
 
@@ -364,9 +361,6 @@ let default_cxxflags = default_cflags
 
 let ocaml_bin   = Ocaml_version.root ^ "/" ^ Ocaml_version.name ^ "/bin"
 let ocaml_where = Ocaml_version.root ^ "/" ^ Ocaml_version.name ^ "/lib/ocaml"
-
-let dot_ocaml_bin = root_relative ".omake-ocaml-bin"
-let ocaml_bin_dep = Dep.path dot_ocaml_bin
 
 let ocamlpacks = ["nums"; "unix"; "threads"; "bigarray"; "str"]
 
@@ -608,30 +602,6 @@ let deep_unignored_subdirs ~dir =
   traverse dir
 
 (*----------------------------------------------------------------------
- clean external when the compiler version changes
-----------------------------------------------------------------------*)
-
-let tmpdir = ".jenga.tmp"
-let delete_tmpdir () =
-  (* We want to clean the tmpdir when jenga restarts, but not every time the build
-     restarts, or that the jengaroot is changed. This is why we don't run this action
-     in build_begin, but instead run it once and add a dependency on the pid. *)
-  let pid = Unix.getpid () in
-  Dep.action
-    (return
-       (bash ~dir:Path.the_root
-          (sprintf "rm -rf %s; mkdir -p %s # %d"
-             tmpdir tmpdir (Pid.to_int pid))))
-
-let setup_dot_ocaml_bin ~dir =
-  Scheme.rules_dep (
-    if not (dir = Path.the_root) then return [] else (
-      delete_tmpdir () *>>| fun () ->
-      [write_string_rule ocaml_bin ~target:dot_ocaml_bin]
-    )
-  )
-
-(*----------------------------------------------------------------------
  recursive aliases
 ----------------------------------------------------------------------*)
 
@@ -653,34 +623,6 @@ let gen_recursive_aliases ~dir =
     Rule.alias (make_alias ~dir) (
       List.map subdirs ~f:(fun subdir -> Dep.alias (make_alias ~dir:subdir))
     )
-  )
-
-(*----------------------------------------------------------------------
- Translation OMakefile -> jbuild.gen
-----------------------------------------------------------------------*)
-
-let generate_jbuild_from_omakefile ~dir =
-  let gen_jbuild = root_relative "bin/gen-jbuild.sh" in
-  let target = relative ~dir "jbuild.gen" in
-  let deps = [
-    Dep.path gen_jbuild;
-    Dep.path (root_relative "bin/fake-OMakeroot");
-    Dep.path (root_relative "bin/fixup-omake-rule-string.sh");
-    Dep.path (relative ~dir "OMakefile");
-    Dep.glob_change (glob_ml ~dir);
-  ]
-  in
-  Rule.create1 ~targets:[target] ~deps
-    ~action:(Action.process ~dir ~prog:(dotdot ~dir gen_jbuild)
-               ~args:["jbuild.gen"]
-    )
-
-let setup_jbuild_generated ~dir=
-  Scheme.rules_dep (
-    let omakefile = relative ~dir "OMakefile" in
-    Dep.file_exists omakefile *>>| function
-    | true -> [generate_jbuild_from_omakefile ~dir]
-    | false -> []
   )
 
 (*----------------------------------------------------------------------
@@ -1639,7 +1581,7 @@ let ocamllex_rule ~dir name =
   let ml = suf ".ml" in
   let mll = suf ".mll" in
   Rule.create1
-    ~deps:[ocaml_bin_dep; Dep.path mll]
+    ~deps:[Dep.path mll]
     ~targets:[ml]
     ~action:(
       Action.process ~dir ~prog:"ocamllex" ~args:["-q"; basename mll]
@@ -1651,7 +1593,7 @@ let ocamlyacc_rule ~dir name =
   let mli = suf ".mli" in
   let mly = suf ".mly" in
   Rule.create1
-    ~deps:[Dep.path mly ; ocaml_bin_dep]
+    ~deps:[Dep.path mly]
     ~targets:[ml;mli]
     ~action:(
       Action.process ~dir ~prog:"ocamlyacc" ~args:["-q"; basename mly]
@@ -1695,7 +1637,7 @@ let gen_dfile mc ~name ~suf ~dsuf =
       | Some pp_com -> ["-pp"; pp_com]
      in
      Dep.action_stdout
-       (Dep.all_unit (ocaml_bin_dep :: Dep.path source :: pp_deps)
+       (Dep.all_unit (Dep.path source :: pp_deps)
         *>>| fun () -> Action.process ~dir ~prog:ocamldep_prog
                          ~args:("-modules" :: pp_opt @
                                    (if is_ml_wrap then ["-impl"] else []) @
@@ -1763,7 +1705,6 @@ let compile_mli mc ~name =
       @ LL.liblink_submodule_cmis ~libs
     in
     let deps = [Dep.path mli; Dfile_deps.local_dependencies_mli ~dfile] @ pp_deps @ libdeps in
-    let deps = ocaml_bin_dep :: deps in
 
     let deps,open_knot_args =
       if Wrap_style.packing
@@ -1852,7 +1793,6 @@ let native_compile_ml mc ~name =
     in
     let deps = [Dep.path ml; Dfile_deps.local_dependencies_ml dc ~libname ~dfile] @ pp_deps @ libdeps in
     let deps = if exists_mli then deps @ [Dep.path cmi] else deps in
-    let deps = ocaml_bin_dep :: deps in
 
     let deps,open_knot_args =
       if Wrap_style.packing
@@ -1928,7 +1868,6 @@ let byte_compile_ml mc ~name =
           [Dep.path cmi]
         else [])
     in
-    let deps = ocaml_bin_dep :: deps in
     Dep.all_unit deps *>>= fun () ->
     return (
       Bash.action ~dir [
@@ -2162,7 +2101,7 @@ let share_preprocessor dc ~dir name = (* .cmx/.o -> .cmxs *)
   let must_be_sharable = true in
   let flags = ocamlflags @ ocamloptflags in
   let flags = if must_be_sharable then remove_nodynlink flags else flags in
-  Rule.create1 ~deps:[ocaml_bin_dep; Dep.path cmx; Dep.path o] ~targets:[cmxs] ~action:(
+  Rule.create1 ~deps:[Dep.path cmx; Dep.path o] ~targets:[cmxs] ~action:(
     Action.process ~dir ~prog:ocamlopt_prog ~args:(
       flags @ ["-shared"; "-o"; basename cmxs; basename cmx]
     )
@@ -2390,7 +2329,7 @@ let ocaml_archive dc ~dir ~impls ~libname =
         List.concat_cartesian_product impls (mod_ :: mod_implicit)
       in
       let unsorted_mod_args = List.concat_cartesian_product impls [mod_] in
-      Rule.create_relative ~dir ~targets ~deps ~non_relative_deps:[ocaml_bin_dep] (
+      Rule.create_relative ~dir ~targets ~deps ~non_relative_deps:[] (
         (begin match unsorted_mod_args with
          | [] | [_] -> return unsorted_mod_args
          | _ :: _ :: _ -> Ordering.sort (pack_order_file ~dir ~libname) unsorted_mod_args
@@ -2442,7 +2381,7 @@ let pack =
         ~dir
         ~targets
         ~deps:mod_deps
-        ~non_relative_deps:[ocaml_bin_dep]
+        ~non_relative_deps:[]
         (Ordering.sort (pack_order_file ~dir ~libname) unsorted_mod_args
          *>>| fun sorted_mod_args ->
          let args =
@@ -2456,22 +2395,9 @@ let pack =
     )
 
 let hg_version_out = root_relative "hg_version.out"
-let hg_version_sh = root_relative "bin/hg_version.sh"
 
-let hg_version_out_rules ~dir =
-  if dir <> Path.the_root then [] else [
-    Rule.create ~targets:[hg_version_out] (
-      let hg_paths = [] in
-      let deps = (Dep.path hg_version_sh :: List.map hg_paths ~f:Dep.path) in
-      Dep.all_unit deps *>>= fun () ->
-      let action =
-        bashf ~dir "%s %s > %s"
-          (Path.to_string hg_version_sh)
-          (if version_util_support then "" else "--no-version-util")
-          (basename hg_version_out)
-      in
-      return action)
-  ]
+let hg_version_out_rule =
+  write_string_rule "NO_VERSION_INFO" ~target:hg_version_out
 
 let hg_version_base ~base = base ^ ".hg_version"
 
@@ -2482,7 +2408,7 @@ let hg_version_rules ~dir ~exe =
   let c = relative ~dir (base ^ ".c") in
   let o = relative ~dir (base ^ ".o") in
   let o_rule =
-    Rule.create1 ~targets:[o] ~deps:[ocaml_bin_dep; Dep.path c]
+    Rule.create1 ~targets:[o] ~deps:[Dep.path c]
       ~action:(
         Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
       )
@@ -2538,7 +2464,7 @@ let build_info_rules ~dir ~name ~ext ~sexp_dep =
   let c = relative ~dir (base ^ ".c") in
   let o = relative ~dir (base ^ ".o") in
   let o_rule =
-    Rule.create1 ~targets:[o] ~deps:[ocaml_bin_dep; Dep.path c]
+    Rule.create1 ~targets:[o] ~deps:[Dep.path c]
       ~action:(
         Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
       )
@@ -2690,7 +2616,7 @@ let utopdeps_rules ~dir ~libname =
   let c = relative ~dir (base ^ ".c") in
   let o = relative ~dir (base ^ ".o") in
   let o_rule =
-    Rule.create1 ~targets:[o] ~deps:[ocaml_bin_dep; Dep.path c]
+    Rule.create1 ~targets:[o] ~deps:[Dep.path c]
       ~action:(
         Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
       )
@@ -3146,7 +3072,6 @@ let link_native dc ~dir ~libname ~link_flags ~allowed_ldd_dependencies name =
       file_words (relative ~dir (prefixed_name ^ ".objdeps")) *>>= fun objs ->
       let deps = link_deps_of_libs ~dir ~libname ~name ~libs ~objs in
       let deps = deps @ [Dep.path build_info_o] in
-      let deps = ocaml_bin_dep :: deps in
       Dep.both
          (ocaml_plugin_handling dc ~dir name exe)
          (Dep.both
@@ -3510,7 +3435,6 @@ let link_test_or_bench_exe dc ~dir ~libname ~x_libs name =
       default_deps_for_required_libs @
       libname_deps @ libdeps @ [Dep.path main_cmx; Dep.path main_o]
     in
-    let deps = ocaml_bin_dep :: deps in
     let cmxa_for_packs = List.map ocamlpacks ~f:(fun name -> name ^ ".cmxa") in
     let lib_cmxas =
       List.concat_map libs ~f:(fun lib ->
@@ -3870,7 +3794,6 @@ let directory_rules dc ~dir jbuilds =
     ];
     gen_build_rules dc ~dir jbuilds;
     generate_dep_rules dc ~dir jbuilds;
-    hg_version_out_rules ~dir;
     inline_tests_rules dc ~dir;
     inline_bench_rules dc ~dir;
     merlin_rules dc ~dir;
@@ -3882,7 +3805,7 @@ let directory_rules dc ~dir jbuilds =
 
 module Libmap_sexp : sig
 
-  val setup : dir:Path.t -> Scheme.t
+  val rule : Rule.t
   val get : Libmap.t Dep.t
 
 end = struct
@@ -3890,10 +3813,11 @@ end = struct
   type t = (string * Path.t) list
   with sexp
 
-  let libmap_sexp_rule ~dir =
-    let target = relative ~dir "libmap.sexp" in
-    Rule.create ~targets:[target] (
-      deep_unignored_subdirs ~dir *>>= fun dirs ->
+  let libmap_sexp_path = root_relative "libmap.sexp"
+
+  let rule =
+    Rule.create ~targets:[libmap_sexp_path] (
+      deep_unignored_subdirs ~dir:Path.the_root *>>= fun dirs ->
       Dep.all (
         List.map dirs ~f:(fun dir ->
           User_or_gen_config.libnames ~dir *>>| fun libnames ->
@@ -3902,13 +3826,8 @@ end = struct
       ) *>>| fun xs ->
       let libmap = List.concat xs in
       let sexp = sexp_of_t libmap in
-      write_string_action (Sexp.to_string_hum sexp) ~target
+      write_string_action (Sexp.to_string_hum sexp) ~target:libmap_sexp_path
     )
-
-  let setup ~dir =
-    Scheme.rules [
-      libmap_sexp_rule ~dir
-    ]
 
   let load path =
     read_then_convert_string_via_reader
@@ -3920,10 +3839,8 @@ end = struct
         | `Eof -> failwith "Eof"
       )
 
-  let root_libmap = root_relative "libmap.sexp"
-
   let get =
-    load root_libmap *>>| Libmap.create_exn
+    load libmap_sexp_path *>>| Libmap.create_exn
 
 end
 
@@ -4084,65 +4001,40 @@ let putenv = (* setup external actions *)
   [
     ("CAML_LD_LIBRARY_PATH",
      Path.to_absolute_string (relative ~dir:the_root_lib_dir "typehash"));
-    (* /tmp partitions are small, which causes issues (for instance many simultaneous
-       ocaml-plugin runs can go over the 1GB limit, especially if /tmp already contains
-       stuff). So we stick the tmp directory on the local disk, which is much harder to
-       fill, and it makes admins happy. *)
-    ("TMPDIR", Path.to_absolute_string (relative ~dir:Path.the_root tmpdir));
   ]
 
-let call_hg_showconfig_to_trigger_dirstate_change () =
-  (* We rely on this action not touching the dirstate file in the case it is unchanged.
-     If it did, we could not unconditionally call this function from build_end without
-     causing a continuously looping build *)
-  run_action_now (bash ~dir:Path.the_root "hg showconfig > /dev/null")
+let command_lookup_path =
+  `Replace [
+    Path.to_absolute_string (root_relative "bin/deterministic-ranlib");
+    Path.to_absolute_string (root_relative "bin/cpp_quietly");
+    ocaml_bin;
+  ]
 
-let build_begin () =
-  don't_wait_for (call_hg_showconfig_to_trigger_dirstate_change ());
-  (* try to recreate the directory every time in case someone wipes it away from under a
-     polling jenga *)
-  Unix.mkdir ~p:() tmpdir
-
-let build_end () =
-  don't_wait_for (call_hg_showconfig_to_trigger_dirstate_change ());
-  Deferred.unit
-
-let deterministic_ranlib =
-  (* Intercept calls made to "ranlib" from the ocaml compiler, and fix them to be
-     deterministic by adding a 'D' modifier.
-     - i.e. calling "ar -Ds" instead of "ar -s"
-
-     We also now intercept calls to ar (from the ocaml compiler).
-     And convert: "ar rc" -> "ar Drc"
-  *)
-  Path.to_absolute_string (root_relative "bin/deterministic-ranlib")
+let scheme ~dir =
+  Scheme.exclude (fun path ->
+    (* We [exclude] the following basenames, which are consulted at scheme setup time, to
+       prevent cyclic dependencies. *)
+    List.mem [
+      "jbuild";
+      "jbuild-ignore";
+    ] (Path.basename path)
+  ) begin
+    if dir = Path.the_root then
+      Scheme.rules [
+        Libmap_sexp.rule;
+        hg_version_out_rule;
+      ]
+    else if dirname dir = root_relative "lib" then
+      setup_liblinks ~dir
+    else
+      setup_main ~dir
+  end
 
 let env =
   Env.create
     ~putenv
-    ~command_lookup_path:(
-      `Replace [
-        ".";
-        deterministic_ranlib;
-        Path.to_absolute_string (root_relative "bin/cpp_quietly");
-        ocaml_bin;
-      ]
-    )
-    ~build_begin
-    ~build_end
-    (fun ~dir -> Scheme.switch_glob [
-      ".omake-ocaml-bin"                    , setup_dot_ocaml_bin ~dir;
-      "**jbuild-ignore"                     , Scheme.no_rules;
-      "**jbuild"                            , Scheme.no_rules;
-      "**OMakefile"                         , Scheme.no_rules;
-      "bin/*"                               , Scheme.no_rules;
-      "**/.hg/**"                           , Scheme.no_rules;
-      "**/jbuild.gen"                       , setup_jbuild_generated ~dir;
-      "libmap.sexp"                         , Libmap_sexp.setup ~dir;
-      "lib/*/*"                             , setup_liblinks ~dir;
-    ] ~def:(
-      setup_main ~dir)
-    )
+    ~command_lookup_path
+    scheme
 
 let setup () =
   Deferred.return env

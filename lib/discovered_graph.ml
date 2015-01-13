@@ -10,7 +10,7 @@ module Item = struct
   | Root
   | Goal of Goal.t
   | Reflect of Path.t
-  | Dep_scheme of int
+  | Dep_scheme of (Path.t * int)
   | Artifacts of Path.t
   | Buildable of Path.t
 
@@ -18,7 +18,7 @@ module Item = struct
     | Root -> "ROOT"
     | Goal goal -> sprintf "GOAL: %s" (Goal.to_string goal)
     | Reflect path -> sprintf "REFLECT: %s" (Path.to_string path)
-    | Dep_scheme dep_u -> sprintf "DEP-SCHEME: %d" dep_u
+    | Dep_scheme (path, dep_u) -> sprintf "DEP-SCHEME: %s %d" (Path.to_string path) dep_u
     | Artifacts dir -> sprintf "ARTIFACTS: %s" (Path.to_string dir)
     | Buildable dir -> sprintf "BUILDABLE: %s" (Path.to_string dir)
 

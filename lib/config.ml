@@ -16,7 +16,6 @@ type t = {
   show_reflecting : bool;
   show_considering : bool;
   show_reconsidering : bool;
-  show_glob_changed : bool;
   show_trace_messages : bool;
   show_error_dependency_paths : bool;
   debug_discovered_graph : bool;

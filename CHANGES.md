@@ -1,3 +1,31 @@
+## 112.17.00
+
+- Fixed byte-compile targets to avoid stale artifact deletion of
+  `.for-byte-compile.cmt` file when compilation fails.
+
+  This avoids polling jenga trigger loop.
+- Show `Removed stale build artifact` messages only when `-act` flag is given.
+- Extended Jenga API with `val file_existence : Path.t -> unit t`.
+
+  `file-existence` has same relationship to `file-exists` as
+  `glob_change` has to `glob_listing`.
+- Fixed memory leak in tenacious hearts by using weak references and
+  finalizers.
+
+  * Strip code for obsolete versions of hearts.
+  * Strip code for `OLD_TENACIOUS=true`.
+  * Ensure `Ring` support preemptive calls to `detach`.  Add ring tests.
+  * Keep message showing `Live(Kb-delta)`.
+- Fixed curly braces in globs.
+- Throttled calls to `Writer.save`, to fix the `too many open files`
+  bug.
+
+  Throttled calls to `Writer.save` from `save_description.run` sharing
+  the same throttle used for all FD access, with
+  `~max_concurrent_jobs:500`
+- Added to `jenga -progress` `~save=XXX`, the number of calls to
+  `Writer.save` in `Progress.saves_run`.
+
 ## 112.06.00
 
 - Support for user control of stale-artifact deletion, by allowing

@@ -1,2 +1,1 @@
-include Tenacious_intf.S
-val version : string
+include Interface.S

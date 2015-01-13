@@ -20,7 +20,7 @@ end = struct
 
   let is_special_char_to_bash = function
     | '\\' | '\'' | '"' | '`' | '<' | '>' | '|' | ';' | ' ' | '\t' | '\n'
-    | '(' | ')' | '[' | ']' | '?' | '#' | '$' | '^' | '&' | '*' | '='
+    | '(' | ')' | '[' | ']' | '?' | '#' | '$' | '^' | '&' | '*' | '=' | '!' | '~'
       -> true
     | _
       -> false
@@ -31,10 +31,14 @@ end = struct
     | c -> String.make 1 c
     ) ^ "'"
 
+  let needs_quoting = function
+    | "" -> true
+    | s -> String.exists s ~f:is_special_char_to_bash
+
   let shell_escape s =
     (* quote a string (if necessary) to prevent interpretation of any chars which have a
        special meaning to bash *)
-    if String.exists s ~f:is_special_char_to_bash
+    if needs_quoting s
     then
       if String.contains s '\''
       (* already contains single-quotes; quote using backslash escaping *)

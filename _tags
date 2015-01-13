@@ -1,7 +1,6 @@
 # OASIS_START
 # OASIS_STOP
-<lib/*.ml{,i}>: syntax_camlp4o
-<tenacious/lib/*.ml{,i}>: syntax_camlp4o
-<tenacious/sample-lib/*.ml{,i}>: syntax_camlp4o
+<**/*.ml>: warn(-40)
 <**/*_standalone.native>: linkall
 <**/*.native> and (not <**/*_standalone.native>): link_fake_archive
+<lib/*>: ugly_hack_to_workaround_ocamlbuild_nightmare

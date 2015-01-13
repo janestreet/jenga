@@ -1,13 +1,11 @@
 
 open Core.Std
 
-(* copied from some old code -- dev/repo_utils/lib/glob.ml
-   todo - clean this up.
-*)
+(* copied from some old code -- dev/repo_utils/lib/glob.ml *)
 
-let quote char = sprintf "%c" char
+let quote char = Str.quote (sprintf "%c" char)
 
-let globre ~path s =
+let convert_unanchored s =
   let group = ref 0 in (*Parenthesis level*)
   let len = String.length s in
   let res = Buffer.create len in
@@ -15,15 +13,12 @@ let globre ~path s =
   let rec aux pos =
     if pos < len then
       match s.[pos] with
-      | '.' ->
-          res ^= "\\.";
-          aux (pos+1)
       | '\\' ->
           if (pos+1) < len then
             res ^= (quote (s.[pos+1]));
             aux (pos+2)
       | '*' ->
-          if (pos+1) < len &&s.[pos+1] = '*' && path then begin
+          if (pos+1) < len &&s.[pos+1] = '*' then begin
             res ^= ".*";
             aux (pos+2)
           end else begin
@@ -37,24 +32,19 @@ let globre ~path s =
             aux (pos+1)
           end
       | '?' ->
-          if (pos+1) < len &&s.[pos+1] = '?' && path then begin
-            res ^= ".";
-            aux (pos+2)
-          end else begin
-            res ^= "[^/]";
-            aux (pos+1)
-          end
+        res ^= "[^/]";
+        aux (pos+1)
       | ',' when !group > 0 ->
-          res ^= "|";
-          aux (pos+1);
+        res ^= "\\|";
+        aux (pos+1);
       | '{' ->
-          res ^= "(?:";
-          incr group;
+        res ^= "\\(";
+        incr group;
           aux (pos+1)
       | '}' ->
           if !group = 0 then
             failwith "closing unopened { in glob";
-          res ^= ")";
+          res ^= "\\)";
           decr group;
           aux (pos+1)
       | '[' ->
@@ -90,4 +80,10 @@ let globre ~path s =
     failwith "unclosed { in glob";
   Buffer.contents res
 
-let convert_unanchored glob = globre ~path:true glob
+TEST_UNIT =
+  assert (convert_unanchored "{a,b}" = "\\(a\\|b\\)")
+
+TEST_UNIT =
+  assert (
+    convert_unanchored "{*.[ch],*.cpp,*.hh}"
+    = "\\([^/]*\\.[ch]\\|[^/]*\\.cpp\\|[^/]*\\.hh\\)")

@@ -117,7 +117,12 @@ module Dep : sig (* The jenga monad *)
   val fs_glob_change : Glob.t -> unit t
 
   val subdirs : dir:Path.t -> Path.t list t
+  (** [file_exists] makes the information about file existence available to the rules, but
+      does not declare it as an action dependency.
+  *)
   val file_exists : Path.t -> bool t
+  (** [file_existence] declares an action dependency on file existence *)
+  val file_existence : Path.t -> unit t
 
   module List : sig
     val concat_map : 'a list -> f:('a -> 'b list t) -> 'b list t
@@ -182,7 +187,6 @@ module Scheme : sig
   val rules_dep : Rule.t list Dep.t -> t
   val contents : Path.t -> (string -> t)-> t
   val no_rules : t
-  val switch_glob : ?def:t -> (string * t) list -> t
 end
 
 module Env : sig
