@@ -1,0 +1,23 @@
+# OASIS_START
+# DO NOT EDIT (digest: 1b30c67753a3c59afc50bf85c423b86d)
+version = "112.17.00"
+description = "Build system"
+requires =
+"sexplib fieldslib comparelib core core_extended async async_shell async_inotify async_parallel pa_ounit pcre ocaml_plugin str threads jenga.tenacious"
+archive(byte) = "jenga_lib.cma"
+archive(byte, plugin) = "jenga_lib.cma"
+archive(native) = "jenga_lib.cmxa"
+archive(native, plugin) = "jenga_lib.cmxs"
+exists_if = "jenga_lib.cma"
+package "tenacious" (
+ version = "112.17.00"
+ description = "Build system"
+ requires = "core async threads pa_ounit pa_test"
+ archive(byte) = "tenacious_lib.cma"
+ archive(byte, plugin) = "tenacious_lib.cma"
+ archive(native) = "tenacious_lib.cmxa"
+ archive(native, plugin) = "tenacious_lib.cmxs"
+ exists_if = "tenacious_lib.cma"
+)
+# OASIS_STOP
+
