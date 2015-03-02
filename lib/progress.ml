@@ -3,7 +3,6 @@ open Core.Std
 open Async.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 
-let persist_saves_done = Effort.Counter.create "db-save" (* for use in persist.ml *)
 let actions_run = Effort.Counter.create "act" (* for use in action.ml *)
 let saves_run = Effort.Counter.create "save" (* for use in save_description.ml *)
 let considerations_run = Effort.Counter.create "con" (* for use in build.ml *)
@@ -169,7 +168,7 @@ let all_effort =
     (*Fs.mkdir_counter;*)
     Fs.ls_counter;
     (*Job.external_jobs_run;*)
-    persist_saves_done;
+    Persist.saves_done;
   ]
 
 let act_effort =

@@ -3,24 +3,11 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
-module T = struct
-  type t = {
-    dir : Path.t;
-    prog : string;
-    args : string list;
-  } with sexp, bin_io, compare
-  let hash = Hashtbl.hash
-end
-include T
-include Hashable.Make_binable(T)
+include Db.Job
 
-let create ~dir ~prog ~args = { dir ; prog; args; }
-
-let dir t = t.dir
-
-let string_for_sh {dir=_;prog;args} =
-  let args = List.map args ~f:(fun arg -> Message.Q.shell_escape arg) in
-  sprintf "%s %s" prog (String.concat ~sep:" " args)
+let string_for_sh t =
+  let args = List.map (args t) ~f:(fun arg -> Message.Q.shell_escape arg) in
+  sprintf "%s %s" (prog t) (String.concat ~sep:" " args)
 
 module Output = struct
 
@@ -48,7 +35,8 @@ end
 
 exception Shutdown
 
-let run {dir;prog;args} ~config ~need ~putenv ~output =
+let run t ~config ~need ~putenv ~output =
+  let dir,prog,args = (dir t, prog t, args t) in
   let {Output.stdout_expected;get_result;none=_} = output in
   let where = Path.to_string dir in
   let job_start =

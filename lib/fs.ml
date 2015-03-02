@@ -15,7 +15,6 @@ let memoize ht ~key f =
     Hashtbl.add_exn ht ~key ~data:tenacious;
     tenacious
 
-let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
 let unbreakable x = x,Heart.unbreakable
 
 let lstat_counter = Effort.Counter.create "stat"
@@ -33,16 +32,11 @@ module Ocaml_digest = Digest
 let ( *>>= ) = Tenacious.bind
 let ( *>>| ) t f = Tenacious.map t ~f
 
-(*----------------------------------------------------------------------
- Kind
-----------------------------------------------------------------------*)
-
-module Kind = struct
-  type t =
-    [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
-  with sexp, bin_io, compare
-  let to_string t = Sexp.to_string (sexp_of_t t)
-end
+module Kind = Db.Kind
+module Mtime = Db.Mtime
+module Stats = Db.Stats
+module Listing = Db.Listing
+module Digest = Db.Digest
 
 (*----------------------------------------------------------------------
  System lstat - counted; exns caught
@@ -56,82 +50,11 @@ let unix_lstat path =
     )
   )
 
-(*----------------------------------------------------------------------
- Mtime
-----------------------------------------------------------------------*)
-
-module Mtime = struct
-  type t = float with sexp, bin_io, compare
-  let equal = equal_using_compare compare
-end
-
-(*----------------------------------------------------------------------
-  Reduced Stat info
-----------------------------------------------------------------------*)
-
-module Stats : sig
-
-  type t with sexp, bin_io
-  val lstat : Path.t -> t Or_error.t Deferred.t
-  val equal : t -> t -> bool
-  val kind : t -> Kind.t
-  val mtime : t -> float
-
-end = struct
-
-  (* should contain enough info from the Unix.Stats.t to reliably indicate that
-     the path must be re-digested because it might have changed.
-
-     we should like this structure to be small, as we will store lots of them
-
-     we're happy to accept that sometimes a change after the stat, we will have to
-     redigest a file only to get the same digest
-
-     what we dont want is for the chance that the stat info remains the same, BUT
-     if we were to re-digest we would get different contents.
-
-     This is possible in theory - i.e. to keep the same inode & mtime
-     but have different content.
-     But this is pretty unusual (how exactly can it happen?)
-
-     And we are happy to not regard these as changes which will trigger a rebuild.
-
-     Some of the info in this stat structure is not for the it-might-have-changed
-     detection -- i.e. the kind -- but we need this to know how to treat the path
-     just statted.
-  *)
-
-  type t = {
-    (* can we do without dev & size ?? *)
-    dev : int;
-    ino : int;
-    kind : Kind.t;
-    size : int64;
-    mtime : Mtime.t;
-  } with sexp, bin_io, compare
-
-  let equal = equal_using_compare compare
-
-  let kind t = t.kind
-  let mtime t = t.mtime
-
-  let of_unix_stats u =
-    let module U = Unix.Stats in
-    {
-      dev = U.dev u;
-      ino = U.ino u;
-      kind = U.kind u;
-      size = U.size u;
-      mtime = Time.to_float (U.mtime u);
-    }
-
-  let lstat path =
-    let path = Path.to_absolute_string path in
-    unix_lstat path >>= function
-    | Ok u -> return (Ok (of_unix_stats u))
-    | Error exn -> return (Error (Error.of_exn exn))
-
-end
+let lstat path =
+  let path = Path.to_absolute_string path in
+  unix_lstat path >>= function
+  | Ok u -> return (Ok (Stats.of_unix_stats u))
+  | Error exn -> return (Error (Error.of_exn exn))
 
 let is_dir stats =
   match Stats.kind stats with
@@ -153,7 +76,7 @@ module Ensure_directory_result = struct
 end
 
 let ensure_directory ~dir =
-  Stats.lstat dir >>= function
+  lstat dir >>= function
   | Ok stats -> return (if is_dir stats then `ok else `not_a_dir)
   | Error _e ->
     (*Message.message "mkdir: %s" (Path.to_string dir);*)
@@ -165,7 +88,6 @@ let ensure_directory ~dir =
     match res with
     | Ok () -> return `ok
     | Error _ -> return `failed
-
 
 (*----------------------------------------------------------------------
  Digester (throttle)
@@ -209,29 +131,13 @@ end = struct
 
 end
 
-
 (*----------------------------------------------------------------------
  Compute_digest (count!)
 ----------------------------------------------------------------------*)
 
-module Digest : sig  (* proxy for the contents of a file in the file-system *)
-
-  type t with sexp, bin_io, compare
-  val of_string : string -> t
-  val equal : t -> t -> bool
-
-end = struct
-
-  type t = string with sexp, bin_io
-  let of_string x = x
-  let compare = String.compare
-  let equal = String.equal
-
-end
-
 module type Compute_digest_sig = sig
 
-  val of_file : Path.t -> Digest.t Or_error.t Deferred.t
+  val of_file : Path.t -> string Or_error.t Deferred.t
 
 end
 
@@ -247,7 +153,7 @@ module Ocaml__Compute_digest : Compute_digest_sig = struct
               try (
                 let d = Ocaml_digest.channel ic (-1) in
                 let res = Ocaml_digest.to_hex d in
-                Ok (Digest.of_string res)
+                Ok res
               )
               with exn -> Error (Error.of_exn exn)
             in
@@ -286,7 +192,7 @@ end) : Compute_digest_sig = struct
       | `success ->
         match (String.lsplit2 stdout ~on:' ') with
         | None -> err (sprintf "unexpected output: `%s'" stdout)
-        | Some (res,_) -> return (Ok (Digest.of_string res))
+        | Some (res,_) -> return (Ok res)
     )
 
 end
@@ -310,168 +216,65 @@ let m =
 
 module Compute_digest = (val m : Compute_digest_sig)
 
-
 (*----------------------------------------------------------------------
   Listing (count!)
 ----------------------------------------------------------------------*)
 
-module Listing : sig
-
-  type t with sexp, bin_io, compare
-
-  val of_file_paths_exn : dir:Path.t -> Path.t list -> t
-
-  val equal : t -> t -> bool
-  val run_ls : dir:Path.t -> t Or_error.t Deferred.t
-  val paths : t -> Path.Set.t
-
-  module Restriction : sig
-    type t with sexp, bin_io
-    val create : kinds:Kind.t list option -> Pattern.t -> t
-    val to_string : t -> string
-    val pattern : t -> Pattern.t
-    val kind_allows_file : t -> bool
-    val compare : t -> t -> int
-  end
-
-  val restrict : t -> Restriction.t -> t
-
-end = struct
-
-  module Elem = struct
-    module T = struct
-      type t = {
-        base : string;
-        kind : Kind.t;
-      } with sexp, bin_io, compare
-    end
-    include T
-    include Comparable.Make_binable(T)
-  end
-
-  type t = {
-    dir : Path.t;
-    listing : Elem.t list;
-  } with sexp, bin_io, compare
-
-  let compare t1 t2 =
-    let res = Path.compare t1.dir t2.dir in
-    if Int.(res<>0) then res
-    else
-      (* Allow differently ordering listings to be regarded as equal *)
-      Elem.Set.compare (Elem.Set.of_list t1.listing) (Elem.Set.of_list t2.listing)
-
-  let equal = equal_using_compare compare
-
-  let of_file_paths_exn ~dir paths =
-    let elems = List.map paths ~f:(fun path ->
-      assert (Path.(dirname path = dir));
-      {Elem. base = Path.basename path; kind = `File;}
-    ) in
-    {dir; listing = elems}
-
-  let run_ls ~dir =
-    File_access.enqueue (fun () ->
-      let path_string = Path.to_string dir in
-      Locking.lock_directory_for_listing ~dir (fun () ->
-        Effort.track ls_counter (fun () ->
-          try_with (fun () -> Unix.opendir path_string) >>= function
-          | Error exn -> return (Error (Error.of_exn exn)) (* opendir failed *)
-          | Ok dir_handle ->
+let run_ls ~dir =
+  let open Listing in
+  File_access.enqueue (fun () ->
+    let path_string = Path.to_string dir in
+    Locking.lock_directory_for_listing ~dir (fun () ->
+      Effort.track ls_counter (fun () ->
+        try_with (fun () -> Unix.opendir path_string) >>= function
+        | Error exn -> return (Error (Error.of_exn exn)) (* opendir failed *)
+        | Ok dir_handle ->
             (* opendir succeeded, we must be sure to close *)
-            let close () =
-              try_with (fun () -> Unix.closedir dir_handle) >>| function | Ok () -> ()
-              | Error exn ->
-                Message.error "Unix.closedir failed: %s\n%s" path_string (Exn.to_string exn)
-            in
+          let close () =
+            try_with (fun () -> Unix.closedir dir_handle) >>| function | Ok () -> ()
+            | Error exn ->
+              Message.error "Unix.closedir failed: %s\n%s" path_string (Exn.to_string exn)
+          in
             (* catch all exns while processing so we can close in every case *)
-            try_with (fun () ->
-              let rec loop acc =
-                try_with (fun () -> Unix.readdir dir_handle) >>= function
-                | Ok "." -> loop acc
-                | Ok ".." -> loop acc
-                | Ok base ->
-                  begin
-                    let path_string = Path.to_string dir ^ "/" ^ base in
-                    unix_lstat path_string >>= function
-                    | Error _e ->
+          try_with (fun () ->
+            let rec loop acc =
+              try_with (fun () -> Unix.readdir dir_handle) >>= function
+              | Ok "." -> loop acc
+              | Ok ".." -> loop acc
+              | Ok base ->
+                begin
+                  let path_string = Path.to_string dir ^ "/" ^ base in
+                  unix_lstat path_string >>= function
+                  | Error _e ->
                       (* File disappeared between readdir & lstat system calls.
                          Handle as if readdir never told as about it *)
-                      loop acc
-                    | Ok u ->
-                      let kind = u.Unix.Stats.kind in
-                      loop ({Elem.base;kind} :: acc)
-                  end
-                | Error exn ->
-                  match Monitor.extract_exn exn with
-                  | End_of_file ->
+                    loop acc
+                  | Ok u ->
+                    let kind = u.Unix.Stats.kind in
+                    loop (Elem.create ~base ~kind :: acc)
+                end
+              | Error exn ->
+                match Monitor.extract_exn exn with
+                | End_of_file ->
                     (* no more filenames - normal; we are finished listing *)
-                    return { dir; listing = acc }
-                  | exn ->
+                  return (create ~dir ~elems:acc)
+                | exn ->
                     (* some other unexpected error; raise to outer handler *)
-                    raise exn
-              in
-              loop []
-
-            ) >>= fun res ->
-            (* convert exn -> Or_error *)
-            let ore =
-              match res with
-              | Error exn -> Error (Error.of_exn exn)
-              | Ok x -> Ok x
+                  raise exn
             in
+            loop []
+
+          ) >>= fun res ->
+            (* convert exn -> Or_error *)
+          let ore =
+            match res with
+            | Error exn -> Error (Error.of_exn exn)
+            | Ok x -> Ok x
+          in
             (* close in every case *)
-            close () >>= fun () ->
-            return ore
-        )))
-
-  let paths t =
-    Path.Set.of_list (
-      List.map t.listing ~f:(fun e ->
-        Path.relative ~dir:t.dir e.Elem.base
-      ))
-
-  module Restriction = struct
-    type t = {
-      kinds : Kind.t list option; (* None means any kind *)
-      pat : Pattern.t;
-    } with sexp, bin_io, compare
-
-    let create ~kinds pat = { kinds; pat; }
-
-    let pattern t = t.pat
-
-    let kind_allows_file t =
-      match t.kinds with
-      | None -> true
-      | Some kinds -> List.mem kinds `File
-
-    let to_string t =
-      sprintf "%s %s"
-        (match t.kinds with
-        | None -> "(any-kind)"
-        | Some kinds ->
-          sprintf "(%s)" (String.concat ~sep:"," (List.map kinds ~f:Kind.to_string)))
-        (Pattern.to_string t.pat)
-
-  end
-
-  let restrict t r =
-    let match_kind =
-      match r.Restriction.kinds with
-      | None -> (fun _ -> true)
-      | Some kinds -> List.mem kinds
-    in
-    {
-      dir = t.dir;
-      listing =
-        List.filter t.listing ~f:(fun e ->
-          match_kind e.Elem.kind
-          && Pattern.matches r.Restriction.pat e.Elem.base
-        )
-    }
-
-end
+          close () >>= fun () ->
+          return ore
+      )))
 
 (*----------------------------------------------------------------------
  Watcher (inotify wrapper)
@@ -733,7 +536,7 @@ end = struct
           | Error exn ->
             return (unbreakable (Error exn))
           | Ok heart ->
-            Stats.lstat path >>| fun res -> (res,heart)
+            lstat path >>| fun res -> (res,heart)
         )
       in
       tenacious
@@ -801,34 +604,26 @@ let contents_file sm ~file =
     | Error e -> `file_read_error e
     | Ok new_contents -> `contents new_contents
 
+
+
 (*----------------------------------------------------------------------
  Digest_persist - w.r.t stat->digest mapping
 ----------------------------------------------------------------------*)
 
 module Digest_persist : sig
 
-  type t with sexp, bin_io
-
-  val create : unit -> t
-
   val digest_file :
-    t ->
+    Persist.t ->
     Stat_memo.t ->
     file:Path.t ->
     Digest_result.t Tenacious.t
 
 end = struct
 
-  type t = {
-    cache : (Stats.t * Digest.t) Path.Table.t;
-  } with sexp, bin_io
-
-  let create () = {
-    cache = Path.Table.create ();
-  }
-
-  let digest_file t sm ~file =
-    let remove() = Hashtbl.remove t.cache file in
+  let digest_file persist sm ~file =
+    let db = Persist.db persist in
+    let cache = Db.digest_cache db in
+    let remove() = Hashtbl.remove cache file in
     Stat_memo.lstat sm ~what:`file file *>>= function
     | Error e -> (remove(); Tenacious.return (`stat_error e))
     | Ok stats ->
@@ -836,7 +631,7 @@ end = struct
       if (is_dir stats) then Tenacious.return `is_a_dir else
       if not (is_digestable stats) then Tenacious.return (`undigestable kind) else
         match (
-          match (Hashtbl.find t.cache file) with
+          match (Hashtbl.find cache file) with
           | None -> None
           | Some (prev_stats,prev_proxy) ->
             if Stats.equal stats prev_stats
@@ -849,9 +644,10 @@ end = struct
             Compute_digest.of_file file >>| unbreakable
           ) *>>= function
           | Error e -> (remove(); Tenacious.return (`digest_error e))
-          | Ok new_digest ->
-            Hashtbl.set (Misc.mod_persist t.cache) ~key:file ~data:(stats,new_digest);
-            Tenacious.return (`digest new_digest)
+          | Ok digest_string ->
+            let digest = Digest.intern digest_string in
+            Hashtbl.set (Persist.modify "digest" cache) ~key:file ~data:(stats,digest);
+            Tenacious.return (`digest digest)
 
 end
 
@@ -862,99 +658,26 @@ end
 
 module Listing_persist : sig
 
-  type t with sexp, bin_io
-
-  val create : unit -> t
-
   val list_dir :
-    t ->
     Stat_memo.t ->
     dir:Path.t ->
     Listing_result.t Tenacious.t
 
-
 end = struct
 
-  type t = {
-    cache : (Stats.t * Listing.t) Path.Table.t;
-  } with sexp, bin_io
-
-  let create () = {
-    cache = Path.Table.create ();
-  }
-
-  let list_dir t sm ~dir =
-    let remove() = Hashtbl.remove t.cache dir in
+  let list_dir sm ~dir =
     let tenacious =
       Stat_memo.lstat sm ~what:`dir dir *>>= function
-      | Error e -> (remove(); Tenacious.return (`stat_error e))
+      | Error e -> Tenacious.return (`stat_error e)
       | Ok stats ->
         if not (is_dir stats) then Tenacious.return `not_a_dir else
-          match (
-            match (Hashtbl.find t.cache dir) with
-            | None -> None
-            | Some (prev_stats,prev_proxy) ->
-              if Stats.equal stats prev_stats
-              then Some prev_proxy
-              else None
-          ) with
-          | Some old_good_listing -> Tenacious.return (`listing old_good_listing)
-          | None ->
-            Tenacious.lift (fun () ->
-              Listing.run_ls ~dir >>| unbreakable
-            ) *>>= function
-            | Error e -> (remove(); Tenacious.return (`listing_error e))
-            | Ok new_listing ->
-              if Path.(equal (Path.of_relative Path.Rel.the_root) dir) then (
-              (* Don't save the result of listing the root of the repo because having .jenga
-                 files in the root means that the stat will always differ and so we can
-                 never use the listing saved.  The cost of saving the listing for root is
-                 that the persistent state will always change and hence need writing.  *)
-              ) else (
-                Hashtbl.set (Misc.mod_persist t.cache) ~key:dir ~data:(stats,new_listing);
-              );
-              Tenacious.return (`listing new_listing)
+          Tenacious.lift (fun () ->
+            run_ls ~dir >>| unbreakable
+          ) *>>= function
+          | Error e -> Tenacious.return (`listing_error e)
+          | Ok new_listing -> Tenacious.return (`listing new_listing)
     in
     tenacious
-
-end
-
-(*----------------------------------------------------------------------
-Persist - combination of Digest & Listing persists
-----------------------------------------------------------------------*)
-
-module Persist : sig
-
-  type t with sexp, bin_io
-  val create : unit -> t
-
-  val digest_file :
-    t ->
-    Stat_memo.t ->
-    file:Path.t ->
-    Digest_result.t Tenacious.t
-
-  val list_dir :
-    t ->
-    Stat_memo.t ->
-    dir:Path.t ->
-    Listing_result.t Tenacious.t
-
-end = struct
-
-  type t = {
-    digests : Digest_persist.t;
-    listings : Listing_persist.t;
-  } with sexp, bin_io
-
-  let create () = {
-    digests = Digest_persist.create();
-    listings = Listing_persist.create();
-  }
-
-  let digest_file t sm ~file = Digest_persist.digest_file t.digests sm ~file
-
-  let list_dir t sm ~dir = Listing_persist.list_dir t.listings sm ~dir
 
 end
 
@@ -1016,7 +739,7 @@ end = struct
 
   let digest_file t dp sm ~file =
     memoize t.cache ~key:file (fun () ->
-      Persist.digest_file dp sm ~file
+      Digest_persist.digest_file dp sm ~file
     )
 
   let create () = {
@@ -1036,7 +759,6 @@ module Listing_memo : sig
 
   val list_dir :
     t ->
-    Persist.t ->
     Stat_memo.t ->
     dir:Path.t ->
     Listing_result.t Tenacious.t
@@ -1048,9 +770,9 @@ end = struct
     cache : computation Path.Table.t;
   }
 
-  let list_dir t dp sm ~dir =
+  let list_dir t sm ~dir =
     memoize t.cache ~key:dir (fun () ->
-      Persist.list_dir dp sm ~dir
+      Listing_persist.list_dir sm ~dir
     )
 
   let create () = {
@@ -1064,28 +786,9 @@ end
  Glob
 ----------------------------------------------------------------------*)
 
-module Glob : sig
+module Glob = struct
 
-  type t with sexp, bin_io
-  include Hashable with type t := t
-
-  val create : dir:Path.t -> ?kinds: Kind.t list -> string -> t
-  val create_from_path : kinds: Kind.t list option -> Path.t -> t
-
-  val to_string : t -> string
-  val compare : t -> t -> int
-
-  val dir : t -> Path.t
-  val pattern : t -> Pattern.t
-  val kind_allows_file : t -> bool
-
-  val exec : t ->
-    Listing_memo.t ->
-    Persist.t ->
-    Stat_memo.t ->
-    Listing_result.t Tenacious.t
-
-end = struct
+  include Db.Glob
 
   module Key = struct
     module T = struct
@@ -1100,29 +803,12 @@ end = struct
     include Hashable.Make(T)
   end
 
-  module T = struct
-    type t = {
-      dir : Path.t;
-      restriction : Listing.Restriction.t;
-    } with sexp, bin_io, compare
-    let hash = Hashtbl.hash
-  end
-
-  include T
-  include Hashable.Make(T)
-
-  let dir t = t.dir
-  let pattern t = Listing.Restriction.pattern t.restriction
-  let kind_allows_file t = Listing.Restriction.kind_allows_file t.restriction
-
-  let to_string t =
-    sprintf "glob: %s/ %s"
-      (Path.to_string t.dir)
-      (Listing.Restriction.to_string t.restriction)
+  let pattern t = Listing.Restriction.pattern (restriction t)
+  let kind_allows_file t = Listing.Restriction.kind_allows_file (restriction t)
 
   let raw_create ~dir ~kinds pat =
     let restriction = Listing.Restriction.create ~kinds pat in
-    let t = { dir ; restriction } in
+    let t = create ~dir ~restriction in
     (*Message.message "Glob.create: %s" (to_string t);*)
     t
 
@@ -1152,18 +838,18 @@ end = struct
     let key = {Key. dir; kinds; pat} in
     cached_create key
 
-  let exec_no_cutoff glob lm per sm  =
-    Listing_memo.list_dir lm per sm ~dir:glob.dir *>>= function
+  let exec_no_cutoff glob lm sm  =
+    Listing_memo.list_dir lm sm ~dir:(dir glob) *>>= function
     | `listing listing ->
-      let restricted = Listing.restrict listing glob.restriction in
+      let restricted = Listing.restrict listing (restriction glob) in
       Tenacious.return (`listing restricted)
     | x ->
       Tenacious.return x
 
-  let exec glob lm per sm =
+  let exec glob lm sm =
     Tenacious.cutoff
       ~equal:Listing_result.equal
-      (exec_no_cutoff glob lm per sm)
+      (exec_no_cutoff glob lm sm)
 
 end
 
@@ -1179,7 +865,6 @@ module Glob_memo : sig
   val list_glob :
     t ->
     Listing_memo.t ->
-    Persist.t ->
     Stat_memo.t ->
     Glob.t ->
     Listing_result.t Tenacious.t
@@ -1191,9 +876,9 @@ end = struct
     cache : computation Glob.Table.t;
   }
 
-  let list_glob t lm per sm glob =
+  let list_glob t lm sm glob =
     memoize t.cache ~key:glob (fun () ->
-      Glob.exec glob lm per sm
+      Glob.exec glob lm sm
     )
 
   let create () = {
@@ -1224,7 +909,6 @@ module Memo : sig
 
   val list_glob :
     t ->
-    Persist.t ->
     Glob.t ->
     Listing_result.t Tenacious.t
 
@@ -1255,7 +939,7 @@ end = struct
 
   let digest_file t per ~file = Digest_memo.digest_file t.dm per t.sm ~file
 
-  let list_glob t per glob = Glob_memo.list_glob t.gm t.lm per t.sm glob
+  let list_glob t glob = Glob_memo.list_glob t.gm t.lm t.sm glob
 
   let mtime_file t ~file =
     Stat_memo.lstat t.sm ~what:`file file *>>| function
@@ -1325,7 +1009,7 @@ end = struct
 
   let digest_file t ~file = Memo.digest_file t.memo t.persist ~file
 
-  let list_glob t glob = Memo.list_glob t.memo t.persist glob
+  let list_glob t glob = Memo.list_glob t.memo glob
 
   let watch_sync_file t path =
     Watcher.watch_file_or_dir t.watcher ~what:`file path
@@ -1349,7 +1033,7 @@ let ensure_directory (_:t) ~dir = (* why need t ? *)
   )
 
 let mtime_file_right_now ~file =
-  Stats.lstat file >>| function
+  lstat file >>| function
   | Ok stats -> Some (Stats.mtime stats)
   | Error _ -> None
 

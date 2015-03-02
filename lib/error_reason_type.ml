@@ -7,8 +7,8 @@ type t =
   | Error_in_deps
   | File_read_error                   of Sexp.t
   | Digest_error                      of Sexp.t
-  | Undigestable                      of Fs.Kind.t
-  | Glob_error                        of Fs.Glob.t * string
+  | Undigestable                      of Db.Kind.t
+  | Glob_error                        of Db.Glob.t * string
   | No_definition_for_alias           of Alias.t
   | No_source_at_abs_path             of Path.Abs.t
   | No_rule_or_source                 of Path.t

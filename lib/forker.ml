@@ -38,7 +38,7 @@ module Fork_process : Fork_process_sig = struct
       return { Reply. stdout; stderr; outcome }
     | Ok process ->
       let module Output = Process.Output in
-      Process.wait process >>= fun output ->
+      Process.collect_output_and_wait process >>= fun output ->
       let stdout = output.Output.stdout in
       let stderr = output.Output.stderr in
       let exit_status = output.Output.exit_status in

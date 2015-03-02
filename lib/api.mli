@@ -37,7 +37,21 @@ end
 
 module Glob : sig
   type t with sexp
+  (** [create ~dir pattern] refers to anything in [dir] whose basename matches
+      the [pattern]. Note that patterns with slashes or path globs (**) in them
+      do not work.
+      Special syntax allowed in [pattern]:
+      * - stands for any string unless it's the leading character, in which case it
+      does not match empty string or hidden files (prefixed with a dot).
+      ? - stands for any character
+      [a-z] - a character in range ['a' .. 'z']
+      [!a-z] - a character out of ['a' .. 'z']
+      \ - escapes the character following it
+      {alt1,alt2} - matches both alt1 and alt2. can be nested.
+  *)
   val create : dir:Path.t -> ?kinds: Kind.t list -> string -> t
+  (** matches exactly the filename given *)
+  val create_from_path : kinds:Fs.Kind.t list option -> Path.t -> t
 end
 
 module Alias : sig

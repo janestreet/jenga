@@ -2,21 +2,25 @@
 open Core.Std
 open Async.Std
 
+val saves_done : Effort.Counter.t
+
 type t
 
 val create_saving_periodically : root_dir:string -> Time.Span.t -> t Deferred.t
 
+(** tries to save; on error prints out the message and becomes determined *)
 val disable_periodic_saving_and_save_now : t -> unit Deferred.t
 val re_enable_periodic_saving : t -> unit
 
-val fs_persist : t -> Fs.Persist.t
-val build_persist : t -> Build.Persist.t
-val quality : t -> Build.Persistence_quality.t
-
-(* internal state of the persist module, used for offline inspection *)
-module State : sig
-  type t
-  val load_db : db_filename:string -> t Deferred.t
-  val sexp_of_t : t -> Sexp.t
-  val build_persist : t -> Build.Persist.t
+module Quality : sig
+  type t = [`initial | `format_changed | `good] with sexp_of
+  val to_string : t -> string
 end
+
+val quality : t -> Quality.t
+
+val modify : string -> 'a -> 'a
+
+val db : t -> Db.t
+
+val load_db_as_sexp : db_filename:string -> Sexp.t Deferred.t

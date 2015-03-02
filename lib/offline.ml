@@ -24,9 +24,7 @@ let cat_sexp =
           e_message "cat_sexp...";
           let db_filename = root_dir ^/ Misc.db_basename in
           e_message "cat_sexp, loading...";
-          Persist.State.load_db ~db_filename >>= fun db ->
-          e_message "cat_sexp, converting...";
-          let sexp = Persist.State.sexp_of_t db in
+          Persist.load_db_as_sexp ~db_filename >>= fun sexp ->
           e_message "cat_sexp, output...";
           let stdout = force Writer.stdout in
           Writer.write_sexp ~hum:true stdout sexp;

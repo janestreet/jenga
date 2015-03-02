@@ -15,19 +15,11 @@ val digest_counter : Effort.Counter.t
 val ls_counter : Effort.Counter.t
 val mkdir_counter : Effort.Counter.t
 
-module Digest : sig (* proxy for file contents *)
-  type t with sexp, bin_io, compare
-  val equal : t -> t -> bool
-end
-
-module Kind : sig
-  type t = [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
-  with sexp, bin_io, compare
-  val to_string : t -> string
-end
+module Digest = Db.Digest
+module Kind = Db.Kind
 
 module Glob : sig (* glob specification *)
-  type t with sexp, bin_io, compare
+  type t = Db.Glob.t with sexp, bin_io, compare
   include Hashable with type t := t
   val dir : t -> Path.t
   val pattern : t -> Pattern.t
@@ -38,16 +30,7 @@ module Glob : sig (* glob specification *)
   val create_from_path : kinds:Kind.t list option -> Path.t -> t
 end
 
-module Listing : sig (* result of globbing *)
-  type t with sexp, bin_io, compare
-  val of_file_paths_exn : dir:Path.t -> Path.t list -> t
-  val paths : t -> Path.Set.t
-end
-
-module Persist : sig
-  type t with sexp, bin_io
-  val create : unit -> t
-end
+module Listing = Db.Listing
 
 type t (* handle to the file-system *)
 val create : Config.t -> Persist.t -> t Deferred.t

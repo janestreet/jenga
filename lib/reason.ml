@@ -35,7 +35,7 @@ let to_string_one_line = function
   | Error_in_deps                     -> "Unable to build dependencies"
   | File_read_error _                 -> "file read error"
   | Digest_error _                    -> "unable to digest file"
-  | Glob_error (g,s)                  -> sprintf "%s %s" (Fs.Glob.to_string g) s
+  | Glob_error (g,s)                  -> sprintf "%s %s" (Db.Glob.to_string g) s
   | No_definition_for_alias a         -> (sprintf "No definition found for alias: %s"
                                             (Alias.to_string a))
   | No_source_at_abs_path a           -> sprintf "No source at absolute path: %s" (Path.Abs.to_string a)
@@ -52,7 +52,7 @@ let to_string_one_line = function
   | Usercode_raised _ ->
     "User-code raised exception"
   | Undigestable k                    ->
-    sprintf "undigestable file kind: %s" (Fs.Kind.to_string k)
+    sprintf "undigestable file kind: %s" (Db.Kind.to_string k)
   | Inconsistent_proxies ->
     "Inconsistency proxies"
   | Mtimes_changed paths ->

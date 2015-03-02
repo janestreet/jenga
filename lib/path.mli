@@ -32,7 +32,7 @@ end
 module Abs : sig
   (* [Path.Abs.t]
      Type for absolute paths. Always has leading /. *)
-  type t with sexp, compare, bin_io
+  type t with sexp_of, compare, bin_io
   val create : string -> t
   val to_string : t -> string
 end
@@ -51,7 +51,6 @@ val root_relative : string -> t
 val absolute : string -> t
 val relative : dir:t -> string -> t
 val relative_or_absolute : dir:t -> string -> t
-val equal : t -> t -> bool
 val dirname : t -> t
 val basename : t -> string
 val to_string : t -> string (* leading / for absolute; not for relative *)
@@ -69,3 +68,8 @@ val of_absolute_string : string -> t
 
 val relativize_if_possible : t -> t
 
+module With_store : sig
+  type 'a t with bin_io
+  val snapshot : 'a -> 'a t
+  val value : 'a t -> 'a
+end

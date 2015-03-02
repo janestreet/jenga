@@ -7,94 +7,29 @@ module Heart = Tenacious.Heart
 
 let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
 
+let exit_code_upon_control_c = ref Exit_code.incomplete
+
 module Target_rule = Rule.Target_rule
 module Digest = Fs.Digest
 module Glob = Fs.Glob
 module DG = Discovered_graph
-
-let exit_code_upon_control_c = ref Exit_code.incomplete
-
-(*----------------------------------------------------------------------
- Pm_key - path or glob
-----------------------------------------------------------------------*)
-
-module Pm_key : sig
-
-  type t with sexp, bin_io, compare
-  include Comparable_binable with type t := t
-
-  val equal : t -> t -> bool
-  val of_abs_path : Path.Abs.t -> t
-  val of_rel_path : Path.Rel.t -> t
-  val of_path : Path.t -> t
-  val of_glob : Glob.t -> t
-  val to_string : t -> string
-  val to_path_exn : t -> Path.Rel.t (* for targets_proxy_map *)
-  val to_path_opt : t -> Path.t option (* for mtimes check *)
-
-end = struct
-
-  module T = struct
-    type t = Path of Path.t | Glob of Glob.t
-    with sexp, bin_io, compare
-  end
-  include T
-  include Comparable.Make_binable(T)
-
-  let equal = equal_using_compare compare
-
-  let of_path x = Path x
-  let of_abs_path x = Path (Path.of_absolute x)
-  let of_rel_path x = Path (Path.of_relative x)
-  let of_glob x = Glob x
-
-  let to_string = function
-    | Path path -> Path.to_string path
-    | Glob glob -> Glob.to_string glob
-
-  let to_path_exn = function
-    | Glob _ -> failwith "Proxy_map.key.to_path_exn/Glob"
-    | Path x ->
-      match Path.case x with
-      | `absolute _ -> failwith "Proxy_map.key.to_path_exn/Abs"
-      | `relative path -> path
-
-  let to_path_opt = function
-    | Path path -> Some path
-    | Glob _ -> None
-
-end
-
-(*----------------------------------------------------------------------
-  proxies
-----------------------------------------------------------------------*)
-
-module Proxy : sig
-
-  type t with sexp, bin_io, compare
-  val of_digest : Digest.t -> t
-  val of_listing : dir:Path.t -> Path.Set.t -> t
-  val equal : t -> t -> bool
-
-end = struct
-
-  type t = Digest of Digest.t | Fs_proxy of Fs.Listing.t with sexp, bin_io, compare
-  let of_digest x = Digest x
-
-  let of_listing ~dir paths =
-    Fs_proxy (Fs.Listing.of_file_paths_exn ~dir (Path.Set.to_list paths))
-
-  let equal = equal_using_compare compare
-
-end
+module Pm_key = Db.Pm_key
+module Proxy = Db.Proxy
+module Proxy_map = Db.Proxy_map
+module Rule_proxy = Db.Rule_proxy
+module Output_proxy = Db.Output_proxy
 
 module PPs = struct (* list of path-tagged proxies *)
   type t = (Path.t * Proxy.t) list
 end
 
-module Proxy_map : sig (* need to be keyed on Path/Glob *)
+(*----------------------------------------------------------------------
+ proxy map operations
+----------------------------------------------------------------------*)
 
-  type t with sexp, bin_io, compare
+module Proxy_map_op : sig
+
+  type t = Db.Proxy_map.t with sexp_of, bin_io, compare
 
   val empty  : t
   val single : Pm_key.t -> Proxy.t -> t
@@ -112,7 +47,7 @@ module Proxy_map : sig (* need to be keyed on Path/Glob *)
 
 end = struct
 
-  type t = Proxy.t Pm_key.Map.t with sexp, bin_io, compare
+  include Db.Proxy_map
 
   type inconsistency = (Pm_key.t * Proxy.t list) list with sexp_of
 
@@ -176,25 +111,6 @@ end = struct
     Path.Set.of_list (
       List.filter_map (Pm_key.Map.keys t) ~f:Pm_key.to_path_opt
     )
-
-end
-
-module Rule_proxy = struct
-
-  type t = {
-    targets : Proxy_map.t;
-    deps : Proxy_map.t;
-    action : Job.t
-  } with sexp, bin_io, compare, fields
-
-end
-
-module Output_proxy = struct
-
-  type t = {
-    deps : Proxy_map.t;
-    stdout : string;
-  } with sexp, bin_io, compare, fields
 
 end
 
@@ -479,34 +395,6 @@ module RR = struct
 end
 
 (*----------------------------------------------------------------------
-  Persist - static cache - saved to file between runs
-----------------------------------------------------------------------*)
-
-module Persist = struct
-
-  (* The values in these hashtable must be sexp convertable,
-     so they can be saved to file.  *)
-
-  type t = {
-    generated   : Path.Set.t Gen_key.Table.t;
-    ruled       : Rule_proxy.t Path.Rel.Table.t; (* actions run for target-rules *)
-    actioned    : Output_proxy.t Job.Table.t; (* actions run for their stdout *)
-  } with sexp, bin_io
-
-  let create () = {
-    generated = Gen_key.Table.create();
-    ruled = Path.Rel.Table.create();
-    actioned = Job.Table.create();
-  }
-
-end
-
-module Persistence_quality = struct
-  type t = [`initial | `format_changed | `good] with sexp_of
-  let to_string t = Sexp.to_string (sexp_of_t t)
-end
-
-(*----------------------------------------------------------------------
  fixpoint step count
 ----------------------------------------------------------------------*)
 
@@ -608,13 +496,12 @@ type t = {
 
 } with fields
 
-let ruled t = t.persist.Persist.ruled
-let actioned t = t.persist.Persist.actioned
+let generated t = Db.generated (Persist.db t.persist)
+let ruled t = Db.ruled (Persist.db t.persist)
+let actioned t = Db.actioned (Persist.db t.persist)
 
 let memo_reflecting t = t.memo.Memo.reflecting
 let memo_building t = t.memo.Memo.building
-
-let generated t = t.persist.Persist.generated
 
 let build_sub_goal : (t ->  Goal.t -> Proxy_map.t Builder.t) =
   fun t goal -> t.build_goal t goal
@@ -737,7 +624,7 @@ let determine_and_remove_stale_artifacts : (
         | None -> Path.Set.empty
       in
       if not (Path.Set.equal prev_targets targets) then (
-        Hashtbl.set (Misc.mod_persist (generated t)) ~key:gen_key ~data:targets;
+        Hashtbl.set (Persist.modify "generated" (generated t)) ~key:gen_key ~data:targets;
       );
       return ()
 
@@ -1232,7 +1119,7 @@ let mtime_file : (
 
 let mtimes_of_proxy_map : (t -> Proxy_map.t -> Mtimes.t Builder.t) =
   fun t pm ->
-    let paths = Proxy_map.path_keys pm in
+    let paths = Proxy_map_op.path_keys pm in
     Builder.all (
       List.map (Set.to_list paths) ~f:(fun path -> mtime_file (`as_cached t) path)
     )*>>| Mtimes.create
@@ -1322,14 +1209,14 @@ let run_action_for_stdout_if_necessary
         run_action_for_stdout t rr env action *>>= fun stdout ->
         check_mtimes_unchanged t mtimes *>>= fun () ->
         let output_proxy = {Output_proxy. deps; stdout;} in
-        Hashtbl.set (Misc.mod_persist (actioned t)) ~key:job ~data:output_proxy;
+        Hashtbl.set (Persist.modify "actioned" (actioned t)) ~key:job ~data:output_proxy;
         return stdout
       )
     in
     match (Hashtbl.find (actioned t) job) with
     | None -> run_and_cache RR.No_record_of_being_run_before
     | Some prev ->
-        match (Proxy_map.diff ~before:prev.Output_proxy.deps ~after:deps) with
+        match (Proxy_map_op.diff ~before:prev.Output_proxy.deps ~after:deps) with
         | Some keys -> run_and_cache (RR.Deps_have_changed keys)
         | None ->
           (* Nothing has changed, use cached stdout *)
@@ -1349,7 +1236,7 @@ let need_abs_path : (t -> Path.Abs.t -> Proxy_map.t Builder.t) =
     | `is_a_dir -> error (Reason.Unexpected_directory path)
     | `file digest ->
       let proxy = Proxy.of_digest digest in
-      let pm = Proxy_map.single (Pm_key.of_abs_path abs) proxy in
+      let pm = Proxy_map_op.single (Pm_key.of_abs_path abs) proxy in
       return pm
 
 let need_path : (t -> Path.t -> Proxy_map.t Builder.t) =
@@ -1360,7 +1247,7 @@ let need_path : (t -> Path.t -> Proxy_map.t Builder.t) =
 
 let build_merged_proxy_maps : (Proxy_map.t list -> Proxy_map.t Builder.t) =
   fun pms ->
-    match (Proxy_map.merge pms) with
+    match (Proxy_map_op.merge pms) with
     | `err _inconsistency -> error Reason.Inconsistent_proxies
     | `ok pm -> return pm
 
@@ -1391,7 +1278,7 @@ let build_depends : (t -> 'a Dep.t -> ('a * Proxy_map.t) Builder.t) =
       match dep with
 
       | Dep.Return x ->
-        return (x, Proxy_map.empty)
+        return (x, Proxy_map_op.empty)
 
       | Dep.Bind (left,f_right) ->
         exec left *>>= fun (v1,pm1) ->
@@ -1402,7 +1289,7 @@ let build_depends : (t -> 'a Dep.t -> ('a * Proxy_map.t) Builder.t) =
 
       | Dep.Cutoff (equal,body) ->
         Builder.cutoff
-          ~equal:(fun (x1,pm1) (x2,pm2) -> equal x1 x2 && Proxy_map.equal pm1 pm2)
+          ~equal:(fun (x1,pm1) (x2,pm2) -> equal x1 x2 && Proxy_map_op.equal pm1 pm2)
           (exec body)
 
       | Dep.All xs ->
@@ -1759,7 +1646,7 @@ let build_target_rule :
         check_targets t targets *>>= function
         | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
         | `ok path_tagged_proxys ->
-          match (Proxy_map.create_by_path path_tagged_proxys) with
+          match (Proxy_map_op.create_by_path path_tagged_proxys) with
           | `err _inconsistency -> error Reason.Inconsistent_proxies
           | `ok targets_proxy_map ->
             check_mtimes_unchanged t mtimes *>>= fun () ->
@@ -1770,7 +1657,7 @@ let build_target_rule :
               action = job;
             }
             in
-            Hashtbl.set (Misc.mod_persist (ruled t)) ~key:head_target ~data:rule_proxy;
+            Hashtbl.set (Persist.modify "ruled" (ruled t)) ~key:head_target ~data:rule_proxy;
             (* We remove data associated with the [other_targets]. Its not essential for
                correctness, but it avoid cruft from building up in the persistent state *)
             List.iter other_targets ~f:(fun other -> Hashtbl.remove (ruled t) other);
@@ -1783,7 +1670,7 @@ let build_target_rule :
       match (equal_using_compare Job.compare prev.Rule_proxy.action job) with
       | false -> run_and_cache RR.Action_changed
       | true ->
-        match (Proxy_map.diff ~before:prev.Rule_proxy.deps ~after:deps_proxy_map) with
+        match (Proxy_map_op.diff ~before:prev.Rule_proxy.deps ~after:deps_proxy_map) with
         | Some keys -> run_and_cache (RR.Deps_have_changed keys)
         | None ->
           (* de-sensitize to the pre-action state of targets...
@@ -1793,10 +1680,10 @@ let build_target_rule :
           match opt with
           | `missing paths -> run_and_cache (RR.Targets_missing paths)
           | `ok path_tagged_proxys ->
-            match (Proxy_map.create_by_path path_tagged_proxys) with
+            match (Proxy_map_op.create_by_path path_tagged_proxys) with
             | `err _inconsistency -> error Reason.Inconsistent_proxies
             | `ok targets_proxy_map ->
-              match (Proxy_map.diff ~before:prev.Rule_proxy.targets ~after:targets_proxy_map) with
+              match (Proxy_map_op.diff ~before:prev.Rule_proxy.targets ~after:targets_proxy_map) with
               | Some keys ->
                 let paths = List.map keys ~f:Pm_key.to_path_exn in
                 run_and_cache (RR.Targets_not_as_expected paths)
@@ -2480,7 +2367,6 @@ let build_forever =
   (* co-ordinate the build-forever process *)
 
   fun config progress ~jr_spec ~top_level_demands fs persist
-    persistence_quality
     ~save_db_now ~when_rebuilding ->
 
     let memo = Memo.create () in
@@ -2507,7 +2393,7 @@ let build_forever =
     Tenacious.exec get_env_opt >>= fun (env_opt,__heart) ->
 
     begin
-      match persistence_quality with
+      match Persist.quality persist with
       | `initial | `good -> Deferred.return ()
       | `format_changed ->
         run_user_function_from_env_opt env_opt "persist_changed" ~f:(fun env () ->

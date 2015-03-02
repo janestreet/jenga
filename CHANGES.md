@@ -1,3 +1,7 @@
+## 112.24.00
+
+- Interns strings, significantly reducing memory use.
+
 ## 112.17.00
 
 - Fixed byte-compile targets to avoid stale artifact deletion of

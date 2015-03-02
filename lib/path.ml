@@ -45,6 +45,8 @@ module Root = struct
 
 end
 
+module IPS = Interning.String(struct let who = "<path>" end)
+
 (* The string representations for root-relative and absolute paths are disjoint:
    Absolute strings start with a /
    Relative strings dont start with a /, or are empty (the root) *)
@@ -53,7 +55,7 @@ module Rel = struct
 
   module Inner : sig
 
-    type t with sexp, compare, bin_io
+    type t with sexp, bin_io, compare
     include Hashable_binable with type t := t
     include Comparable_binable with type t := t
     val unpack : t -> string
@@ -63,18 +65,15 @@ module Rel = struct
 
   end = struct
 
-    module T = struct
-      type t = string with compare, sexp, bin_io
-      let hash t = String.hash t
-    end
+    module T = IPS
 
     include T
     include Hashable.Make_binable(T)
     include Comparable.Make_binable(T)
 
-    let create s = assert (match s with "." -> false | _ -> true); s
+    let create s = assert (match s with "." -> false | _ -> true); IPS.intern s
 
-    let unpack t = t
+    let unpack = IPS.extern
 
     let the_root = create ""
 
@@ -92,8 +91,6 @@ module Rel = struct
   end
 
   include Inner
-
-  let equal t1 t2 = String.equal (unpack t1) (unpack t2)
 
   let is_root t = match (unpack t) with "" -> true | _ -> false
 
@@ -151,7 +148,7 @@ end
 
 module Abs : sig
 
-  type t with sexp, sexp, compare, bin_io
+  type t with sexp_of, compare, bin_io
   val create : string -> t
   val to_string : t -> string
   val relative_seg : dir:t -> string -> t
@@ -160,50 +157,49 @@ module Abs : sig
 
 end = struct
 
-  type t = string with sexp, compare, bin_io
+  type t = IPS.t
+  with sexp_of, compare, bin_io
 
   let create x =
     if not (starts_with_slash x)
     then failwithf "Path.Abs.create, doesn't start with / - %s" x ()
-    else x
+    else IPS.intern x
 
-  let to_string t = t
+  let to_string t = IPS.extern t
 
-  let the_root () = Root.get()
+  let the_root () = IPS.intern (Root.get())
 
-  let dirname t =  Filename.dirname t
+  let dirname t = IPS.intern (Filename.dirname (IPS.extern t))
 
   let relative_seg ~dir seg =
     match seg with
     | "" -> dir (* "foo//bar" == "foo/bar" *)
     | "." -> dir
     | ".." -> dirname dir
-    | _ -> dir ^/ seg
+    | _ -> IPS.intern (IPS.extern dir ^/ seg)
 
 end
 
-module T = struct
-  type t = string with sexp, compare, bin_io
-  let hash = String.hash
-end
+module T = IPS
 
 include T
 include Hashable.Make_binable(T)
 include Comparable.Make_binable(T)
 
-let of_relative x = Rel.to_string x
-let of_absolute x = Abs.to_string x
+let of_relative x = intern (Rel.to_string x)
+let of_absolute x = intern (Abs.to_string x)
 
 let case t =
-  if starts_with_slash t
-  then `absolute (Abs.create t)
-  else `relative (Rel.create t)
+  let s = IPS.extern t in
+  if starts_with_slash s
+  then `absolute (Abs.create s)
+  else `relative (Rel.create s)
 
-let is_absolute t = starts_with_slash t
+let is_absolute t = starts_with_slash (extern t)
 
-let split t = Filename.split t
+let split t = Filename.split (extern t)
 
-let dirname t = fst (split t)
+let dirname t = intern (fst (split t))
 let basename t = snd (split t)
 
 let to_string t =

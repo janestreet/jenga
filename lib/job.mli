@@ -7,10 +7,11 @@ exception Shutdown
 (* [Job.t] is a process description
    We can run it directly. Or we can extract a suitable quoted string to run it via a
    shell, such as "bash -c". *)
-type t
-with sexp, bin_io, compare
-include Hashable_binable with type t := t
+
+type t = Db.Job.t
+with sexp_of, bin_io, compare
 val create : dir:Path.t -> prog:string -> args:string list -> t
+
 val string_for_sh : t -> string
 
 val dir : t -> Path.t

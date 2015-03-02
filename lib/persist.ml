@@ -3,6 +3,10 @@ open Core.Std
 open No_polymorphic_compare let _ = _squelch_unused_module_warning_
 open Async.Std
 
+module Digest = Db.Digest
+
+let saves_done = Effort.Counter.create "db-save"
+
 let jenga_show_persist =
   match Core.Std.Sys.getenv "JENGA_SHOW_PERSIST" with
   | None -> false
@@ -17,32 +21,51 @@ let time_async f =
   let duration = Time.diff (Time.now()) start_time in
   return (res,duration)
 
+(* avoid saving persistent db unless it has been modified *)
+let r_is_modified = ref false
+let is_modified () = !r_is_modified
+let set_is_saved () = r_is_modified := false
+let modify who x =
+  if !r_is_modified
+  then x
+  else (trace "setting MODIFIED flag, for: %s" who; r_is_modified := true ; x)
+
+module Quality = struct
+  type t = [`initial | `format_changed | `good] with sexp_of
+  let to_string t = Sexp.to_string (sexp_of_t t)
+end
+
 module State : sig
 
-  type t
-
-  val fs_persist : t -> Fs.Persist.t
-  val build_persist : t -> Build.Persist.t
-
-  val load_db_with_quality : db_filename:string -> (t * Build.Persistence_quality.t) Deferred.t
-  val load_db : db_filename:string -> t Deferred.t
-  val save_db : t -> db_filename:string -> unit Deferred.t
-
-  val sexp_of_t : t -> Sexp.t
+  type t with bin_io
+  val snapshot : Db.t -> t
+  val value : t -> Db.t
 
 end = struct
 
-  type t = {
-    fs_persist : Fs.Persist.t;
-    build_persist : Build.Persist.t
-  } with sexp, bin_io, fields
+  type t = Db.t Digest.With_store.t Path.With_store.t
+  with bin_io
 
-  let empty () = {
-    fs_persist = Fs.Persist.create ();
-    build_persist = Build.Persist.create ();
-  }
+  let snapshot db =
+    let x = db in
+    let x = Digest.With_store.snapshot x in
+    let x = Path.With_store.snapshot x in
+    x
 
-  (* load/save bin_prot.. *)
+  let value t =
+    let x = t in
+    let x = Path.With_store.value x in
+    let x = Digest.With_store.value x in
+    x
+
+end
+
+module Ops : sig
+
+  val load_db_with_quality : db_filename:string -> (Db.t * Quality.t) Deferred.t
+  val save_db : Db.t -> db_filename:string -> unit Deferred.t
+
+end = struct
 
   let max_len = 800 * 1024 * 1024 (* default 100Mb is too small *)
 
@@ -50,62 +73,64 @@ end = struct
     Sys.file_exists db_filename >>= function
     | `No | `Unknown ->
       trace "load: %s: does not exist" db_filename;
-      return (empty(), `initial)
+      return (Db.create(), `initial)
     | `Yes ->
     try_with (fun () ->
       Reader.with_file db_filename ~f:(fun r ->
-        Reader.read_bin_prot ~max_len r bin_reader_t
+        Reader.read_bin_prot ~max_len r State.bin_reader_t
       )
     ) >>= fun res ->
       match (
         match res with
-        | Ok (`Ok t) -> Some t (* successful load *)
+        | Ok (`Ok state) -> Some state (* successful load *)
         | Ok `Eof -> trace "load: %s: `Eof" db_filename; None
         | Error exn -> trace "load: %s:\n%s" db_filename (Exn.to_string exn); None
       ) with
-      | Some t -> return (t, `good)
-      | None -> return (empty(), `format_changed)
+      | Some state -> return (State.value state, `good)
+      | None -> return (Db.create(), `format_changed)
 
-  let load_db ~db_filename =
-    load_db_with_quality ~db_filename >>| fun (x,_quality) -> x
-
-  let save_db t ~db_filename =
-    Effort.track Progress.persist_saves_done (fun () ->
-      Writer.with_file_atomic db_filename ~f:(fun w ->
-        Writer.write_bin_prot w bin_writer_t t;
-        Misc.set_persist_is_saved();
-        return ()
-      )
+  let save_db db ~db_filename =
+    Effort.track saves_done (fun () ->
+      Monitor.try_with (fun () ->
+        Writer.with_file_atomic db_filename ~f:(fun w ->
+          (* snapshot & write must be in same async-block *)
+          let state = State.snapshot db in
+          Writer.write_bin_prot w State.bin_writer_t state;
+          set_is_saved();
+          return ()
+        )
+      ) >>| function
+      | Ok () -> ()
+      | Error exn ->
+        Message.error "exception thrown while saving %s:\n%s"
+          db_filename (Exn.to_string exn)
     )
 
 end
 
+let load_db_as_sexp ~db_filename =
+  Ops.load_db_with_quality ~db_filename >>| fun (db,_quality) -> Db.sexp_of_t db
+
 type t = {
-  state_mem : State.t;
-  quality : Build.Persistence_quality.t;
+  db : Db.t;
+  quality : Quality.t;
   db_filename : string;
   mutable save_status : [ `saving of unit Deferred.t | `not_saving ];
   mutable periodic_saving_enabled : bool;
-}
-
-let fs_persist t = State.fs_persist t.state_mem
-let build_persist t = State.build_persist t.state_mem
-let quality t = t.quality
-
-let db_filename t = t.db_filename
+} with fields
 
 let create ~root_dir =
   let db_filename = root_dir ^/ Misc.db_basename in
 
   trace "LOAD_DB: %s..." db_filename;
-  time_async (fun () -> State.load_db_with_quality ~db_filename)
-  >>= fun ((state,quality),duration) ->
+  time_async (fun () -> Ops.load_db_with_quality ~db_filename)
+  >>= fun ((db,quality),duration) ->
   trace "LOAD_DB: %s... done (%s), quality=%s"
     db_filename (Time.Span.to_string duration)
-    (Build.Persistence_quality.to_string quality);
+    (Quality.to_string quality);
 
   let t = {
-    state_mem = state;
+    db;
     quality;
     db_filename;
     save_status = `not_saving;
@@ -115,14 +140,14 @@ let create ~root_dir =
   return t
 
 let save_if_changed t =
-  match Misc.persist_is_modified() with
+  match is_modified() with
   | false ->
     trace "SAVE_DB: unchanged so not saving";
     Deferred.unit
   | true ->
     trace "SAVE_DB: %s..." (db_filename t);
     time_async (fun () ->
-      State.save_db t.state_mem ~db_filename:(db_filename t)
+      Ops.save_db (db t) ~db_filename:(db_filename t)
     ) >>= fun ((),duration) ->
     trace "SAVE_DB: %s... done (%s)" (db_filename t) (Time.Span.to_string duration);
     return ()
