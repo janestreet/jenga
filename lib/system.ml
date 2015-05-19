@@ -47,13 +47,6 @@ let num_cpus_if_known =
     in
     Some num_cpus
 
-let md5_program_path =
-  match system with
-  | Unexpected _ -> None
-  | Dumb -> None
-  | Darwin -> Some "/sbin/md5"
-  | Linux -> Some "/usr/bin/md5sum"
-
 let has_inotify =
   match system with
   | Unexpected _ -> false

@@ -3,7 +3,12 @@ open Core.Std
 open Async.Std
 
 module Q : sig
+  (** [shell_escape s] can be used as a part of bash command line to mean the word [s]
+      with any special characters escaped. *)
   val shell_escape : string -> string
+  (** [shell_escape_list l] constructs a part of bash command line with multiple
+      blank-separated words [l] on it with any special characters escaped *)
+  val shell_escape_list : string list -> string
 end
 
 module Job_start   : sig type t with bin_io end

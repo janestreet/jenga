@@ -4,7 +4,7 @@ configuration file in a simple make-style format, and in addition we
 setup multiple build directories using the same jengaroot.ml
 
 
-The source for the hello example is in contained the hello subdir
+The source for the hello example is contained in the hello subdir
 along with a make.conf specifying its dependencies.  A 2nd example is
 contained in other, with its own different make.conf.
 

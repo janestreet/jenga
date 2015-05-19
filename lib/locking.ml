@@ -55,18 +55,11 @@ let target_resources = Path.Rel.Table.create ()
 let lock_targets_for_action ~targets f =
   (* Prevent overlapping execution of actions on each target. *)
   let rs = List.map targets ~f:(
-    Hashtbl.find_or_add target_resources ~default:Target_resource.create
-  ) in
+    Hashtbl.find_or_add target_resources ~default:Target_resource.create)
+  in
   let acquire () = Target_resource.acquire_all rs in
   let release x = Ivar.fill x () in
   with_acquire_release ~acquire ~release f
-
-let is_action_running_for_target path =
-  (* Exported for use in [fs.ml], to avoid writing "changed" messages for targets which we
-     know will change because we are currently running an action which target them. *)
-  match Hashtbl.find target_resources path with
-  | None -> false
-  | Some r -> not (Target_resource.is_available r)
 
 module Dir_resource : sig
 
@@ -84,6 +77,7 @@ module Dir_resource : sig
   module Mode : sig type t = A | L end
   val acquire : t -> Mode.t -> unit Deferred.t
   val release : t-> unit
+  val is_locked_for_action : t -> bool
 
 end = struct
 
@@ -98,6 +92,11 @@ end = struct
   type t = state ref
 
   let create () = ref Free
+
+  let is_locked_for_action t = match !t with
+    | Locked (Mode.A, _, _) -> true
+    | Locked (Mode.L, _, _) -> false
+    | Free -> false
 
   let obtain : (
     t -> Mode.t ->  [
@@ -159,3 +158,11 @@ let lock_directory ~dir mode f =
 let lock_directory_for_action ~dir = lock_directory ~dir Dir_resource.Mode.A
 let lock_directory_for_listing ~dir = lock_directory ~dir Dir_resource.Mode.L
 
+let is_action_running_for_path path =
+  (* Exported for use in [fs.ml], to avoid writing "changed" messages for targets which we
+     know will change because we are currently running an action which target them. *)
+  match Hashtbl.find target_resources path with
+  | Some r -> not (Target_resource.is_available r)
+  | None -> match Hashtbl.find dir_resources (Path.of_relative path) with
+    | None -> false
+    | Some r -> Dir_resource.is_locked_for_action r

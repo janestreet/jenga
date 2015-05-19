@@ -1,6 +1,6 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! No_polymorphic_compare
 
 let empty_string = function "" -> true | _ -> false
 
@@ -8,44 +8,21 @@ let starts_with_slash s =
   not (empty_string s)
   && (match (String.get s 0) with | '/' -> true | _-> false)
 
-module Root = struct
-
-  let r = ref None
-
-  let set ~dir =
-    match !r with
-    | Some _ -> failwith "Path.Root.set - called more than once"
-    | None -> r := Some dir
-
-  let jenga_root_exists_in ~dir =
-    let exists name =
-      match Sys.file_exists (dir ^/ name) with
-      | `No | `Unknown -> false
-      | `Yes -> true
-    in
-    exists Misc.jenga_root_basename ||
-    exists Misc.jenga_conf_basename
-
-  let discover () =
-    let start_dir = Core.Std.Sys.getcwd() in
-    let rec loop dir =
-      if jenga_root_exists_in ~dir
-      then (set ~dir; `ok)
-      else
-        if String.equal dir Filename.root
-        then `cant_find_root
-        else loop (Filename.dirname dir)
-    in
-    loop start_dir
-
-  let get () =
-    match !r with
-    | None -> failwith "Path.Root.get - called before discover/set"
-    | Some v -> v
-
-end
-
 module IPS = Interning.String(struct let who = "<path>" end)
+
+let reach_from_common =
+  let rec go = function
+    | [], [] -> "."
+    | [], fs -> "./" ^ String.concat ~sep:"/" fs
+    | ds, [] -> String.concat ~sep:"/" (List.map ~f:(fun _ -> "..") ds)
+    | ((d :: dt) as ds), ((f :: ft) as fs) ->
+      if String.(=) d f
+      then
+        go (dt, ft)
+      else
+        String.concat ~sep:"/" (List.map ~f:(fun _ -> "..") ds @ fs)
+  in
+  fun ~dir path -> go (dir, path)
 
 (* The string representations for root-relative and absolute paths are disjoint:
    Absolute strings start with a /
@@ -59,6 +36,7 @@ module Rel = struct
     include Hashable_binable with type t := t
     include Comparable_binable with type t := t
     val unpack : t -> string
+    val create_from_path : string -> t
     val the_root : t
     val extend : t -> seg:string -> t
     val split : t -> t * string
@@ -73,9 +51,13 @@ module Rel = struct
 
     let create s = assert (match s with "." -> false | _ -> true); IPS.intern s
 
-    let unpack = IPS.extern
-
     let the_root = create ""
+
+    let create_from_path = function
+      | "." -> the_root
+      | s -> IPS.intern s
+
+    let unpack = IPS.extern
 
     let extend t ~seg =
       assert (match seg with "." | ".." -> false | _ -> true);
@@ -105,45 +87,75 @@ module Rel = struct
       if is_root dir
       then failwithf "Path.relative, cant .. the_root" ()
       else dirname dir
-    | _ -> extend dir ~seg
+    | _ ->
+      extend dir ~seg
+
+  let of_parts_relative ~dir =
+    List.fold ~init:dir ~f:(fun dir seg -> relative_seg ~dir ~seg)
+
+  let of_parts = of_parts_relative ~dir:the_root
 
   let relative ~dir s =
     if starts_with_slash s then failwithf "Path.Rel.relative, starts with / - %s" s ();
-    let segs = String.split s ~on:'/' in
-    List.fold segs ~init:dir ~f:(fun dir seg -> relative_seg ~dir ~seg)
+    of_parts_relative ~dir (String.split s ~on:'/')
 
   let create s = relative ~dir:the_root s
 
-  let create_from_absolute s =
-    let root = Root.get() in
-    let root_slash = root ^ "/" in
-    if String.equal s root then Some the_root else
-      match String.chop_prefix s ~prefix:root_slash with
-      | Some x -> Some (create x)
-      | None -> None
+  let parts path = match unpack path with
+    | "" -> []
+    | s -> String.split ~on:'/' s
 
-  let root_relative = create
+  TEST_UNIT "parts 1" =
+    <:test_result< string list >>
+      ~expect:[]
+      (parts (create "."))
 
-  (* compute relative ".."-based-path-string path to reach [path] from [dir] *)
-  let dotdot ~dir path =
-    if is_root dir then unpack path else
-    (*if (dirname path = dir) then basename path else*)
-    let segs = String.split (unpack dir) ~on:'/' in
-    let dots = List.map segs ~f:(fun seg -> assert (not (String.(seg=".."))); "../") in
-    String.concat dots ^ (unpack path)
+  TEST_UNIT "parts 2" =
+    <:test_result< string list >>
+      ~expect:["foo"]
+      (parts (create "foo"))
+
+  TEST_UNIT "parts 3" =
+    <:test_result< string list >>
+      ~expect:["foo"; "bar"]
+      (parts (create "foo/bar"))
+
+  TEST_UNIT "parts 4" =
+    <:test_result< string list >>
+      ~expect:["bar"]
+      (parts (create "foo/../bar"))
+
+  let reach_from ~dir path =
+    reach_from_common ~dir:(parts dir) (parts path)
+
+  TEST_UNIT "reach_from 1" =
+    <:test_result< string >>
+      ~expect:"../baz"
+      (reach_from ~dir:(create "foo/bar") (create "foo/baz"))
+
+  TEST_UNIT "reach_from 2" =
+    <:test_result< string >>
+      ~expect:"."
+      (reach_from ~dir:(create "foo/bar") (create "foo/bar"))
+
+  TEST_UNIT "reach_from 2" =
+    <:test_result< string >>
+      ~expect:"./baz"
+      (reach_from ~dir:(create "foo/bar") (create "foo/bar/baz"))
+
+  TEST_UNIT "reach_from 3" =
+    <:test_result< string >>
+      ~expect:"../../bar/foo"
+      (reach_from ~dir:(create "foo/bar") (create "bar/foo"))
 
   let to_string t =
     (* Special case for root. Represented as ""; Displayed as "." *)
     if is_root t then "." else unpack t
 
-  let to_absolute_string t =
-    if is_root t
-    then Root.get()
-    else Root.get() ^ "/" ^ (unpack t)
-
-  let is_special_jenga_path t =
-    String.is_prefix ~prefix:Misc.special_prefix (to_string t)
-
+  let is_descendant ~dir p =
+    dir = p
+    || dir = the_root
+    || String.is_prefix ~prefix:(unpack dir ^ "/") (unpack p)
 end
 
 module Abs : sig
@@ -152,24 +164,31 @@ module Abs : sig
   val create : string -> t
   val to_string : t -> string
   val relative_seg : dir:t -> string -> t
-  val the_root : unit -> t
+  val relative : dir:t -> string -> t
+  val unix_root : t
   val dirname : t -> t
+  val basename : t -> string
+  val split : t -> t * string
+  val is_descendant : dir:t -> t -> bool
+  val reach_from : dir:t -> t -> string
 
 end = struct
 
-  type t = IPS.t
-  with sexp_of, compare, bin_io
+  module T = IPS
 
-  let create x =
-    if not (starts_with_slash x)
-    then failwithf "Path.Abs.create, doesn't start with / - %s" x ()
-    else IPS.intern x
+  include T
+  include Hashable.Make_binable(T)
+  include Comparable.Make_binable(T)
+
+  let unix_root = IPS.intern "/"
 
   let to_string t = IPS.extern t
 
-  let the_root () = IPS.intern (Root.get())
-
   let dirname t = IPS.intern (Filename.dirname (IPS.extern t))
+  let basename t = Filename.basename (IPS.extern t)
+  let split t =
+    let dir, file = Filename.split (IPS.extern t) in
+    IPS.intern dir, file
 
   let relative_seg ~dir seg =
     match seg with
@@ -177,6 +196,112 @@ end = struct
     | "." -> dir
     | ".." -> dirname dir
     | _ -> IPS.intern (IPS.extern dir ^/ seg)
+
+  let of_parts_relative ~dir =
+    List.fold_left ~init:dir ~f:(fun dir seg -> relative_seg ~dir seg)
+
+  let relative ~dir s =
+    if starts_with_slash s then failwithf "Path.Abs.relative, starts with / - %s" s ();
+    of_parts_relative ~dir (String.split s ~on:'/')
+
+  let create s =
+    if not (starts_with_slash s)
+    then failwithf "Path.Abs.create, doesn't start with / - %s" s ()
+    else of_parts_relative ~dir:unix_root (String.split s ~on:'/')
+
+  TEST_UNIT "create 1" =
+    <:test_result< string >>
+      ~expect:"/"
+      (IPS.extern (create "/"))
+  TEST_UNIT "create 2" =
+    <:test_result< string >>
+      ~expect:"/"
+      (IPS.extern (create "/.."))
+  TEST_UNIT "create 3" =
+    <:test_result< string >>
+      ~expect:"/foo"
+      (IPS.extern (create "/./foo/bar/.."))
+
+  let parts path = match (String.split ~on:'/' (IPS.extern path)) with
+    | "" :: "" :: [] -> []
+    | "" :: parts -> parts
+    | [] -> failwith "bug in [split]"
+    | _ :: _ -> failwith "Abs.t does not start with '/'"
+
+  let reach_from ~dir path =
+    reach_from_common ~dir:(parts dir) (parts path)
+
+  let reach_descendant ~dir path =
+    if dir = path then Some "."
+    else
+    if dir = unix_root
+    then
+      (* note that this is non-empty because not (dir = path) *)
+      let res = String.chop_prefix ~prefix:"/" (extern path) in
+      assert (Option.is_some res);
+      res
+    else
+      String.chop_prefix ~prefix:(extern dir ^ "/") (extern path)
+
+  let is_descendant ~dir path =
+    dir = path || dir = unix_root ||
+    String.is_prefix ~prefix:(extern dir ^ "/") (extern path)
+
+  let test_descendant a b r1 r2 =
+    let b1 = Option.is_some r1 in
+    let b2 = Option.is_some r2 in
+    <:test_result< bool >>
+      ~expect:b1
+      (is_descendant ~dir:a b);
+    <:test_result< bool >>
+      ~expect:b2
+      (is_descendant ~dir:b a);
+    <:test_result< string option >>
+      ~expect:r1
+      (reach_descendant ~dir:a b);
+    <:test_result< string option >>
+      ~expect:r2
+      (reach_descendant ~dir:b a)
+
+  let test_gt a b r =
+    test_descendant a b (Some r) None
+
+  let test_eq a b =
+    test_descendant a b (Some ".") (Some ".")
+
+  let test_unrelated a b =
+    test_descendant a b None None
+
+  TEST_UNIT "is_descendant 1" =
+    test_gt unix_root (create "/foo/bar") "foo/bar"
+
+  TEST_UNIT "is_descendant 2" =
+    test_gt (create "/foo") (create "/foo/bar") "bar"
+
+  TEST_UNIT "is_descendant 3" =
+    test_eq (create "/foo/bar") (create "/foo/bar")
+
+  TEST_UNIT "is_descendant 4" =
+    test_unrelated (create "/foo/bar") (create "/foo/baz")
+
+  TEST_UNIT "is_descendant 5" =
+    test_eq (create "/foo/../bar") (create "/bar")
+
+end
+
+module Repo = struct
+
+  let r = ref None
+
+  let set_root ~dir =
+    match !r with
+    | Some _ -> failwith "Path.Root.set - called more than once"
+    | None -> r := Some dir
+
+  let root () =
+    match !r with
+    | None -> failwith "Path.Root.get - called before discover/set"
+    | Some v -> v
 
 end
 
@@ -193,7 +318,7 @@ let case t =
   let s = IPS.extern t in
   if starts_with_slash s
   then `absolute (Abs.create s)
-  else `relative (Rel.create s)
+  else `relative (Rel.Inner.create_from_path s)
 
 let is_absolute t = starts_with_slash (extern t)
 
@@ -207,10 +332,14 @@ let to_string t =
   | `relative p -> Rel.to_string p
   | `absolute a -> Abs.to_string a
 
-let to_absolute_string t =
+let to_absolute t =
   match (case t) with
-  | `relative p -> Rel.to_absolute_string p
-  | `absolute a -> Abs.to_string a
+  | `relative p ->
+    Abs.relative ~dir:(Repo.root ()) (Rel.to_string p)
+  | `absolute a ->
+    a
+
+let to_absolute_string t = Abs.to_string (to_absolute t)
 
 let absolute s = of_absolute (Abs.create s)
 
@@ -223,7 +352,8 @@ let relative_seg ~dir ~seg =
     | "." -> of_relative dir
     | ".." ->
       if Rel.is_root dir
-      then of_absolute (Abs.dirname (Abs.the_root ()))
+      then
+        failwith ".. from the root!"
       else of_relative (Rel.dirname dir)
     | _ ->
       of_relative (Rel.extend dir ~seg)
@@ -238,38 +368,33 @@ let relative_or_absolute ~dir s =
   then absolute s (* dir ignored *)
   else relative ~dir s
 
-let equal t1 t2 =
-  String.(to_absolute_string t1 = to_absolute_string t2)
-
 let the_root = of_relative Rel.the_root
+
+let unix_root = of_absolute Abs.unix_root
 
 let root_relative = relative ~dir:the_root
 
-let dotdot ~dir t =
+let reach_from ~dir t =
   match (case dir, case t) with
-  | `relative dir, `relative t -> Rel.dotdot ~dir t
-  | _,_ ->
-    (* give up, just use absolute path *)
-    to_absolute_string t
-
+  | `relative dir, `relative t -> Rel.reach_from ~dir t
+  | `absolute dir, `absolute t -> Abs.reach_from ~dir t
+  | `absolute _, `relative _ -> failwith "trying to reach relative from absolute!"
+  | `relative _, `absolute p -> Abs.to_string p
 
 let is_descendant ~dir path =
-  String.is_prefix ~prefix:(to_absolute_string dir^"/") (to_absolute_string path)
+  match (case dir, case path) with
+  | (`relative dir, `relative path) -> Rel.is_descendant ~dir path
+  | `absolute dir, `absolute path -> Abs.is_descendant ~dir path
+  | _, _ ->
+    false
 
-let reach_from ~dir path =
-  if is_descendant ~dir path
-  then String.chop_prefix_exn ~prefix:(to_absolute_string dir^"/") (to_absolute_string path)
-  else dotdot ~dir path
-
-let is_special_jenga_path path =
-  match case path with
-  | `relative rel -> Rel.is_special_jenga_path rel
-  | `absolute _ -> false
+let of_absolute_relativizing path =
+  let root = Repo.root () in
+  match Abs.is_descendant ~dir:root path with
+  | true -> of_relative (Rel.create (Abs.reach_from ~dir:root path))
+  | false -> of_absolute path
 
 let of_absolute_string s =
-  match (Rel.create_from_absolute s) with
-  | Some rel -> of_relative rel
-  | None -> absolute s
+  of_absolute_relativizing (Abs.create s)
 
-let relativize_if_possible p =
-  of_absolute_string (to_absolute_string p)
+let is_a_root path = (=) (dirname path) path

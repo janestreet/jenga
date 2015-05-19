@@ -1,6 +1,6 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! No_polymorphic_compare
 open Async.Std
 
 module Heart = Tenacious.Heart
@@ -243,7 +243,7 @@ module Builder : sig (* layer error monad within tenacious monad *)
 
 end = struct
 
-  type 'a t = ('a, Problem.t) Result.t Tenacious.t
+  type 'a t = ('a, Problem.t) Tenacious.Result.t
 
   let cutoff ~equal x =
     Tenacious.cutoff
@@ -265,23 +265,13 @@ end = struct
   let of_tenacious tenacious =
     Tenacious.map tenacious ~f:(fun x -> Ok x)
 
-  let return x = Tenacious.return (Ok x)
+  let return = Tenacious.Result.return
+  let bind = Tenacious.Result.bind
+  let map x f = Tenacious.Result.map ~f x
 
-  let bind t f =
-    Tenacious.bind t (function
-    | Error e -> Tenacious.return (Error e)
-    | Ok x -> f x
-    )
-
-  let map t f =
-    Tenacious.map t ~f:(function
-    | Error e -> Error e
-    | Ok x -> Ok (f x)
-    )
-
-  let error reason =
-    Tenacious.return (Error (Problem.create reason))
-
+  (* we can't use Tenacious.Result.all because:
+     - it's sequential, but we want parallel
+     - it only returns one error, but we want all of them *)
   let all xs =
     Tenacious.map (Tenacious.all xs) ~f:(fun ys ->
       let rec collect probs oks = function
@@ -297,11 +287,10 @@ end = struct
 
   let all_unit ts = map (all ts) (fun (_:unit list) -> ())
 
+  let error reason = Tenacious.Result.fail (Problem.create reason)
+
   let subgoal need builder =
-    Tenacious.map builder ~f:(function
-    | Ok x -> Ok x
-    | Error problem -> Error (Problem.subgoal need problem)
-    )
+    Tenacious.Result.map_error builder ~f:(Problem.subgoal need)
 
   let of_deferred f =
     Tenacious.lift (fun () ->
@@ -323,9 +312,7 @@ end = struct
   let before_redo t ~f = reify (Tenacious.before_redo t ~f)
 
   let with_ore builder ~f =
-    wrap (
-      Tenacious.map (expose builder) ~f:(fun ore -> f ore; ore)
-    )
+      Tenacious.map builder ~f:(fun ore -> f ore; ore)
 
   let uncancellable builder = Tenacious.uncancellable builder
 
@@ -541,8 +528,9 @@ let digest_path
   fun t path ->
     Builder.of_tenacious (Fs.digest_file t.fs ~file:path)
     *>>= function
-    | `stat_error _   -> return `missing
+    | `stat_error e   -> error (Reason.File_read_error (Error.sexp_of_t e))
     | `is_a_dir       -> return `is_a_dir
+    | `does_not_exist -> return `missing
     | `undigestable k -> error (Reason.Undigestable k)
     | `digest_error e -> error (Reason.Digest_error (Error.sexp_of_t e))
     | `digest digest  -> return (`file digest)
@@ -558,10 +546,10 @@ let glob_fs_only : (t -> Glob.t -> Path.Set.t Builder.t) =
   fun t glob ->
     let err s = Reason.Glob_error (glob,s) in
     Builder.of_tenacious (Fs.list_glob t.fs glob) *>>= function
-    | `stat_error _   -> error (err "stat error")
-    | `not_a_dir      -> error (err "not a directory")
-    | `listing_error _-> error (err "unable to list")
-    | `listing listing -> return (Fs.Listing.paths listing)
+    | Error e -> error (err (Error.to_string_hum e))
+    | Ok (`not_a_dir) -> error (err "not a directory")
+    | Ok `does_not_exist -> return Path.Set.empty
+    | Ok (`listing listing) -> return (Db.Listing.paths listing)
 
 let ensure_directory : (t -> dir:Path.Rel.t -> unit Builder.t) =
   fun t ~dir ->
@@ -569,7 +557,7 @@ let ensure_directory : (t -> dir:Path.Rel.t -> unit Builder.t) =
     *>>= function
     | `ok -> return ()
     | `not_a_dir -> error (Reason.No_directory_for_target "not a directory")
-    | `failed -> error (Reason.No_directory_for_target "failed to create")
+    | `failed _err -> error (Reason.No_directory_for_target "failed to create")
 
 (*----------------------------------------------------------------------
  stale artifacts
@@ -629,6 +617,59 @@ let determine_and_remove_stale_artifacts : (
       return ()
 
 (*----------------------------------------------------------------------
+  share / share & allow cycle detection
+----------------------------------------------------------------------*)
+
+let share_builder : (
+  key : 'a ->
+  memo : ('a, 'b Builder.t) Hashtbl.t ->
+  f : (unit -> 'b Builder.t) ->
+  'b Builder.t
+) =
+  fun ~key ~memo ~f ->
+    match (Hashtbl.find memo key) with
+    | Some builder -> builder
+    | None ->
+      let builder = f () in
+      let builder = Builder.reify builder in
+      Hashtbl.add_exn memo ~key ~data:builder;
+      builder
+
+let share_and_check_for_cycles :
+    (* memoize / check for cycles, by constructing nodes in the discovered_graph *)
+    (t ->
+     key : 'a ->
+     memo : ('a, 'b Builder.t * DG.Node.t) Hashtbl.t ->
+     item : DG.Item.t ->
+     f : (t -> 'b Builder.t) ->
+     'b Builder.t
+    ) =
+  fun t ~key ~memo ~item ~f ->
+    match (Hashtbl.find memo key) with
+    | Some (builder,node) ->
+      begin
+        (* The existing node just reached is also a dependency of t.node *)
+        DG.link_dependants_no_cycle_check t.discovered_graph node ~additional:t.node;
+        builder;
+      end
+    | None ->
+      let pre_node = t.node in
+      let node = DG.create_dependency t.discovered_graph pre_node item in
+      let t = {t with node = node} in
+      (* newly created node(item) is a dependency of the t.node we were at before *)
+      let builder = f t in (* critical - [f] must be called only once *)
+      let builder =
+        Builder.before_redo builder
+          ~f:(fun () ->
+            DG.remove_all_dependencies t.discovered_graph t.node;
+          )
+      in
+      let builder = Builder.reify builder in
+      (* we use add_exn, because each key will be memoized exactly once *)
+      Hashtbl.add_exn memo ~key ~data:(builder,t.node);
+      builder
+
+(*----------------------------------------------------------------------
  glob - new semantics (on_filesystem or buildable)
 ----------------------------------------------------------------------*)
 
@@ -652,65 +693,81 @@ let buildable_targets_and_clean_when_fixed : (t -> dir:Path.t -> Path.Set.t Buil
     return targets
 
 let glob_fs_or_buildable : (t -> Glob.t -> Path.Set.t Builder.t) =
-  fun t glob ->
-    begin
-      if Glob.kind_allows_file glob
-      then
-        let dir = Glob.dir glob in
-        let pattern = Glob.pattern glob in
-        buildable_targets_and_clean_when_fixed t ~dir *>>| fun targets ->
-        let filtered_targets =
-          Path.Set.filter targets ~f:(fun path ->
-            Pattern.matches pattern (Path.basename path))
-        in
-        filtered_targets
-      else
-        return Path.Set.empty
+  let module Key = struct
+    module T = struct
+      type t = Glob.t * Fixpoint_iter.t with sexp, compare
+      let hash = Hashtbl.hash
     end
-    *>>= fun filtered_targets ->
-    glob_fs_only t glob *>>| fun filesystem ->
-    let result = Path.Set.union filtered_targets filesystem in
-    result
+    include Hashable.Make(T)
+  end in
+  let memo = Key.Table.create() in
+  fun t glob ->
+    share_builder ~key:(glob, t.fixpoint_iter) ~memo ~f:(fun () ->
+      Builder.cutoff
+        ~equal:Path.Set.equal
+        (begin
+          if Glob.kind_allows_file glob
+          then
+            let dir = Glob.dir glob in
+            let pattern = Glob.pattern glob in
+            buildable_targets_and_clean_when_fixed t ~dir *>>| fun targets ->
+            let filtered_targets =
+              Path.Set.filter targets ~f:(fun path ->
+                Pattern.matches pattern (Path.basename path))
+            in
+            filtered_targets
+          else
+            return Path.Set.empty
+        end
+        *>>= fun filtered_targets ->
+        glob_fs_only t glob
+        *>>| fun filesystem ->
+        Path.Set.union filtered_targets filesystem
+       ))
 
 (*----------------------------------------------------------------------
   running actions
 ----------------------------------------------------------------------*)
 
 let run_action_with_message :
-    (t -> Env.t -> Action.t -> message:(unit->unit) ->
-     targets:Path.Rel.t list -> need:string ->
-     output:'a Job.Output.t -> 'a Builder.t) =
-  fun t env action ~message ~targets ~need ~output ->
+  (t -> Env.t -> Action.t -> message:(unit->unit) ->
+   deps:Proxy_map.t -> targets:Path.Rel.t list -> need:string ->
+   output:'a Job.Output.t -> 'a Builder.t) =
+  fun t env action ~message ~deps ~targets ~need ~output ->
+    let action =
+      Action_sandbox.maybe_sandbox ~sandbox:t.config.sandbox_actions
+        action ~deps ~targets
+    in
     let progress = t.progress in
     let config = t.config in
     let putenv = Env.putenv env in
     let dir = Job.dir (Action.job action) in
     Builder.of_deferred (fun () ->
-      Fs.lock_targets_and_mask_updates t.fs ~targets (fun () ->
-        (* We lock actions w.r.t targets to guard against overlapping the execution of
-           external processes which write to the same target.
+      (* We lock actions w.r.t targets to guard against overlapping the execution of
+         external processes which write to the same target.
 
-           Currently the call to [Locking.lock_directory_for_action] occurs within calls
-           to [Builder.uncancellable]. This is undesirable because we should like to
-           respond to the cancel until the last moment before the external process is run.
+         Currently the call to [Locking.lock_directory_for_action] occurs within calls
+         to [Builder.uncancellable]. This is undesirable because we should like to
+         respond to the cancel until the last moment before the external process is run.
 
-           However, this is currently a non issue, because the enclosing code structure
-           has invariants which ensure we never attempt to even acquire a target lock
-           until after the previous acquisition has been released:
+         However, this is currently a non issue, because the enclosing code structure
+         has invariants which ensure we never attempt to even acquire a target lock
+         until after the previous acquisition has been released:
 
-           1. Reified tenacious computations are memoized per-goal & per-rule-head-target.
+         1. Reified tenacious computations are memoized per-goal & per-rule-head-target.
 
-           2. The LHS of a [Tenacious.bind] wont be re-run while the RHS is still running.
+         2. The LHS of a [Tenacious.bind] wont be re-run while the RHS is still running.
 
-           3. Actions are embedded within uncancellable tenacious computations. This would
-           be so even without the use of [Builder.uncancellable] since a [Tenacious.lift]
-           used to embed the deferred action computation would also be uncancellable.
+         3. Actions are embedded within uncancellable tenacious computations. This would
+         be so even without the use of [Builder.uncancellable] since a [Tenacious.lift]
+         used to embed the deferred action computation would also be uncancellable.
 
-           4. A tenacious computation sequenced to follow an uncancellable tenacious
-           computation [t] may not start until [t] has finished, even if [t] is cancelled.
+         4. A tenacious computation sequenced to follow an uncancellable tenacious
+         computation [t] may not start until [t] has finished, even if [t] is cancelled.
 
-        *)
-        Locking.lock_directory_for_action ~dir (fun () ->
+      *)
+      Locking.lock_directory_for_action ~dir (fun () ->
+        Fs.lock_targets_and_mask_updates t.fs ~targets (fun () ->
           Action.run action ~message ~output ~putenv ~progress ~config ~need
         ))) *>>= function
     | Ok x                                -> return x
@@ -720,30 +777,31 @@ let run_action_with_message :
 
 let run_action_for_targets :
     (t -> RR.t -> Env.t -> Action.t ->
+     deps:Proxy_map.t ->
      targets:Path.Rel.t list -> need:string ->
      unit Builder.t) =
-  fun t rr env action ~targets ~need ->
+  fun t rr env action ~deps ~targets ~need ->
     let message() =
       if Config.show_actions_run t.config then
         Message.message "Building: %s [%s]"
           (String.concat ~sep:" " (List.map targets ~f:Path.Rel.to_string))
           (RR.to_string t.config rr)
     in
-    run_action_with_message t env action ~message ~targets ~need
+    run_action_with_message t env action ~message ~deps ~targets ~need
       ~output:Job.Output.ignore
 
 let run_action_for_stdout :
-    (t -> RR.t -> Env.t -> Action.t -> string Builder.t) =
-  fun t rr env action ->
+    (t -> RR.t -> Env.t -> deps:Proxy_map.t -> Action.t -> string Builder.t) =
+  fun t rr env ~deps action ->
     let job = Action.job action in
     let message() =
       if Config.show_actions_run t.config then
         Message.message "Action(%s): %s [%s]"
           (Path.to_string (Job.dir job))
-          (Job.string_for_sh job)
+          (Job.to_sh_ignoring_dir job)
           (RR.to_string t.config rr)
     in
-    run_action_with_message t env action ~message ~targets:[] ~need:"stdout"
+    run_action_with_message t env action ~message ~deps ~targets:[] ~need:"stdout"
       ~output:Job.Output.stdout
 
 (*----------------------------------------------------------------------
@@ -850,9 +908,7 @@ let expand_module_string_dollar_vars =
   (* replace ${jenga} in jenga.conf module strings with the root path of the jenga
      distribution, determined via the dirname of the running jenga.exe ($0) after
      stripping any "bin/" suffix *)
-  let bin_directory =
-    Filename.dirname (Sys.argv.(0))
-  in
+  let bin_directory = Filename.dirname Sys.executable_name in
   let root_distribution =
     match Filename.basename bin_directory with
     | "bin" -> Filename.dirname bin_directory
@@ -1013,8 +1069,8 @@ let jenga_load_spec : (t -> Jr_spec.t -> Load_root.Spec.t Builder.t) =
       then jenga_root_load_spec t ~root_ml:path
       else jenga_conf_load_spec t ~conf:path
     | Jr_spec.In_root_dir ->
-      let conf = Path.of_relative (Path.Rel.root_relative Misc.jenga_conf_basename) in
-      let root_ml = Path.of_relative (Path.Rel.root_relative Misc.jenga_root_basename) in
+      let conf = Path.of_relative (Special_paths.jenga_conf) in
+      let root_ml = Path.of_relative (Special_paths.jenga_root) in
       let what_kind_of_jenga_setup =
         Builder.both (path_exists t conf) (path_exists t root_ml)
         *>>| function
@@ -1140,60 +1196,6 @@ let check_mtimes_unchanged : (t -> Mtimes.t -> unit Builder.t) =
       let () = List.iter paths ~f:(Fs.clear_watcher_cache t.fs) in
       error (Reason.Mtimes_changed paths)
 
-
-(*----------------------------------------------------------------------
-  share / share & allow cycle detection
-----------------------------------------------------------------------*)
-
-let share_builder : (
-  key : 'a ->
-  memo : ('a, 'b Builder.t) Hashtbl.t ->
-  f : (unit -> 'b Builder.t) ->
-  'b Builder.t
-) =
-  fun ~key ~memo ~f ->
-    match (Hashtbl.find memo key) with
-    | Some builder -> builder
-    | None ->
-      let builder = f () in
-      let builder = Builder.reify builder in
-      Hashtbl.add_exn memo ~key ~data:builder;
-      builder
-
-let share_and_check_for_cycles :
-    (* memoize / check for cycles, by constructing nodes in the discovered_graph *)
-    (t ->
-     key : 'a ->
-     memo : ('a, 'b Builder.t * DG.Node.t) Hashtbl.t ->
-     item : DG.Item.t ->
-     f : (t -> 'b Builder.t) ->
-     'b Builder.t
-    ) =
-  fun t ~key ~memo ~item ~f ->
-    match (Hashtbl.find memo key) with
-    | Some (builder,node) ->
-      begin
-        (* The existing node just reached is also a dependency of t.node *)
-        DG.link_dependants_no_cycle_check t.discovered_graph node ~additional:t.node;
-        builder;
-      end
-    | None ->
-      let pre_node = t.node in
-      let node = DG.create_dependency t.discovered_graph pre_node item in
-      let t = {t with node = node} in
-      (* newly created node(item) is a dependency of the t.node we were at before *)
-      let builder = f t in (* critical - [f] must be called only once *)
-      let builder =
-        Builder.before_redo builder
-          ~f:(fun () ->
-            DG.remove_all_dependencies t.discovered_graph t.node;
-          )
-      in
-      let builder = Builder.reify builder in
-      (* we use add_exn, because each key will be memoized exactly once *)
-      Hashtbl.add_exn memo ~key ~data:(builder,t.node);
-      builder
-
 (*----------------------------------------------------------------------
  things we can depend upon
 ----------------------------------------------------------------------*)
@@ -1206,7 +1208,7 @@ let run_action_for_stdout_if_necessary
     let job = Action.job action in
     let run_and_cache rr =
       Builder.uncancellable (
-        run_action_for_stdout t rr env action *>>= fun stdout ->
+        run_action_for_stdout t rr env action ~deps *>>= fun stdout ->
         check_mtimes_unchanged t mtimes *>>= fun () ->
         let output_proxy = {Output_proxy. deps; stdout;} in
         Hashtbl.set (Persist.modify "actioned" (actioned t)) ~key:job ~data:output_proxy;
@@ -1321,7 +1323,8 @@ let build_depends : (t -> 'a Dep.t -> ('a * Proxy_map.t) Builder.t) =
       | Dep.Contents path ->
         begin
           match Path.case path with
-          | `relative path -> build_sub_goal t (Goal.Path path) *>>| fun _ignored_pm -> ()
+          | `relative path ->
+            build_sub_goal t (Goal.Path path) *>>| fun _ignored_pm -> ()
           | `absolute _ -> return ()
         end *>>= fun () ->
         let pm  = Proxy_map.empty in
@@ -1437,7 +1440,8 @@ let reflect_depends : (t -> 'a Dep.t -> ('a * Path.Set.t) Builder.t) =
         (* reflect causes building here by calling [build_sub_goal] *)
         begin
           match Path.case path with
-          | `relative path -> build_sub_goal t (Goal.Path path) *>>| fun __pm -> ()
+          | `relative path ->
+            build_sub_goal t (Goal.Path path) *>>| fun __pm -> ()
           | `absolute _ -> return ()
         end *>>= fun () ->
         get_contents t path *>>| fun contents ->
@@ -1634,7 +1638,7 @@ let build_target_rule :
     let job = Action.job action in
     let run_and_cache rr =
       Builder.uncancellable (
-        run_action_for_targets t rr env action ~targets ~need *>>= fun () ->
+        run_action_for_targets t rr env action ~deps:deps_proxy_map ~targets ~need *>>= fun () ->
         (* The cache is cleared AFTER the action has been run, and BEFORE we check the
            targets created by the action. Clearing the cache forces the files to be
            re-stated, without relying on any events from inotify to make this happen *)
@@ -1690,7 +1694,7 @@ let build_target_rule :
               | None ->
                 (* Everything is as it should be! re-sensitize to the targets. *)
                 if Config.show_checked t.config then  (
-                  Message.message "NOT RUNNING: %s" (Job.string_for_sh job);
+                  Message.message "NOT RUNNING: %s" (Job.to_sh_ignoring_dir job);
                 );
                 Builder.sensitize heart *>>= fun () ->
                 return path_tagged_proxys
@@ -1755,33 +1759,11 @@ let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
           expect_source t demanded
       end
 
-let is_path_a_directory : (t -> Path.Rel.t -> bool Builder.t) =
-  fun t path ->
-    ensure_directory t ~dir:(Path.Rel.dirname path) *>>= fun () ->
-    Builder.desensitize (
-      Builder.of_tenacious (Fs.digest_file t.fs ~file:(Path.of_relative path))
-    ) *>>= fun (res,__heart) ->
-    match res with
-    | `is_a_dir -> return true
-    | _ -> return false
-
 let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
-  (* wrapper for special case:
-     translate goal: dir -> dir/.DEFAULT (when dir is a directory) *)
   fun t goal ->
-    begin
-      match goal with
-      | Goal.Alias _ -> return None
-      | Goal.Path demanded ->
-        is_path_a_directory t demanded *>>= function
-        | true -> return (Some demanded)
-        | false -> return None
-    end
-    *>>= function
-    | None -> build_goal t goal
-    | Some demanded ->
-      let goal = Goal.Alias (Alias.default ~dir:(Path.of_relative demanded)) in
-      build_sub_goal t goal
+    ensure_directory t ~dir:(Goal.directory goal)
+    *>>= fun () ->
+    build_goal t goal
 
 let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
   fun t goal ->
@@ -2064,9 +2046,9 @@ let get_env_option :
     let builder = jenga_root t
     in
     let tenacious =
-      Tenacious.bind (Builder.expose builder) (function
-      | Error _ -> Tenacious.return None
-      | Ok (env,_) -> Tenacious.return (Some env)
+      Tenacious.map (Builder.expose builder) ~f:(function
+      | Error _ -> None
+      | Ok (env,_) -> (Some env)
       )
     in
     tenacious
@@ -2379,7 +2361,7 @@ let build_forever =
       don't_wait_for (
         Ivar.read deadlock_found >>= fun () ->
         Quit.quit Exit_code.cycle_abort;
-        Deferred.return ()
+        Deferred.never()
       )
     in
 
@@ -2389,31 +2371,6 @@ let build_forever =
         fs persist memo discovered_graph ~dg_root
         config progress
     in
-
-    Tenacious.exec get_env_opt >>= fun (env_opt,__heart) ->
-
-    begin
-      match Persist.quality persist with
-      | `initial | `good -> Deferred.return ()
-      | `format_changed ->
-        run_user_function_from_env_opt env_opt "persist_changed" ~f:(fun env () ->
-          let action_opt = Env.run_when_persist_format_has_changed env in
-          Message.message
-            "format of persistent state has changed; everything will rebuild%s"
-            (match action_opt with None -> "" | Some _ -> "; running user action");
-          match action_opt with
-          | None -> Deferred.return ()
-          | Some action ->
-            let job = Action.job action in
-            let need = "persist_changed" in
-            let putenv = [] in
-            let output = Job.Output.ignore   in
-            Job.run job ~config ~need ~putenv ~output >>| function
-            | Error (`non_zero_status _) -> ()
-            | Error (`other_error _exn)  -> ()
-            | Ok ()                      -> ()
-        )
-    end >>= fun () ->
 
     let rec build_and_poll ()  = (* never finishes if polling *)
 
@@ -2457,7 +2414,7 @@ let build_forever =
       | false ->
         Message.message "build finished; not in polling mode so quitting";
         Quit.quit exit_code;
-        Deferred.return ()
+        Deferred.never()
       | true ->
         (* -P *)
         Message.polling ();

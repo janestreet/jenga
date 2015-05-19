@@ -1,6 +1,6 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! No_polymorphic_compare
 
 type t = {
   j_number : int;
@@ -29,5 +29,6 @@ type t = {
   no_server : bool;
   demands : string list;
   no_notifiers : bool;
+  sandbox_actions : bool;
   buildable_targets_fixpoint_max : int;
 } with fields

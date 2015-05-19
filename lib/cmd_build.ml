@@ -1,6 +1,6 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! No_polymorphic_compare
 
 let terminal_type =
   match Core.Std.Sys.getenv "TERM" with
@@ -153,7 +153,7 @@ let brief_error_summary =
 let no_server =
   Spec.step (fun m x -> m ~no_server:x)
   +> Spec.flag "no-server" Spec.no_arg
-    ~doc:" Don't start jenga server (jem wont work)"
+    ~doc:" Don't start jenga server (queries to the server won't work)"
 
 let minor_heap_size =
   let default = 50 in
@@ -184,20 +184,17 @@ let buildable_targets_fixpoint_max =
   +> Spec.flag "buildable-targets-fixpoint-max" (Spec.optional_with_default default Spec.int)
     ~doc:(sprintf "<iters> (default = %d); 0 means no limit" default)
 
-let cat_api =
-  Spec.step (fun m x -> m ~cat_api:x)
-  +> Spec.flag "cat-api" ~aliases:["api"] Spec.no_arg
-    ~doc:" Print the API supported by this version of jenga, then exit."
+let sandbox_actions =
+  Spec.step (fun m x -> m ~sandbox_actions:x)
+  +> Spec.flag "-sandbox-actions" Spec.no_arg
+    ~doc:" Check dependencies are right by running actions in a part of the filesystem \
+          where only the declared dependencies are available"
 
 let anon_demands =
   Spec.step (fun m x -> m ~anon_demands:x)
   +> Spec.anon (Spec.sequence ("DEMAND" %: Spec.string))
 
-let print_api_and_exit () =
-  Printf.printf "%s\n%!" Cat_api.string;
-  exit 0
-
-let go_command =
+let command ~toplevel =
   Command.basic (
     j_number
     ++ f_number
@@ -229,13 +226,17 @@ let go_command =
     ++ space_overhead
     ++ no_notifiers
     ++ buildable_targets_fixpoint_max
-    ++ cat_api
+    ++ sandbox_actions
     ++ anon_demands
   )
-    ~summary:"Run Jenga in the current directory."
-    ~readme:(fun () -> String.concat ~sep:"\n" [
-      "By default building the .DEFAULT target.";
-    ])
+    ~summary:("build specified targets" ^
+              if toplevel then "" else " (default subcommand)")
+    ~readme:(fun () ->
+      let rest =
+        if toplevel then ["To see other jenga commands, try jenga help."] else []
+      in
+      String.concat ~sep:"\n" ("By default building the .DEFAULT target." :: rest)
+    )
     (fun
       ~j_number
       ~f_number
@@ -267,10 +268,9 @@ let go_command =
       ~space_overhead
       ~no_notifiers
       ~buildable_targets_fixpoint_max
-      ~cat_api
+      ~sandbox_actions
       ~anon_demands
       () ->
-        if cat_api then print_api_and_exit() else
         let config = {
           Config.
           j_number;
@@ -308,6 +308,7 @@ let go_command =
           no_server;
           no_notifiers;
           buildable_targets_fixpoint_max;
+          sandbox_actions;
           demands = anon_demands;
         }
         in
@@ -319,6 +320,3 @@ let go_command =
          ();
         Run.main config
     )
-
-let main () =
-  Command.run go_command

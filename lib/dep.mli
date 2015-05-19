@@ -6,8 +6,6 @@ open Async.Std
 
 include module type of Dep_type
 
-val to_string : 'a t -> string (* for debugging *)
-
 val return : 'a -> 'a t
 val bind : 'a t -> ('a -> 'b t) -> 'b t
 val map : 'a t -> ('a -> 'b) -> 'b t

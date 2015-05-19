@@ -8,8 +8,10 @@ open Core.Std
 module Action : sig
   type t = Job.t
   val dir : t -> Path.t
-  val string_for_sh : t -> string
-  val string_for_one_line_make_recipe : t -> string
+  (** [to_sh_ignoring_dir t] returns a shell script representing the action,
+      that expects to be run from [dir t]. *)
+  val to_sh_ignoring_dir : t -> string
+  val string_for_one_line_make_recipe_ignoring_dir : t -> string
 end
 
 module Trip : sig

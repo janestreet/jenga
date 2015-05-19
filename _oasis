@@ -2,7 +2,7 @@ OASISFormat:      0.3
 OCamlVersion:     >= 4.00.0
 FindlibVersion:   >= 1.3.2
 Name:             jenga
-Version:          112.24.00
+Version:          112.35.00
 Synopsis:         Build system
 Authors:          Jane Street Group, LLC <opensource@janestreet.com>
 Copyrights:       (C) 2013 Jane Street Group LLC <opensource@janestreet.com>
@@ -20,12 +20,16 @@ Library jenga_lib
   FindlibName:        jenga
   Pack:               true
   Modules:            Action,
+                      Action_sandbox,
                       Alias,
                       Api,
                       Artifact_policy,
                       Build,
                       Cat_api,
-                      Command_line,
+                      Cmd_build,
+                      Cmd_cat_api,
+                      Cmd_db,
+                      Cmd_monitor,
                       Config,
                       Db,
                       Dep,
@@ -40,11 +44,11 @@ Library jenga_lib
                       Forker,
                       Fs,
                       Gen_key,
-                      Glob_tests,
+                      Glob_unit_tests,
                       Glob_to_re,
                       Goal,
                       Interning,
-                      Jem_command_line,
+                      Jenga_options,
                       Jenga_root_interface,
                       Job,
                       Load_root,
@@ -52,7 +56,6 @@ Library jenga_lib
                       Message,
                       Misc,
                       Monomorphic_mutable_graph,
-                      Offline,
                       Path,
                       Pattern,
                       Persist,
@@ -70,8 +73,10 @@ Library jenga_lib
                       Server_lock,
                       Scheme,
                       Scheme_type,
+                      Special_paths,
                       System,
                       Tenacious
+  CSources:           digest_stubs.c
   BuildDepends:       async,
                       async_inotify,
                       async_parallel,
@@ -116,14 +121,16 @@ Library tenacious_lib
   FindlibParent:      jenga_lib
   FindlibName:        tenacious
   Pack:               true
-  Modules:            Heart_interface,
+  Modules:            Dlist,
                       Heart,
-                      Interface,
+                      Heart_intf,
+                      Heart_unit_tests,
+                      List_utils,
                       Ring,
+                      Ring_unit_tests,
                       Tenacious,
-                      Test_hearts,
-                      Test_ring,
-                      Test_tenacious,
+                      Tenacious_intf,
+                      Tenacious_unit_tests,
                       Weak_ref
   BuildDepends:       core,
                       core.syntax,
@@ -132,11 +139,13 @@ Library tenacious_lib
                       pa_ounit,
                       pa_ounit.syntax,
                       pa_test,
+                      pa_structural_sexp.syntax,
                       pa_test.syntax
   XMETARequires:      core,
                       async,
                       threads,
                       pa_ounit,
+                      pa_structural_sexp,
                       pa_test
 
 Library jenga_archive
@@ -152,20 +161,4 @@ Executable jenga
   CompiledObject:     best
   BuildDepends:       jenga,
                       jenga_archive,
-                      threads
-
-Executable "jenga-offline"
-  Path:               bin
-  MainIs:             jenga_offline.ml
-  CompiledObject:     best
-  BuildDepends:       jenga,
-                      jenga_archive,
-                      threads
-
-Executable "jem"
-  Path:               bin
-  MainIs:             jem.ml
-  CompiledObject:     best
-  BuildDepends:       jenga,
-                      ocaml_plugin.fake,
                       threads

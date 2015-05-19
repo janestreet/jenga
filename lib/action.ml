@@ -5,6 +5,7 @@ open Async.Std
 type t =
 | Process of Job.t
 | Save of Save_description.t
+with sexp_of
 
 let job = function
   | Process pd -> pd
@@ -43,6 +44,8 @@ let run t ~message ~output ~putenv ~progress ~config ~need =
       )
     )
 
+let of_job job = Process job
+
 let process ~dir ~prog ~args =
   Process (Job.create ~dir ~prog ~args)
 
@@ -52,4 +55,3 @@ let save1 ~contents ~target ~chmod_x =
 let save ?chmod_x contents ~target =
   let chmod_x = match chmod_x with Some() -> true | None -> false in
   save1 ~contents ~target ~chmod_x
-

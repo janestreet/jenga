@@ -1,5 +1,5 @@
 
-open Core.Std let _ = _squelch_unused_module_warning_
+open! Core.Std
 open Async.Std
 
 let the_open_file_throttle =

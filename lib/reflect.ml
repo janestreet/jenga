@@ -20,27 +20,23 @@ let reachable ~keep ?stop =
     | [] -> return acc_trips
     | path::paths ->
       let skip() = collect ~acc_trips ~acc_targets paths in
-      if List.mem acc_targets path
+      if Set.mem acc_targets path
+      || stop path
       then skip()
       else
-        match stop path with
-        | true -> skip()
-        | false ->
-          from_path path *>>= function
-          | None -> skip()
-          | Some trip ->
-            let acc_trips =
-              if keep path
-              then trip::acc_trips
-              else acc_trips
-            in
-            collect
-              ~acc_trips
-              ~acc_targets:(trip.Reflected.Trip.targets @ acc_targets)
-              (trip.Reflected.Trip.deps @ paths)
+        from_path path *>>= function
+        | None -> skip()
+        | Some trip ->
+          let acc_trips =
+            if keep path
+            then trip::acc_trips
+            else acc_trips
+          in
+          let acc_targets = List.fold trip.targets ~init:acc_targets ~f:Set.add in
+          collect ~acc_trips ~acc_targets (trip.Reflected.Trip.deps @ paths)
   in
   fun roots ->
-    collect ~acc_trips:[] ~acc_targets:[] roots
+    collect ~acc_trips:[] ~acc_targets:Path.Set.empty roots
 
 let path = from_path
 let alias = from_alias

@@ -1,6 +1,6 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! Int.Replace_polymorphic_compare
 open Async.Std
 
 let max_num_threads = 50
@@ -27,16 +27,20 @@ let db_save_span =
 
 let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
   Forker.init config;
-  Fs.Digester.init config;
-  Persist.create_saving_periodically ~root_dir db_save_span >>= fun persist ->
+  Fs.Ocaml_digest.init config;
+  Persist.create_saving_periodically db_save_span >>= function
+  | Error e ->
+    Message.error "can't load persistent database: %s" (Error.to_string_hum e);
+    Quit.quit Exit_code.persist_bad;
+    Deferred.never()
+  | Ok persist ->
   Fs.create config persist >>= fun fs ->
   let progress = Progress.create config in
   Rpc_server.go config ~root_dir progress >>= fun () ->
-  let top_level_demands =
-    match Config.demands config with
-    | [] -> [ Goal.Alias (Alias.default ~dir:(Path.of_relative start_dir)) ]
-    | demands -> List.map demands ~f:(Goal.parse_string ~dir:start_dir)
-  in
+    (match Config.demands config with
+    | [] -> return [ Goal.Alias (Alias.default ~dir:(Path.of_relative start_dir)) ]
+    | demands -> Deferred.List.map demands ~f:(Goal.parse_string ~dir:start_dir))
+  >>= fun top_level_demands ->
   let save_db_now () =
     Persist.disable_periodic_saving_and_save_now persist
   in
@@ -69,6 +73,32 @@ module For_user = struct
 
 end
 
+let configure_scheduler ~report_long_cycle_times =
+  Option.iter report_long_cycle_times ~f:(fun cutoff ->
+    Scheduler.report_long_cycle_times ~cutoff ()
+  );
+  Async.Std.Scheduler.handle_thread_pool_stuck (fun ~stuck_for ->
+    let sched = Async.Std.Scheduler.t () in
+    let completed_before = Async_unix.Thread_pool.num_work_completed sched.thread_pool in
+    (* A 1ms pause shouldn't matter since this is called at most once per second, but it
+       should be enough to convince the kernel to give other threads a chance to grab the
+       ocaml lock. If threads are stuck for a different reason, then we will get the
+       standard warning because of the call to the default handler below.
+    
+       This assumes async threads only grab the lock once, just before finishing their async job.
+    *)
+    let time_to_wait_for = ref 0.001 in
+    while !time_to_wait_for >. 0.; do
+      time_to_wait_for := Core.Std.Unix.nanosleep !time_to_wait_for;
+    done;
+    let completed_after = Async_unix.Thread_pool.num_work_completed sched.thread_pool in
+    if completed_before = completed_after then
+      Async.Std.Scheduler.default_handle_thread_pool_stuck ~stuck_for;
+    if Jenga_options.t.sigstop_on_thread_pool_stuck && Time.Span.(stuck_for > sec 5.) then
+      Signal.send_exn Signal.stop (`Pid (Unix.getpid ()));
+  )
+;;
+
 let main config =
   For_user.install_config_for_user_rules config;
 
@@ -77,32 +107,37 @@ let main config =
     match Config.path_to_jenga_conf config with
     | Some jenga_root ->
       let dir = Core.Std.Sys.getcwd () in
-      Path.Root.set ~dir;
+      Path.Repo.set_root ~dir:(Path.Abs.create dir);
       dir, Build.Jr_spec.path (Path.of_absolute (Path.Abs.create jenga_root))
     | None ->
       begin
-        match Path.Root.discover() with
-        | `ok ->
-          let dir = Path.Rel.to_absolute_string Path.Rel.the_root in
+        match Special_paths.discover_root () with
+        | Ok () ->
+          let dir = Path.Abs.to_string (Path.Repo.root ()) in
           dir, Build.Jr_spec.in_root_dir
-        | `cant_find_root ->
-          error "Cant find '%s' or '%s' in start-dir or any ancestor dir"
-            Misc.jenga_conf_basename
-            Misc.jenga_root_basename;
+        | Error e ->
+          error "%s" (Error.to_string_hum e);
           Pervasives.exit Exit_code.cant_start
       end
   in
 
-  let log_filename = root_dir ^/ Misc.log_basename in
+  Special_paths.Dot_jenga.prepare ();
+
+  let log_filename =
+    Path.to_absolute_string (Path.of_relative Special_paths.Dot_jenga.log)
+  in
   Message.init_logging config ~log_filename;
 
   (* Remember the original start_dir, but then chdir to root_dir. This way jenga behaves
      the same regardless of what subdir it is started in. *)
 
   let start_dir =
-    match (Path.Rel.create_from_absolute (Core.Std.Sys.getcwd ())) with
-    | None -> failwith "start_dir, not under root_dir - impossible"
-    | Some x -> x
+    match
+      Path.case (Path.of_absolute_string (Core.Std.Sys.getcwd ()))
+    with
+    | `absolute _ ->
+      failwith "start_dir, not under root_dir - impossible"
+    | `relative s -> s
   in
 
   trace "----------------------------------------------------------------------";
@@ -131,7 +166,7 @@ let main config =
   let config =
     try
       if Int.(Config.f_number config > 0) then (
-        Async_parallel.Std.Parallel.init();
+        Async_parallel_deprecated.Std.Parallel.init();
       );
       config
     with | exn ->
@@ -147,13 +182,9 @@ let main config =
       Deferred.unit >>= fun () ->
       Quit.ignore_exn_while_quitting (fun () ->
         run_once_async_is_started config ~start_dir ~root_dir ~jr_spec;
-      )
+      ) >>= never_returns
     );
-    (
-      match config.Config.report_long_cycle_times with
-      | None -> ()
-      | Some cutoff -> Scheduler.report_long_cycle_times ~cutoff ()
-    );
+    configure_scheduler ~report_long_cycle_times:config.report_long_cycle_times;
     install_signal_handlers()
   in
 

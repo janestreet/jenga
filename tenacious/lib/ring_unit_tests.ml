@@ -14,7 +14,7 @@ end
 module Verifying_ring = struct
   type 'a t = 'a Slow_ring.t * 'a Ring.t
   type 'a elem = 'a Slow_ring.elem * 'a Ring.elem
-  let iter (r1, r2) ~f =
+  let iter ((r1, r2) : _ t) ~f =
     let iter_to_list iter =
       let l = ref [] in
       iter ~f:(fun x -> l := x :: !l);
@@ -26,7 +26,7 @@ module Verifying_ring = struct
     List.iter l1 ~f
   let verify x = ignore (iter x ~f:ignore)
   let create () = Slow_ring.create (), Ring.create ()
-  let add (r1, r2) x = Slow_ring.add r1 x, Ring.add r2 x
+  let add (r1, r2) x : _ elem = Slow_ring.add r1 x, Ring.add r2 x
   let detach (r1, r2) = Slow_ring.detach r1; Ring.detach r2
 end
 

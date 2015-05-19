@@ -1,4 +1,4 @@
-
+open Core.Std
 open Async.Std
 
 (* [Dep_type.t] is the GADT implementation behind [Dep.t]. Values of this type are
@@ -7,7 +7,7 @@ open Async.Std
 type _ t =
 | Return : 'a -> 'a t
 | Bind : 'a t * ('a -> 'b t) -> 'b t
-| All : 'a t list -> 'a list t
+| All : 'a sexp_opaque t list -> 'a list t
 | Cutoff : ('a -> 'a -> bool) * 'a t -> 'a t
 | Deferred : (unit -> 'a Deferred.t) -> 'a t
 | Action_stdout : Action.t t -> string t
@@ -25,3 +25,4 @@ type _ t =
 | Glob_listing : Fs.Glob.t -> Path.Set.t t (* FS or buildable *)
 | Glob_change_OLD : Fs.Glob.t -> unit t
 | Glob_change : Fs.Glob.t -> unit t (* FS or buildable *)
+with sexp_of (* sexp_of_t is only usable for debugging *)

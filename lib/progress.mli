@@ -17,9 +17,10 @@ end
 
 module Status : sig
   type t =
-  | Todo
-  | Built
-  | Error of Reason.t list (* empty list means failure in deps *)
+    | Todo
+    | Built
+    | Error of Reason.t list (* empty list means failure in deps *)
+  with bin_io
 end
 
 type t
@@ -39,7 +40,7 @@ module Snap : sig
   val built : t -> int
   val fraction : t -> (int*int) (* built/total *)
 
-  val to_string : t -> [`omake_style | `jem_style ] -> string
+  val to_string : t -> [< `omake_style | `jem_style | `fraction ] -> string
   val to_effort_string : t -> string
   val finished: t -> bool
   val error_code: t -> int

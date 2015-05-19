@@ -8,28 +8,6 @@ include Dep_type
 
 module Glob = Fs.Glob
 
-let to_string : type a. a t -> string = function
-| Return _x -> "Return"
-| Bind (_f,_x) -> "Bind"
-| All _x -> "All"
-| Cutoff (_f,_x) -> "Cutoff"
-| Deferred _x -> "Deferred"
-| Action_stdout _x -> "Action_stdout"
-| Alias _x -> "Alias"
-| Path x -> sprintf "Path: %s" (Path.to_string x)
-| Source_if_it_exists _x -> "Source_if_it_exists"
-| Contents x -> sprintf "Contents: %s" (Path.to_string x)
-| Reflect_path _x -> "Reflect_path"
-| Reflect_alias _x -> "Reflect_alias"
-| Reflect_putenv -> "Reflect_putenv"
-| On_filesystem path -> sprintf "On_filesystem: %s" (Path.to_string path)
-| Buildable_targets path -> sprintf "Buildable_targets: %s" (Path.to_string path)
-| Source_files path -> sprintf "Source_files: %s" (Path.to_string path)
-| Glob_listing_OLD x -> sprintf "Glob_listing_OLD: %s" (Glob.to_string x)
-| Glob_listing x -> sprintf "Glob_listing: %s" (Glob.to_string x)
-| Glob_change_OLD x -> sprintf "Glob_change_OLD: %s" (Glob.to_string x)
-| Glob_change x -> sprintf "Glob_change: %s" (Glob.to_string x)
-
 let return x = Return x
 let bind t f = Bind (t,f)
 let map t f = bind t (fun x -> return (f x))

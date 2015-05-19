@@ -28,11 +28,13 @@ end
 
 module Stats : sig  (* reduced stat info *)
   type t
-  with sexp_of, bin_io
+  with sexp, bin_io, compare
   val of_unix_stats : Async.Std.Unix.Stats.t -> t
   val equal : t -> t -> bool
   val kind : t -> Kind.t
   val mtime : t -> Mtime.t
+  val dev : t -> int
+  val ino : t -> int
 end
 
 module Digest : sig  (* proxy for the contents of a file in the file-system *)
@@ -50,7 +52,7 @@ module Digest : sig  (* proxy for the contents of a file in the file-system *)
 end
 
 module Listing : sig (* result of globbing *)
-  type t with sexp_of, bin_io, compare
+  type t with sexp, bin_io, compare
   module Elem : sig
     type t
     val create : base:string -> kind:Kind.t -> t
@@ -103,6 +105,19 @@ module Proxy_map : sig
   type t = Proxy.t Pm_key.Map.t with sexp_of, bin_io, compare
   val empty  : t
   val single : Pm_key.t -> Proxy.t -> t
+  (**
+     [filesystem_assumptions t] returns the set of things accessed via a relative path on
+     the filesystem that have been used to construct [t].
+     `Dirs is the list of directories that must exist to reproduce [t].
+     `Files is the list of files that need to be read.
+     `Arbitrary_files is the list of files that must exist to reproduce directory
+     listings, but that don't need to be read.
+  *)
+  val filesystem_assumptions
+    :  t
+    -> [> `Dirs of Path.Hash_set.t ]
+       * [> `Files of Path.Hash_set.t ]
+       * [> `Arbitrary_files of Path.Hash_set.t ]
 end
 
 module Rule_proxy : sig

@@ -1,0 +1,34 @@
+# Jenga development
+
+## Symlinks
+
+Generally speaking, symlinks and the mtimes check do not work together:
+jenga will only complain about the mtimes of the target of the symlink,
+but not of the symlink. However editing symlink under a polling jenga in
+a way that causes a command to succeed wrongly should be quite rare.
+
+Symlinks from source files to source files should be handled correctly.
+
+Symlinks to directories which do not contain build targets
+(e.g. external directories) should be handled correctly. Other symlinks
+to directories are not supported.
+
+Rules which generate symlinks and have a dependency on the link's target
+will mostly work. However, the digest associated with the link will be
+that of the link's target not the link itself. This means that if the
+link is changed outside of jenga to point to a different file with the
+same contents then the next run of jenga will not notice the change and
+will not re-run the rule to recreate the original link.
+
+This could be fixed by taking a digest of the link itself when checking
+if a rule target needs to be recreated -- whilst still taking a digest
+of the link's target when checking if a dependency is out of date --
+however this would mean storing two digests/stats in the db for each
+link, so we have held off on this change for now.
+
+Links from source files to generated files (or from generated files to
+files that are not listed as dependencies) are not supported. Jenga will
+follow the chain of symlinks without checking whether any of these files
+(except the symlink itself) can be built, so the build may fail or
+succeed or build the wrong thing, depending on the state of the
+filesystem.

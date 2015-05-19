@@ -1,19 +1,16 @@
-
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! No_polymorphic_compare
 open Async.Std
 
 module Heart = Tenacious.Heart
 module Glass = Heart.Glass
 
-let memoize ht ~key f =
-  match (Hashtbl.find ht key) with
-  | Some tenacious -> tenacious
-  | None ->
-    let tenacious = f () in
-    let tenacious = Tenacious.reify tenacious in
-    Hashtbl.add_exn ht ~key ~data:tenacious;
-    tenacious
+let memoize_reified_with_cache ht ~key f =
+  Hashtbl.find_or_add ht key ~default:(
+    fun () -> Tenacious.reify (f key))
+
+let memoize_reified hashable f =
+  Memo.general ~hashable (fun x -> Tenacious.reify (f x))
 
 let unbreakable x = x,Heart.unbreakable
 
@@ -27,8 +24,6 @@ let mkdir_counter = Effort.Counter.create "mkdir"
    persist - persistent cache of values
 *)
 
-module Ocaml_digest = Digest
-
 let ( *>>= ) = Tenacious.bind
 let ( *>>| ) t f = Tenacious.map t ~f
 
@@ -38,23 +33,29 @@ module Stats = Db.Stats
 module Listing = Db.Listing
 module Digest = Db.Digest
 
+
 (*----------------------------------------------------------------------
  System lstat - counted; exns caught
 ----------------------------------------------------------------------*)
 
-let unix_lstat path =
+let unix_stat ~follow_symlinks path =
   Effort.track lstat_counter (fun () ->
-    try_with (fun () ->
+    try_with ~extract_exn:true (fun () ->
       (*Message.message "stat: %s" path;*)
-      Unix.lstat path
+      if follow_symlinks then Unix.stat path
+      else Unix.lstat path
     )
   )
 
-let lstat path =
+let stat ~follow_symlinks path =
   let path = Path.to_absolute_string path in
-  unix_lstat path >>= function
-  | Ok u -> return (Ok (Stats.of_unix_stats u))
-  | Error exn -> return (Error (Error.of_exn exn))
+  unix_stat ~follow_symlinks path >>| function
+  | Ok u -> `ok (Stats.of_unix_stats u)
+  | Error Unix.Unix_error ((Unix.ENOENT|Unix.ENOTDIR), _, _) ->
+    `does_not_exist
+  | Error exn ->
+    (* things like "permission denied" *)
+    `unknown_error (Error.of_exn exn)
 
 let is_dir stats =
   match Stats.kind stats with
@@ -72,13 +73,14 @@ let is_digestable stats =
 ----------------------------------------------------------------------*)
 
 module Ensure_directory_result = struct
-  type t = [`ok | `failed | `not_a_dir]
+  type t = [`ok | `failed of Error.t | `not_a_dir]
 end
 
 let ensure_directory ~dir =
-  lstat dir >>= function
-  | Ok stats -> return (if is_dir stats then `ok else `not_a_dir)
-  | Error _e ->
+  stat ~follow_symlinks:false dir >>= function
+  | `ok stats -> return (if is_dir stats then `ok else `not_a_dir)
+  | `unknown_error err -> return (`failed err)
+  | `does_not_exist ->
     (*Message.message "mkdir: %s" (Path.to_string dir);*)
     Effort.track mkdir_counter (fun () ->
       try_with (fun () ->
@@ -87,134 +89,56 @@ let ensure_directory ~dir =
     ) >>= fun res ->
     match res with
     | Ok () -> return `ok
-    | Error _ -> return `failed
+    | Error exn -> return (`failed (Error.of_exn exn))
 
 (*----------------------------------------------------------------------
- Digester (throttle)
+ Ocaml_digest (count!)
 ----------------------------------------------------------------------*)
 
-module Digester : sig
-
+module Ocaml_digest : sig
   val init: Config.t -> unit
-  val throttle : (unit -> 'a Deferred.t) -> 'a Deferred.t
-
-end = struct
-
-  type t = {
-    (* Throttle for external digest jobs.
-       Independent from user's -j job throttle. *)
-    throttle : unit Throttle.t;
-  }
-
-  let create config =
-    let throttle =
-      let max_concurrent_jobs = Config.d_number config in
-      Throttle.create ~continue_on_error:true ~max_concurrent_jobs
-    in
-    { throttle }
-
-  let t_opt_ref = ref None
-
-  let the_t () = match !t_opt_ref with | None -> assert false | Some t -> t
-
-  let init config =
-    match !t_opt_ref with
-    | Some _ -> failwith "Fs.init called more than once"
-    | None -> t_opt_ref := Some (create config)
-
-  let throttle f =
-    let t = the_t() in
-    Throttle.enqueue t.throttle (fun () ->
-      f () >>= fun res ->
-      Deferred.return res
-    )
-
-end
-
-(*----------------------------------------------------------------------
- Compute_digest (count!)
-----------------------------------------------------------------------*)
-
-module type Compute_digest_sig = sig
-
   val of_file : Path.t -> string Or_error.t Deferred.t
+end = struct
+  let throttle = ref None
+  let set max_concurrent_jobs =
+    throttle := Some (Throttle.create ~continue_on_error:true ~max_concurrent_jobs)
+  ;;
+  let init config =
+    match !throttle with
+    | Some _ -> failwith "Fs.Ocaml_digest.init called more than once"
+    | None -> set (Config.d_number config)
 
-end
-
-module Ocaml__Compute_digest : Compute_digest_sig = struct
-
-  let of_file path =
-    File_access.enqueue (fun () ->
-      Effort.track digest_counter (fun () ->
-        In_thread.run (fun () ->
-          try (
-            let ic = Caml.open_in_bin (Path.to_absolute_string path) in
-            let res =
-              try (
-                let d = Ocaml_digest.channel ic (-1) in
-                let res = Ocaml_digest.to_hex d in
-                Ok res
-              )
-              with exn -> Error (Error.of_exn exn)
-            in
-            Caml.close_in ic;
-            res
-          )
-          with exn -> Error (Error.of_exn exn)
-        )
-      )
-    )
-
-end
-
-module External__Compute_digest(X : sig
-  val prog : string
-end) : Compute_digest_sig = struct
-
-  let putenv = []
-  let dir = Path.the_root
-  let prog = X.prog
+  external digest_fd : int -> string = "caml_md5_fd"
 
   let of_file path =
-    Effort.track digest_counter (fun () ->
-      (*Message.message "digest: %s" (Path.to_string path);*)
-      let arg = Path.to_absolute_string path in
-      let err s =
-        let message = sprintf "%s %s : %s" prog arg s in
-        return (Error (Error.of_string message))
-      in
-      let args = [arg] in
-      let request = Forker.Request.create ~putenv ~dir ~prog ~args in
-      Digester.throttle (fun () -> Forker.run request)
-      >>= fun {Forker.Reply. stdout;stderr=_;outcome} ->
-      match outcome with
-      | `error s -> err s
-      | `success ->
-        match (String.lsplit2 stdout ~on:' ') with
-        | None -> err (sprintf "unexpected output: `%s'" stdout)
-        | Some (res,_) -> return (Ok res)
-    )
+    Throttle.enqueue (Option.value_exn !throttle) (fun () ->
+      File_access.enqueue (fun () ->
+        Effort.track digest_counter (fun () ->
+          Unix.with_file (Path.to_absolute_string path) ~mode:[`Rdonly]
+            ~f:(fun fd ->
+              Fd.with_file_descr_deferred fd (fun fd ->
+                let fd = Core.Std.Unix.File_descr.to_int fd in
+                In_thread.run (fun () -> digest_fd fd)))
+          >>| function
+          | `Already_closed  -> failwith "F.Ocaml_digest.of_file: FD already closed"
+          | `Error exn -> Error (Error.of_exn exn)
+          | `Ok result -> Ok (Caml.Digest.to_hex result))))
+
+  TEST_UNIT =
+    set 20;
+    let open Core.Std in
+    let cwd = Sys.getcwd () in
+    let file = Filename.concat cwd (Filename.basename _here_.pos_fname) in
+    let our_digest =
+      Thread_safe.block_on_async_exn (fun () -> of_file (Path.absolute file) >>| ok_exn)
+    in
+    let actual_digest = Caml.Digest.to_hex (Caml.Digest.file file) in
+    <:test_result< string >> our_digest ~expect:actual_digest;
+    <:test_pred< string Or_error.t >> Result.is_error
+      (Thread_safe.block_on_async_exn (fun () -> of_file (Path.absolute cwd)));
+  ;;
 
 end
-
-let use_ocaml_digest =
-  match Core.Std.Sys.getenv "JENGA_USE_OCAML_DIGEST" with
-  | None -> false
-  | Some _ -> true
-
-let m =
-  match
-    match use_ocaml_digest  with
-    | true -> None
-    | false -> System.md5_program_path
-  with
-  | None ->
-    Printf.eprintf "using internal ocaml digest\n%!";
-    (module Ocaml__Compute_digest : Compute_digest_sig)
-  | Some prog ->
-    (module External__Compute_digest(struct let prog = prog end) : Compute_digest_sig)
-
-module Compute_digest = (val m : Compute_digest_sig)
 
 (*----------------------------------------------------------------------
   Listing (count!)
@@ -222,9 +146,9 @@ module Compute_digest = (val m : Compute_digest_sig)
 
 let run_ls ~dir =
   let open Listing in
-  File_access.enqueue (fun () ->
+  Locking.lock_directory_for_listing ~dir (fun () ->
     let path_string = Path.to_string dir in
-    Locking.lock_directory_for_listing ~dir (fun () ->
+    File_access.enqueue (fun () ->
       Effort.track ls_counter (fun () ->
         try_with (fun () -> Unix.opendir path_string) >>= function
         | Error exn -> return (Error (Error.of_exn exn)) (* opendir failed *)
@@ -244,7 +168,7 @@ let run_ls ~dir =
               | Ok base ->
                 begin
                   let path_string = Path.to_string dir ^ "/" ^ base in
-                  unix_lstat path_string >>= function
+                  unix_stat ~follow_symlinks:false path_string >>= function
                   | Error _e ->
                       (* File disappeared between readdir & lstat system calls.
                          Handle as if readdir never told as about it *)
@@ -284,7 +208,7 @@ let break_cache_glass ?(show=false) cache path =
   match Hashtbl.find cache path with
   | None -> ()
   | Some glass ->
-    if show then Message.file_changed ~desc:(Path.to_string path);
+    (if show then Message.file_changed ~desc:(Path.to_string path));
     assert (not (Glass.is_broken glass));
     (* remove glass from HT *before* breaking it *)
     Hashtbl.remove cache path;
@@ -301,7 +225,7 @@ module Real_watcher : sig
     t Deferred.t
 
   val watch_file_or_dir : t ->
-    what:[`file|`dir] ->
+    how:[`via_parent|`directly] ->
     Path.t ->
     Heart.t Or_error.t Deferred.t
 
@@ -315,8 +239,24 @@ end = struct
     ignore : (Path.t -> bool);
     expect : (Path.t -> bool);
     notifier : Inotify.t ;
-    file_glass : Glass.t Path.Table.t;
-    dir_glass : Glass.t Path.Table.t;
+    (* An entry [x, f] in [watching_via_parent] means we have set up an inotify watcher on
+       [dirname x]. [f] will tell you when [x] might have changed according to that
+       watcher.
+       Note that this kind of watcher is sufficient for files because you get Modify
+       events just by watching the parent, but not sufficient for
+       directories. Also if a direct watcher has been established, events from the direct
+       watcher will be reflected in [f].
+    *)
+    watching_via_parent : Glass.t Path.Table.t;
+    (* An entry [x, f] in [watching_directly] means we have set up an inotify watcher on
+       [x] itself and [f] will tell you when [x] might have changed.
+       This kind of watcher is necessary for watching directories, but it's harder
+       to establish: you can't start watching a file that does not exist.
+
+       Note that due to a quirk of [Async_inotify] ignoring [Delete_self] events,
+       this watcher might not be sufficient by itself.
+    *)
+    watching_directly : Glass.t Path.Table.t;
   }
 
   let paths_of_event t =
@@ -324,12 +264,12 @@ end = struct
       let path = Path.of_absolute_string s in
       if (t.ignore path) then [] else
         let dir = Path.dirname path in
-        [path; dir]
+        [true, path; false, dir]
     in
     function
     | Inotify.Event.Queue_overflow ->
       Message.error "Inotify.Event.Queue_overflow"; [] (* at least log an error *)
-    | Inotify.Event.Modified s -> [Path.of_absolute_string s] (* just the filename *)
+    | Inotify.Event.Modified s -> [true, Path.of_absolute_string s] (* just the filename *)
     | Inotify.Event.Unlinked s -> paths s
     | Inotify.Event.Created s -> paths s
     | Inotify.Event.Moved m ->
@@ -339,42 +279,45 @@ end = struct
       | Inotify.Event.Move (s1,s2) -> paths s1 @ paths s2
 
   let clear_watcher_cache t path =
-    break_cache_glass t.file_glass path;
-    break_cache_glass t.dir_glass (Path.dirname path)
+    break_cache_glass t.watching_via_parent path;
+    break_cache_glass t.watching_directly (Path.dirname path)
 
   let suck_notifier_pipe t piper =
     don't_wait_for (
       Pipe.iter_without_pushback piper ~f:(fun event ->
-        (*Message.unlogged "Watcher, event: %s" (Inotify.Event.to_string event);*)
-        List.iter (paths_of_event t event) ~f:(fun path ->
+        (* Message.unlogged "Watcher, event: %s" (Inotify.Event.to_string event); *)
+        List.iter (paths_of_event t event) ~f:(fun (show, path) ->
           (* Show path events to which we are sensitized...
              Don't show events for targets of currently running actions.
              Will see events for externally changed files (i.e. edited source files
              or removed generated files), but also for paths affected by a running
              jenga action which are not declared as targets of that action. *)
-          let show = not (t.expect path) in
-          break_cache_glass ~show t.file_glass path;
-          break_cache_glass       t.dir_glass path (* why not show here? *)
+          let show = show && not (t.expect path) in
+          break_cache_glass ~show t.watching_via_parent path;
+          break_cache_glass       t.watching_directly path (* why not show here? *)
         )))
 
   let create ~ignore ~expect =
     (* Have to pass a path at creation - what a pain, dont have one yet! *)
     Inotify.create ~recursive:false ~watch_new_dirs:false "/" >>= fun (notifier,_) ->
-    let file_glass = Path.Table.create () in
-    let dir_glass = Path.Table.create () in
-    let t = {ignore; expect; notifier; file_glass; dir_glass} in
+    let watching_via_parent = Path.Table.create () in
+    let watching_directly = Path.Table.create () in
+    let t = {ignore; expect; notifier; watching_via_parent; watching_directly} in
     suck_notifier_pipe t (Inotify.pipe notifier);
     return t
 
-  let dir_and_cache t ~what path =
-    match what with
-    | `file -> Path.dirname path  , t.file_glass
-    | `dir -> path                , t.dir_glass
+  let dir_and_cache t ~how path =
+    match how with
+    | `via_parent -> Path.dirname path  , t.watching_via_parent
+    | `directly -> path                , t.watching_directly
 
-  let watch_file_or_dir t ~what path =
-    let path = Path.relativize_if_possible path in
-    let dir, cache = dir_and_cache t ~what path in
-    (*Message.unlogged "watch: %s (dir: %s)" (Path.to_string path) (Path.to_string dir);*)
+  let watch_file_or_dir t ~how path =
+    let path =
+      Path.of_absolute_string (
+        Path.to_absolute_string path)
+    in
+    let dir, cache = dir_and_cache t ~how path in
+    (* Message.unlogged "watch: %s (dir: %s)" (Path.to_string path) (Path.to_string dir); *)
     match (Hashtbl.find cache path) with
     | Some glass ->
       assert (not (Glass.is_broken glass));
@@ -384,13 +327,11 @@ end = struct
          The underlying Inotify module handles repeated setup for same path.
          So we make no attempt to avoid the repeats. *)
       let absolute_dir = Path.to_absolute_string dir in
-      (*Message.unlogged "setup watcher: %s" absolute_dir;*)
+      (* Message.unlogged "setup watcher: %s" absolute_dir; *)
       Monitor.try_with (fun () ->
         Inotify.add t.notifier absolute_dir
       ) >>| function
-      | Error exn ->
-        Message.error "Unable to watch path: %s" absolute_dir;
-        Error (Error.of_exn exn)
+      | Error exn -> Error (Error.of_exn exn)
       | Ok () ->
         let default () = Glass.create () in
         let glass = Hashtbl.find_or_add cache path ~default in
@@ -410,34 +351,34 @@ module Blind_watcher : sig
   val clear_watcher_cache : t -> Path.t -> unit
 
   val dont_watch_file_or_dir : t ->
-    what:[`file|`dir] ->
+    how:[`via_parent|`directly] ->
     Path.t ->
     Heart.t
 
 end = struct
 
   type t = {
-    file_glass : Glass.t Path.Table.t;
-    dir_glass : Glass.t Path.Table.t;
+    watching_via_parent : Glass.t Path.Table.t;
+    watching_directly : Glass.t Path.Table.t;
   }
 
   let create () =
-    let file_glass = Path.Table.create () in
-    let dir_glass = Path.Table.create () in
-    let t = {file_glass; dir_glass} in
+    let watching_via_parent = Path.Table.create () in
+    let watching_directly = Path.Table.create () in
+    let t = {watching_via_parent; watching_directly} in
     t
 
   let clear_watcher_cache t path =
-    break_cache_glass t.file_glass path;
-    break_cache_glass t.dir_glass (Path.dirname path)
+    break_cache_glass t.watching_via_parent path;
+    break_cache_glass t.watching_directly (Path.dirname path)
 
-  let get_cache t ~what =
-    match what with
-    | `file -> t.file_glass
-    | `dir -> t.dir_glass
+  let get_cache t ~how =
+    match how with
+    | `via_parent -> t.watching_via_parent
+    | `directly -> t.watching_directly
 
-  let dont_watch_file_or_dir t ~what path =
-    let cache = get_cache t ~what in
+  let dont_watch_file_or_dir t ~how path =
+    let cache = get_cache t ~how in
     match Hashtbl.find cache path with
     | Some glass ->
       assert (not (Glass.is_broken glass));
@@ -463,7 +404,7 @@ module Watcher : sig
     t Deferred.t
 
   val watch_file_or_dir : t ->
-    what:[`file|`dir] ->
+    how:[`via_parent|`directly] ->
     Path.t ->
     Heart.t Or_error.t Deferred.t
 
@@ -480,10 +421,10 @@ end = struct
     then return (Blind (Blind_watcher.create ()))
     else Real_watcher.create ~ignore ~expect >>| fun w -> Real w
 
-  let watch_file_or_dir t ~what path =
+  let watch_file_or_dir t ~how path =
     match t with
-    | Real w -> Real_watcher.watch_file_or_dir w ~what path
-    | Blind w -> return (Ok (Blind_watcher.dont_watch_file_or_dir w ~what path))
+    | Real w -> Real_watcher.watch_file_or_dir w ~how path
+    | Blind w -> return (Ok (Blind_watcher.dont_watch_file_or_dir w ~how path))
 
   (* [clear_watcher_cache] - clears the cache to ensure the file will be stated
      again. Necessary when running without notifiers; sensible even with notifiers, to
@@ -495,52 +436,189 @@ end = struct
 
 end
 
-(*----------------------------------------------------------------------
- Stat_memo, making use of inotify watcher
-----------------------------------------------------------------------*)
+module Listing_result = struct
+  type t = [
+    | `does_not_exist
+    | `not_a_dir
+    | `listing of Listing.t
+  ] with compare, sexp
 
-module Stat_memo : sig
+  include Comparable.Make(struct
+    type nonrec t = t with compare, sexp
+  end)
+end
 
+(** Stats for a path, as comes from [lstat]. *)
+module Lstat_result = struct
+  type t = [
+  | `does_not_exist
+  | `stats of Stats.t
+  ] with compare, sexp
+
+  include Comparable.Make(struct
+    type nonrec t = t with compare, sexp
+  end)
+end
+
+(** Stats for a path when all symlinks are resolved.
+    It's not valid to have [`Symlink] as a kind here. *)
+module Stat_result = Lstat_result
+
+(** Inode and kind of the thing at a given path.
+    Useful to know when you need to make a new inotify subscription. *)
+module Inode_result = struct
+  type t = [
+  | `does_not_exist
+  | `inode of (Kind.t * int * int)
+  ] with compare, sexp
+
+  include Comparable.Make(struct
+    type nonrec t = t with compare, sexp
+  end)
+end
+
+let cutoff_equal_ignore_errors = fun f a b -> match a, b with
+  | Ok l1, Ok l2 -> f l1 l2
+  | Error _, Error _ -> false
+  | Ok _, Error _ -> false
+  | Error _, Ok _ -> false
+
+(** File system logic. *)
+module Fs_memo : sig
   type t
   val create : Watcher.t -> t
-  (* Caller must declare what the lstat is expected to be for,
-     so that the correct kind of watcher can be set up *)
-  val lstat : t -> what:[`file|`dir] -> Path.t -> Stats.t Or_error.t Tenacious.t
-
+  val stat : t -> Path.t -> Stat_result.t Or_error.t Tenacious.t
+  val list_dir : t -> Path.t -> Listing_result.t Or_error.t Tenacious.t
 end = struct
 
-  type computation = Stats.t Or_error.t Tenacious.t
-  type t = {
-    watcher : Watcher.t;
-    file_watch_cache : computation Path.Table.t;
-    dir_watch_cache : computation Path.Table.t;
-  }
+  open Tenacious.Result
 
-  let create watcher = {
-    watcher;
-    file_watch_cache = Path.Table.create ();
-    dir_watch_cache = Path.Table.create ();
-  }
+  let plain_stat = stat
 
-  let lstat t ~what path =
-    let cache =
-      match what with
-      | `file -> t.file_watch_cache
-      | `dir -> t.dir_watch_cache
-    in
-    memoize cache ~key:path (fun () ->
-      let tenacious =
+  type t =
+    { stat : Path.t -> Stat_result.t Or_error.t Tenacious.t
+    ; list_dir : Path.t -> Listing_result.t Or_error.t Tenacious.t
+    }
+  with fields
+
+  let create watcher =
+    let rec uncached_lstat path : Lstat_result.t Or_error.t Tenacious.t =
+      let parent_is_a_directory () =
         Tenacious.lift (fun () ->
-          Watcher.watch_file_or_dir t.watcher ~what path
+          let open Deferred in
+          (* We start watching assuming it's a file (noticing the path appearing/
+             disappearing/[being modified if it's a file]).
+             If it happens to be a directory, we additionally have to watch the directory
+             itself.
+          *)
+          Watcher.watch_file_or_dir watcher ~how:`via_parent path
           >>= function
-          | Error exn ->
-            return (unbreakable (Error exn))
+          | Error err ->
+            return (unbreakable (Error (
+              Error.tag err
+                (sprintf "%S's parent directory exists, but watcher set up failed"
+                (Path.to_string path)))))
           | Ok heart ->
-            lstat path >>| fun res -> (res,heart)
-        )
+            plain_stat ~follow_symlinks:false path
+            >>= fun res ->
+            (match res with
+             | `ok stats when is_dir stats ->
+               Watcher.watch_file_or_dir watcher ~how:`directly path
+             | _ ->
+               Deferred.return (Ok Heart.unbreakable))
+            >>| function
+            | Error err ->
+              unbreakable (Error (
+                Error.tag err
+                  (sprintf "%S exists, but watcher set up failed"
+                     (Path.to_string path))))
+            | Ok heart2 ->
+              let heart = Heart.combine2 heart heart2 in
+              (Ok res, heart))
+        >>= function
+        | `ok stats -> return (`stats stats)
+        | `does_not_exist -> return `does_not_exist
+        | `unknown_error err -> fail err
       in
-      tenacious
-    )
+      if Path.is_a_root path
+      then
+        parent_is_a_directory ()
+      else
+        (* watch for directory and its parents being
+           deleted/created/moved/symlink destination changed *)
+        inode (Path.dirname path) *>>= function
+        | Error err -> Tenacious.return (Error err)
+        | Ok `does_not_exist -> return `does_not_exist
+        | Ok (`inode (`Directory, _, _)) ->
+          parent_is_a_directory ()
+        | Ok (`inode (`Link, _, _)) ->
+          assert false (* Inoder is not allowed to return `Link *)
+        | Ok (`inode (_, _, _)) ->
+          return `does_not_exist
+
+    (* Resolves symlinks. A symlink with target path missing is considered non-existing. *)
+    and uncached_stat path : Stat_result.t Or_error.t Tenacious.t =
+      lstat path
+      >>= function
+      | `does_not_exist -> return `does_not_exist
+      | `stats stats ->
+        match Stats.kind stats with
+        | `Socket | `Directory | `Block | `Fifo | `Char | `File ->
+          return (`stats stats)
+        | `Link ->
+          Tenacious.lift (fun () ->
+            let open Deferred in
+            Unix.readlink (Path.to_absolute_string path)
+            (* This 'unbreakable' is guarded by 'lstat' above:
+               We assume 'readlink' will return the same result as long as the stat
+               stays unchanged. *)
+            >>| unbreakable
+          )
+          *>>= fun link_destination ->
+          let dir = Path.dirname path in
+          stat (Path.relative_or_absolute ~dir link_destination)
+
+    (* Depends on inode across the symlinks *)
+    and uncached_inode x : Inode_result.t Or_error.t Tenacious.t =
+      Tenacious.cutoff
+        ~equal:(cutoff_equal_ignore_errors Inode_result.(=))
+        (stat x
+         *>>| Result.map ~f:(function
+           | `stats stat ->
+             `inode (Stats.kind stat, Stats.dev stat, Stats.ino stat)
+           | `does_not_exist -> `does_not_exist))
+
+    and lstat =
+      let r = lazy (memoize_reified Path.hashable uncached_lstat) in
+      fun x -> Lazy.force r x
+    and stat =
+      let r = lazy (memoize_reified Path.hashable uncached_stat) in
+      fun x -> Lazy.force r x
+    and inode =
+      let r = lazy (memoize_reified Path.hashable uncached_inode) in
+      fun x -> Lazy.force r x
+    in
+
+    (* Depends on inode across the symlinks *)
+    let uncached_list_dir dir =
+      stat dir >>= function
+      | `does_not_exist -> return `does_not_exist
+      | `stats stats ->
+        if not (is_dir stats)
+        then return `not_a_dir
+        else
+          Tenacious.lift (fun () ->
+            let open Deferred in
+            (* listing is valid as long as stats are the same,
+               and we depend on stats above, so [unbreakable] *)
+            run_ls ~dir >>| unbreakable
+          )
+          >>| fun x -> `listing x
+    in
+    let list_dir =
+      memoize_reified Path.hashable uncached_list_dir
+    in
+    { stat; list_dir }
 
 end
 
@@ -559,6 +637,7 @@ end
 module Digest_result = struct
   type t = [
   | `stat_error of Error.t
+  | `does_not_exist
   | `is_a_dir
   | `undigestable of Kind.t
   | `digest_error of Error.t
@@ -566,38 +645,19 @@ module Digest_result = struct
   ]
 end
 
-module Listing_result = struct
-  type t = [
-  | `stat_error of Error.t
-  | `not_a_dir
-  | `listing_error of Error.t
-  | `listing of Listing.t
-  ]
-
-  let equal t1 t2 = (* must avoid comparing functional values *)
-    match t1,t2 with
-    | `not_a_dir,`not_a_dir -> true
-    | `stat_error _, `stat_error _ -> true
-    | `listing_error _, `listing_error _ -> true
-    | `listing x1, `listing x2 -> Listing.equal x1 x2
-    | _,_-> false
-
-end
-
 (*----------------------------------------------------------------------
  contents_file (without persistence)
 ----------------------------------------------------------------------*)
 
-let contents_file sm ~file =
-  Stat_memo.lstat sm ~what:`file file *>>= function
+let contents_file fsm ~file =
+  Fs_memo.stat fsm file *>>= function
   | Error e -> Tenacious.return (`file_read_error e)
   | Ok __stats ->
     Tenacious.lift (fun () ->
       File_access.enqueue (fun () ->
-        try_with (fun () ->
+        Deferred.Or_error.try_with (fun () ->
           Reader.file_contents (Path.to_absolute_string file)
         )
-        >>| (function Ok x -> Ok x | Error exn -> Error (Error.of_exn exn))
       )
       >>| unbreakable
     ) *>>| function
@@ -614,19 +674,20 @@ module Digest_persist : sig
 
   val digest_file :
     Persist.t ->
-    Stat_memo.t ->
+    Fs_memo.t ->
     file:Path.t ->
     Digest_result.t Tenacious.t
 
 end = struct
 
-  let digest_file persist sm ~file =
+  let digest_file persist fsm ~file =
     let db = Persist.db persist in
     let cache = Db.digest_cache db in
     let remove() = Hashtbl.remove cache file in
-    Stat_memo.lstat sm ~what:`file file *>>= function
+    Fs_memo.stat fsm file *>>= function
     | Error e -> (remove(); Tenacious.return (`stat_error e))
-    | Ok stats ->
+    | Ok `does_not_exist -> (remove(); Tenacious.return `does_not_exist)
+    | Ok (`stats stats) ->
       let kind = Stats.kind stats in
       if (is_dir stats) then Tenacious.return `is_a_dir else
       if not (is_digestable stats) then Tenacious.return (`undigestable kind) else
@@ -641,7 +702,7 @@ end = struct
         | Some old_good_digest -> Tenacious.return (`digest old_good_digest)
         | None ->
           Tenacious.lift (fun () ->
-            Compute_digest.of_file file >>| unbreakable
+            Ocaml_digest.of_file file >>| unbreakable
           ) *>>= function
           | Error e -> (remove(); Tenacious.return (`digest_error e))
           | Ok digest_string ->
@@ -651,35 +712,6 @@ end = struct
 
 end
 
-
-(*----------------------------------------------------------------------
- Listing_persist - w.r.t stat->listing mapping
-----------------------------------------------------------------------*)
-
-module Listing_persist : sig
-
-  val list_dir :
-    Stat_memo.t ->
-    dir:Path.t ->
-    Listing_result.t Tenacious.t
-
-end = struct
-
-  let list_dir sm ~dir =
-    let tenacious =
-      Stat_memo.lstat sm ~what:`dir dir *>>= function
-      | Error e -> Tenacious.return (`stat_error e)
-      | Ok stats ->
-        if not (is_dir stats) then Tenacious.return `not_a_dir else
-          Tenacious.lift (fun () ->
-            run_ls ~dir >>| unbreakable
-          ) *>>= function
-          | Error e -> Tenacious.return (`listing_error e)
-          | Ok new_listing -> Tenacious.return (`listing new_listing)
-    in
-    tenacious
-
-end
 
 (*----------------------------------------------------------------------
  Contents_memo
@@ -692,7 +724,7 @@ module Contents_memo : sig
 
   val contents_file :
     t ->
-    Stat_memo.t ->
+    Fs_memo.t ->
     file:Path.t ->
     Contents_result.t Tenacious.t
 
@@ -704,9 +736,7 @@ end = struct
   }
 
   let contents_file t sm ~file =
-    memoize t.cache ~key:file (fun () ->
-      contents_file sm ~file
-    )
+    memoize_reified_with_cache t.cache ~key:file (fun file -> contents_file sm ~file)
 
   let create () = {
     cache = Path.Table.create ();
@@ -726,7 +756,7 @@ module Digest_memo : sig
   val digest_file :
     t ->
     Persist.t ->
-    Stat_memo.t ->
+    Fs_memo.t ->
     file:Path.t ->
     Digest_result.t Tenacious.t
 
@@ -738,41 +768,8 @@ end = struct
   }
 
   let digest_file t dp sm ~file =
-    memoize t.cache ~key:file (fun () ->
+    memoize_reified_with_cache t.cache ~key:file (fun file ->
       Digest_persist.digest_file dp sm ~file
-    )
-
-  let create () = {
-    cache = Path.Table.create ();
-  }
-
-end
-
-(*----------------------------------------------------------------------
- Listing_memo
-----------------------------------------------------------------------*)
-
-module Listing_memo : sig
-
-  type t
-  val create : unit -> t
-
-  val list_dir :
-    t ->
-    Stat_memo.t ->
-    dir:Path.t ->
-    Listing_result.t Tenacious.t
-
-end = struct
-
-  type computation = Listing_result.t Tenacious.t
-  type t = {
-    cache : computation Path.Table.t;
-  }
-
-  let list_dir t sm ~dir =
-    memoize t.cache ~key:dir (fun () ->
-      Listing_persist.list_dir sm ~dir
     )
 
   let create () = {
@@ -838,18 +835,20 @@ module Glob = struct
     let key = {Key. dir; kinds; pat} in
     cached_create key
 
-  let exec_no_cutoff glob lm sm  =
-    Listing_memo.list_dir lm sm ~dir:(dir glob) *>>= function
-    | `listing listing ->
-      let restricted = Listing.restrict listing (restriction glob) in
-      Tenacious.return (`listing restricted)
+  let exec_no_cutoff glob fsm =
+    Fs_memo.list_dir fsm (dir glob) *>>= function
+    | Ok (`listing listing) ->
+      let restricted =
+        Listing.restrict listing (restriction glob)
+      in
+      Tenacious.return (Ok (`listing restricted))
     | x ->
       Tenacious.return x
 
-  let exec glob lm sm =
+  let exec glob fsm =
     Tenacious.cutoff
-      ~equal:Listing_result.equal
-      (exec_no_cutoff glob lm sm)
+      ~equal:(cutoff_equal_ignore_errors Listing_result.equal)
+      (exec_no_cutoff glob fsm)
 
 end
 
@@ -864,21 +863,20 @@ module Glob_memo : sig
 
   val list_glob :
     t ->
-    Listing_memo.t ->
-    Stat_memo.t ->
+    Fs_memo.t ->
     Glob.t ->
-    Listing_result.t Tenacious.t
+    Listing_result.t Or_error.t Tenacious.t
 
 end = struct
 
-  type computation = Listing_result.t Tenacious.t
+  type computation = Listing_result.t Or_error.t Tenacious.t
   type t = {
     cache : computation Glob.Table.t;
   }
 
-  let list_glob t lm sm glob =
-    memoize t.cache ~key:glob (fun () ->
-      Glob.exec glob lm sm
+  let list_glob t fsm glob =
+    memoize_reified_with_cache t.cache ~key:glob (fun glob ->
+      Glob.exec glob fsm
     )
 
   let create () = {
@@ -886,10 +884,6 @@ end = struct
   }
 
 end
-
-(*----------------------------------------------------------------------
- Memo = combination of 4 memos - stat, digest, listing, glob
-----------------------------------------------------------------------*)
 
 module Memo : sig
 
@@ -910,7 +904,7 @@ module Memo : sig
   val list_glob :
     t ->
     Glob.t ->
-    Listing_result.t Tenacious.t
+    Listing_result.t Or_error.t Tenacious.t
 
   val mtime_file :
     t ->
@@ -920,31 +914,30 @@ module Memo : sig
 end = struct
 
   type t = {
-    sm : Stat_memo.t;
+    fsm : Fs_memo.t;
     cm : Contents_memo.t;
     dm : Digest_memo.t;
-    lm : Listing_memo.t;
     gm : Glob_memo.t;
   }
 
   let create watcher = {
-    sm = Stat_memo.create watcher ;
+    fsm = Fs_memo.create watcher ;
     cm = Contents_memo.create () ;
     dm = Digest_memo.create () ;
-    lm = Listing_memo.create () ;
     gm = Glob_memo.create () ;
   }
 
-  let contents_file t ~file = Contents_memo.contents_file t.cm t.sm ~file
+  let contents_file t ~file = Contents_memo.contents_file t.cm t.fsm ~file
 
-  let digest_file t per ~file = Digest_memo.digest_file t.dm per t.sm ~file
+  let digest_file t per ~file = Digest_memo.digest_file t.dm per t.fsm ~file
 
-  let list_glob t glob = Glob_memo.list_glob t.gm t.lm t.sm glob
+  let list_glob t glob = Glob_memo.list_glob t.gm t.fsm glob
 
   let mtime_file t ~file =
-    Stat_memo.lstat t.sm ~what:`file file *>>| function
+    Fs_memo.stat t.fsm file *>>| function
     | Error _ -> None
-    | Ok stats -> Some (Stats.mtime stats)
+    | Ok `does_not_exist -> None
+    | Ok (`stats stats) -> Some (Stats.mtime stats)
 
 end
 
@@ -974,7 +967,7 @@ module Fs : sig
   val list_glob :
     t ->
     Glob.t ->
-    Listing_result.t Tenacious.t
+    Listing_result.t Or_error.t Tenacious.t
 
   val watch_sync_file : t -> Path.t -> Heart.t Deferred.t
   val nono : t -> bool
@@ -994,10 +987,10 @@ end = struct
 
   let create config persist =
     let nono = not System.has_inotify || Config.no_notifiers config in
-    let ignore = Path.is_special_jenga_path in
+    let ignore = Special_paths.Dot_jenga.matches in
     let expect path =
       match Path.case path with
-      | `relative rel -> Locking.is_action_running_for_target rel
+      | `relative rel -> Locking.is_action_running_for_path rel
       | `absolute abs -> String.is_prefix ~prefix:tmp_jenga (Path.Abs.to_string abs)
     in
     Watcher.create ~nono ~ignore ~expect >>= fun watcher ->
@@ -1012,10 +1005,8 @@ end = struct
   let list_glob t glob = Memo.list_glob t.memo glob
 
   let watch_sync_file t path =
-    Watcher.watch_file_or_dir t.watcher ~what:`file path
-    >>= function
-    | Ok heart -> return heart
-    | Error e -> raise (Error.to_exn e)
+    Watcher.watch_file_or_dir t.watcher ~how:`via_parent path
+    >>| ok_exn
 
   let clear_watcher_cache t path =
     Watcher.clear_watcher_cache t.watcher path
@@ -1033,9 +1024,9 @@ let ensure_directory (_:t) ~dir = (* why need t ? *)
   )
 
 let mtime_file_right_now ~file =
-  lstat file >>| function
-  | Ok stats -> Some (Stats.mtime stats)
-  | Error _ -> None
+  stat ~follow_symlinks:true file >>| function
+  | `ok stats -> Some (Stats.mtime stats)
+  | `does_not_exist | `unknown_error _ -> None
 
 
 (*----------------------------------------------------------------------
@@ -1133,7 +1124,7 @@ let lock_targets_and_mask_updates t ~targets f =
     (* After running an action, synchronise until all inotify events triggered while the
        action was run have been delivered (and acted upon) by this process.
 
-       This allows [fs.ml] to call [Locking.is_action_running_for_target] to avoid
+       This allows [fs.ml] to call [Locking.is_action_running_for_path] to avoid
        writing "changed" message for files targeted by this action. *)
     sync_inotify_delivery t >>| fun () ->
     res)

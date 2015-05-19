@@ -1,9 +1,13 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! No_polymorphic_compare
 open Async.Std
 
 module Digest = Db.Digest
+
+module Version = struct
+  let current = "1"
+end
 
 let saves_done = Effort.Counter.create "db-save"
 
@@ -31,7 +35,7 @@ let modify who x =
   else (trace "setting MODIFIED flag, for: %s" who; r_is_modified := true ; x)
 
 module Quality = struct
-  type t = [`initial | `format_changed | `good] with sexp_of
+  type t = [`initial | `good] with sexp_of
   let to_string t = Sexp.to_string (sexp_of_t t)
 end
 
@@ -62,7 +66,7 @@ end
 
 module Ops : sig
 
-  val load_db_with_quality : db_filename:string -> (Db.t * Quality.t) Deferred.t
+  val load_db_with_quality : db_filename:string -> (Db.t * Quality.t) Or_error.t Deferred.t
   val save_db : Db.t -> db_filename:string -> unit Deferred.t
 
 end = struct
@@ -71,9 +75,11 @@ end = struct
 
   let load_db_with_quality ~db_filename =
     Sys.file_exists db_filename >>= function
-    | `No | `Unknown ->
+    | `No ->
       trace "load: %s: does not exist" db_filename;
-      return (Db.create(), `initial)
+      return (Ok (Db.create(), `initial))
+    | `Unknown ->
+      return (Error (Error.createf "access to %S failed" db_filename))
     | `Yes ->
     try_with (fun () ->
       Reader.with_file db_filename ~f:(fun r ->
@@ -86,8 +92,8 @@ end = struct
         | Ok `Eof -> trace "load: %s: `Eof" db_filename; None
         | Error exn -> trace "load: %s:\n%s" db_filename (Exn.to_string exn); None
       ) with
-      | Some state -> return (State.value state, `good)
-      | None -> return (Db.create(), `format_changed)
+      | Some state -> return (Ok (State.value state, `good))
+      | None -> return (Error (Error.of_string "failed to load jenga db"))
 
   let save_db db ~db_filename =
     Effort.track saves_done (fun () ->
@@ -108,8 +114,13 @@ end = struct
 
 end
 
-let load_db_as_sexp ~db_filename =
-  Ops.load_db_with_quality ~db_filename >>| fun (db,_quality) -> Db.sexp_of_t db
+let get_db_filename () =
+  Path.to_absolute_string (Path.of_relative (
+    Special_paths.Dot_jenga.db ~version:Version.current))
+
+let load_db () =
+  Ops.load_db_with_quality ~db_filename:(get_db_filename ())
+  >>| Or_error.map ~f:(fun (db,_quality) -> db)
 
 type t = {
   db : Db.t;
@@ -119,25 +130,22 @@ type t = {
   mutable periodic_saving_enabled : bool;
 } with fields
 
-let create ~root_dir =
-  let db_filename = root_dir ^/ Misc.db_basename in
-
+let create () =
+  let db_filename = get_db_filename () in
   trace "LOAD_DB: %s..." db_filename;
   time_async (fun () -> Ops.load_db_with_quality ~db_filename)
-  >>= fun ((db,quality),duration) ->
-  trace "LOAD_DB: %s... done (%s), quality=%s"
-    db_filename (Time.Span.to_string duration)
-    (Quality.to_string quality);
-
-  let t = {
-    db;
-    quality;
-    db_filename;
-    save_status = `not_saving;
-    periodic_saving_enabled = true;
-  } in
-
-  return t
+  >>| fun (result, duration) ->
+  Or_error.map result ~f:(fun (db,quality) ->
+    trace "LOAD_DB: %s... done (%s), quality=%s"
+      db_filename (Time.Span.to_string duration)
+      (Quality.to_string quality);
+    {
+      db;
+      quality;
+      db_filename;
+      save_status = `not_saving;
+      periodic_saving_enabled = true;
+    })
 
 let save_if_changed t =
   match is_modified() with
@@ -183,10 +191,10 @@ let save_periodically ~save_span t =
     loop ()
   )
 
-let create_saving_periodically ~root_dir save_span =
-  create ~root_dir >>= fun t ->
-  save_periodically ~save_span t;
-  return t
+let create_saving_periodically save_span =
+  Deferred.Or_error.map (create ()) ~f:(fun t ->
+    save_periodically ~save_span t;
+    t)
 
 let disable_periodic_saving_and_save_now t =
   t.periodic_saving_enabled <- false;

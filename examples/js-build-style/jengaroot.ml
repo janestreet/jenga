@@ -45,7 +45,7 @@ module Rule = struct (* planned changes for API v3 *)
 end
 
 let relative = Path.relative
-let dotdot = Path.dotdot
+let reach_from = Path.reach_from
 let root_relative = Path.root_relative
 let basename = Path.basename
 let dirname = Path.dirname
@@ -838,7 +838,7 @@ let link_to_remote ~remote ~local ~x_hack_deps =
     return (
       Bash.action ~dir [
         bash1 "rm" ["-f"; basename local];
-        bash1 "ln" ["-s"; dotdot ~dir remote; basename local];
+        bash1 "ln" ["-s"; reach_from ~dir remote; basename local];
       ]
     )
   )
@@ -896,7 +896,7 @@ end = struct
 
   let liblink_includes ~dir ~libs =
     List.concat_map libs ~f:(fun lib ->
-      ["-I"; dotdot ~dir (liblink_dir ~lib)]
+      ["-I"; reach_from ~dir (liblink_dir ~lib)]
     )
 
   let libname_from_liblink_path ~dir =
@@ -1272,8 +1272,8 @@ let merlin_rules dc ~dir =
              from the source dir since they aren't installed, and merlin has some
              heuristic to try to figure out the right cmt to load. *)
           List.concat_map libs ~f:(fun lib ->
-            let cmt = dotdot ~dir (find_library lib) in
-            let cmi = dotdot ~dir (LL.liblink_dir ~lib) in
+            let cmt = reach_from ~dir (find_library lib) in
+            let cmi = reach_from ~dir (LL.liblink_dir ~lib) in
             [sprintf "CMT %s" cmt;
              sprintf "CMI %s" cmi]
           )
@@ -1428,7 +1428,7 @@ let combine_replace_extra ~tag ~replace ~extra xs =
 ----------------------------------------------------------------------*)
 
 let prefixed_includes ~dir =
-  let includes = [ "."; ocaml_where; dotdot ~dir (root_relative "include") ] in
+  let includes = [ "."; ocaml_where; reach_from ~dir (root_relative "include") ] in
   List.concat_map includes ~f:(fun path -> ["-I"; path])
 
 let expand_vars_in_rule dc ~dir ~targets ~deps ~cflags orig =
@@ -1447,7 +1447,7 @@ let expand_vars_in_rule dc ~dir ~targets ~deps ~cflags orig =
     | "CFLAGS"  -> Some (String.concat ~sep:" " cflags)
     | "OCAMLFLAGS"  -> Some (String.concat ~sep:" " ocamlflags)
     | "PREFIXED_INCLUDES"  -> Some (String.concat ~sep:" " (prefixed_includes ~dir))
-    | "ROOT" -> Some (dotdot ~dir Path.the_root)
+    | "ROOT" -> Some (reach_from ~dir Path.the_root)
     | _ -> root_var_lookup ~var_name
   in
   expand_dollar_vars ~lookup orig
@@ -1939,7 +1939,7 @@ let eval_pps ~dir ~libname ~ounit ~macro names =
   let path ~lib ~name =
     let path = LL.liblink_refname ~lib ~name in
     deps := Dep.path path :: !deps;
-    dotdot ~dir path
+    reach_from ~dir path
   in
   let command =
     "camlp4o" ::
@@ -2418,8 +2418,8 @@ let hg_version_rules ~dir ~exe =
       ~deps:[Dep.path generate_static_string_c_code_sh; Dep.path hg_version_out]
       ~action:(
         bashf ~dir "%s __wrap_generated_hg_version < %s > %s"
-          (dotdot ~dir generate_static_string_c_code_sh)
-          (dotdot ~dir hg_version_out)
+          (reach_from ~dir generate_static_string_c_code_sh)
+          (reach_from ~dir hg_version_out)
           (basename c))
   in
   [c_rule; o_rule]
@@ -2474,7 +2474,7 @@ let build_info_rules ~dir ~name ~ext ~sexp_dep =
       ~deps:[Dep.path generate_static_string_c_code_sh; Dep.path sexp_file]
       ~action:(
         bashf ~dir "%s __wrap_generated_build_info < %s > %s"
-          (dotdot ~dir generate_static_string_c_code_sh)
+          (reach_from ~dir generate_static_string_c_code_sh)
           (basename sexp_file)
           (basename c))
   in
@@ -2485,7 +2485,7 @@ let build_info_rules ~dir ~name ~ext ~sexp_dep =
       let action =
         bashf ~dir "X_LIBRARY_INLINING=%b %s %s %s jenga > %s"
           x_library_inlining
-          (dotdot ~dir build_info_sh)
+          (reach_from ~dir build_info_sh)
           Ocaml_version.name
           fullname_exe
           (basename sexp_file)
@@ -2526,7 +2526,7 @@ let mycaml_rules dc ~dir ~libname =
       in
       let lib_cmas =
         List.concat_map libs ~f:(fun lib -> [
-          "-I"; dotdot ~dir (LL.liblink_dir ~lib);
+          "-I"; reach_from ~dir (LL.liblink_dir ~lib);
           lib ^ ".cma";
         ])
       in
@@ -2545,7 +2545,7 @@ let mycaml_rules dc ~dir ~libname =
       let mydeps_string =
         String.concat ~sep:" " (
           List.map libs ~f:(fun lib ->
-            dotdot ~dir (LL.liblink_refname ~lib ~name:(lib ^ ".cmo"))
+            reach_from ~dir (LL.liblink_refname ~lib ~name:(lib ^ ".cmo"))
           )
         )
       in
@@ -2627,7 +2627,7 @@ let utopdeps_rules ~dir ~libname =
       Dep.path generate_static_string_c_code_sh *>>| fun () ->
       bashf ~dir "echo -n %S | %s generated_utop_deps > %s"
         (String.concat (libs @ [libname]) ~sep:" ")
-        (dotdot ~dir generate_static_string_c_code_sh)
+        (reach_from ~dir generate_static_string_c_code_sh)
         (basename c)
       )
   in
@@ -2660,13 +2660,13 @@ let utop_rules dc ~dir ~libname =
       let standard_cmas = List.map UTop.packs ~f:(fun name -> name ^ ".cma") in
       let lib_cmas =
         List.concat_map libs ~f:(fun lib -> [
-            "-I"; dotdot ~dir (LL.liblink_dir ~lib);
+            "-I"; reach_from ~dir (LL.liblink_dir ~lib);
             lib ^ ".cma";
           ])
       in
       let syntax_cmos =
         List.concat_map UTop.syntaxes ~f:(fun syntax -> [
-            "-I"; dotdot ~dir (LL.liblink_dir ~lib:syntax);
+            "-I"; reach_from ~dir (LL.liblink_dir ~lib:syntax);
             syntax ^ ".cmo";
           ])
       in
@@ -3034,7 +3034,7 @@ let ocaml_plugin_handling dc ~dir name exe =
     let check_libraries_are_linked, paths =
       (* Why embed things if you're not using ocaml_plugin? *)
       sprintf "; %s %s Ocaml_plugin %s"
-        (dotdot ~dir ocaml_modules)
+        (reach_from ~dir ocaml_modules)
         exe (String.concat ~sep:" " (List.map libs ~f:String.capitalize)),
       [ocaml_modules]
     in
@@ -3082,15 +3082,15 @@ let link_native dc ~dir ~libname ~link_flags ~allowed_ldd_dependencies name =
       let sub_cmxs_in_correct_order = List.map objs ~f:(fun name -> name ^ ".cmx") in
       let lib_cmxas =
         List.concat_map libs ~f:(fun lib -> [
-          "-I"; dotdot ~dir (LL.liblink_dir ~lib);
+          "-I"; reach_from ~dir (LL.liblink_dir ~lib);
           lib ^ ".cmxa";
         ])
       in
       let action =
         bash ~dir (
           String.concat ~sep:" " (List.concat [
-            [dotdot ~dir link_quietly;
-             dotdot ~dir ocamlwrapper;
+            [reach_from ~dir link_quietly;
+             reach_from ~dir ocamlwrapper;
              ocamlopt_prog];
             ocamlflags; ocamloptflags;
             link_flags;
@@ -3259,7 +3259,7 @@ let embed_rules ~dir ~cflags conf =
     let call_camlp4 = match pps with | [] -> "" | _::_ ->
       sprintf "-pp %s%s"
         camlp4o_path
-        (String.concat (List.map pps ~f:(fun pp -> sprintf " -pa-cmxs %s" (dotdot ~dir pp))))
+        (String.concat (List.map pps ~f:(fun pp -> sprintf " -pa-cmxs %s" (reach_from ~dir pp))))
     in
     let libraries = libraries @ ["ocaml_plugin"] in
     let gen_plugin_c =
@@ -3282,13 +3282,13 @@ let embed_rules ~dir ~cflags conf =
         in
         Dep.all_unit (List.map ~f:Dep.path dep_paths) *>>| fun () ->
         bashf ~dir "%s 300 %s -wrap-symbol %s -cc %s -ocamldep %s %s %s -o %s"
-          (dotdot ~dir time_limit)
-          (dotdot ~dir embedder)
+          (reach_from ~dir time_limit)
+          (reach_from ~dir embedder)
           call_camlp4
           ocamlopt_path
           ocamldep_path
           (String.concat ~sep:" " builtin_cmis)
-          (String.concat ~sep:" " (List.map ~f:(dotdot ~dir) cmis))
+          (String.concat ~sep:" " (List.map ~f:(reach_from ~dir) cmis))
           (plugin_name ^ ".c")
       )
     in
@@ -3342,7 +3342,7 @@ let run_inline_action ~dir ~user_deps filename =
   Dep.action
     (Dep.all_unit (List.map sources ~f:Dep.path)
      *>>| fun () ->
-     Action.process ~dir ~prog:(dotdot ~dir time_limit)
+     Action.process ~dir ~prog:(reach_from ~dir time_limit)
        ~args:["300"; "./" ^ filename])
 
 let run_inline_tests_action ~dir ~user_deps =
@@ -3441,7 +3441,7 @@ let link_test_or_bench_exe dc ~dir ~libname ~x_libs name =
         let include_dir =
           if lib = libname (* special handling for this lib *)
           then "."
-          else dotdot ~dir (LL.liblink_dir ~lib)
+          else reach_from ~dir (LL.liblink_dir ~lib)
         in
         ["-I"; include_dir; lib ^ ".cmxa";]
       )
@@ -3455,8 +3455,8 @@ let link_test_or_bench_exe dc ~dir ~libname ~x_libs name =
     return (
       bash ~dir (
         String.concat ~sep:" " (List.concat [
-          [dotdot ~dir link_quietly;
-           dotdot ~dir ocamlwrapper;
+          [reach_from ~dir link_quietly;
+           reach_from ~dir ocamlwrapper;
            ocamlopt_prog];
           ocaml_plugin_command_line;
           ocamlflags; ocamloptflags;

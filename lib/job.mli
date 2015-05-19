@@ -12,7 +12,10 @@ type t = Db.Job.t
 with sexp_of, bin_io, compare
 val create : dir:Path.t -> prog:string -> args:string list -> t
 
-val string_for_sh : t -> string
+val bracket : t -> sh_prelude:string -> sh_postlude:string -> t
+
+(** returns a bash script that expects to be run from [dir t] *)
+val to_sh_ignoring_dir : t -> string
 
 val dir : t -> Path.t
 

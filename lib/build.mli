@@ -17,6 +17,6 @@ val build_forever :
   Persist.t ->
   save_db_now:(unit -> unit Deferred.t) ->
   when_rebuilding:(unit -> unit Deferred.t) ->
-  unit Deferred.t
+  Nothing.t Deferred.t
 
 val exit_code_upon_control_c : int ref

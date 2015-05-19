@@ -1,13 +1,20 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! No_polymorphic_compare
 open Async.Std
 
 include Db.Job
 
-let string_for_sh t =
-  let args = List.map (args t) ~f:(fun arg -> Message.Q.shell_escape arg) in
-  sprintf "%s %s" (prog t) (String.concat ~sep:" " args)
+let to_sh_ignoring_dir t =
+  Message.Q.shell_escape_list (prog t :: args t)
+
+(* returns a bash script that expects to be run from the repo root *)
+let to_sh_root_relative t =
+  if Path.(=) (dir t) Path.the_root
+  then to_sh_ignoring_dir t
+  else sprintf "cd %s && %s"
+         (Message.Q.shell_escape (Path.reach_from ~dir:Path.the_root (dir t)))
+         (to_sh_ignoring_dir t)
 
 module Output = struct
 
@@ -61,3 +68,13 @@ let run t ~config ~need ~putenv ~output =
     match outcome with
     | `success -> return (Ok (get_result ~stdout))
     | `error _ -> return (Error (`non_zero_status summary))
+
+let bracket t ~sh_prelude ~sh_postlude =
+  let script =
+    sprintf "%s; __code=0; (%s) || __code=$?; %s; exit $__code"
+      sh_prelude (to_sh_root_relative t) sh_postlude
+  in
+  create
+    ~dir:(Path.the_root)
+    ~prog:"bash"
+    ~args:[ "-c"; script ]

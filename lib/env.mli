@@ -5,7 +5,6 @@ open Async.Std
 type t
 
 val create :
-  ?run_when_persist_format_has_changed:Action.t ->
   ?putenv : (string * string) list ->
   ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
   ?build_begin : (unit -> unit Deferred.t) ->
@@ -13,8 +12,6 @@ val create :
   ?artifacts: (dir:Path.t -> Path.t list Dep.t) ->
   (dir: Path.t -> Scheme.t) ->
   t
-
-val run_when_persist_format_has_changed : t -> Action.t option
 
 val putenv : t -> (string * string) list
 val build_begin : t -> (unit -> unit Deferred.t)

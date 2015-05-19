@@ -57,7 +57,7 @@ let spawned_forker_function hub =
        throttle the number of forked processed to be < 1024/3 *)
     Throttle.create ~continue_on_error:true ~max_concurrent_jobs:300
   in
-  let pipe_reader = Async_parallel.Std.Hub.listen_simple hub in
+  let pipe_reader = Async_parallel_deprecated.Std.Hub.listen_simple hub in
   don't_wait_for (
     let rec loop () =
       Pipe.read pipe_reader >>= function
@@ -67,7 +67,7 @@ let spawned_forker_function hub =
           Throttle.enqueue fork_throttle (fun () ->
             Fork_process.run request
           ) >>= fun reply ->
-          Async_parallel.Std.Hub.send hub client (uid,reply);
+          Async_parallel_deprecated.Std.Hub.send hub client (uid,reply);
           return ()
         );
         loop ()
@@ -86,18 +86,18 @@ end = struct
 
   type t = {
     genU : (unit -> int);  (* to match reply with request *)
-    channel_def : (int * Request.t, int * Reply.t) Async_parallel.Std.Channel.t Deferred.t;
+    channel_def : (int * Request.t, int * Reply.t) Async_parallel_deprecated.Std.Channel.t Deferred.t;
     reply_table : Reply.t Ivar.t Int.Table.t;
   }
 
   let create () =
     let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-    let channel_def = Async_parallel.Std.Parallel.spawn spawned_forker_function >>| fst in
+    let channel_def = Async_parallel_deprecated.Std.Parallel.spawn spawned_forker_function >>| fst in
     let reply_table = Int.Table.create () in
     don't_wait_for (
       channel_def >>= fun channel ->
       let rec loop () =
-        Async_parallel.Std.Channel.read channel >>= fun (uid,reply) ->
+        Async_parallel_deprecated.Std.Channel.read channel >>= fun (uid,reply) ->
         match (Hashtbl.find_and_remove reply_table uid) with
         | None -> failwith "Forker_proc, unknown reply uid";
         | Some ivar ->
@@ -113,7 +113,7 @@ end = struct
     let ivar = Ivar.create () in
     Hashtbl.add_exn t.reply_table ~key:uid ~data:ivar;
     t.channel_def >>= fun channel ->
-    Async_parallel.Std.Channel.write channel (uid,request);
+    Async_parallel_deprecated.Std.Channel.write channel (uid,request);
     Ivar.read ivar
 
 end

@@ -173,15 +173,12 @@ module String(X : sig val who : string end) = struct
     struct
 
       type t = Snap.t
-      include Bin_prot.Utils.Make_binable(struct
-        module Binable = struct
-          type t = Snap.t with bin_io
-        end
-        type nonrec t = t
-        let to_binable x = x
-        let of_binable snap =
-          Loading.unsnap snap; snap
-      end)
+      include Binable.Of_binable (Snap) (struct
+          type nonrec t = t
+          let to_binable x = x
+          let of_binable snap =
+            Loading.unsnap snap; snap
+        end)
     end
 
     module Bin = struct
@@ -238,10 +235,7 @@ module String(X : sig val who : string end) = struct
 
   end
 
-  include Bin_prot.Utils.Make_binable(struct
-    module Binable = struct
-      type t = Handle.t with sexp_of, bin_io
-    end
+  include Binable.Of_binable (Handle) (struct
     type nonrec t = t
     let to_binable = Saving.to_handle
     let of_binable = Loading.to_shared

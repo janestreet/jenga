@@ -1,6 +1,6 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! No_polymorphic_compare
 open Async.Std
 module Log = Async.Std.Log
 
@@ -15,6 +15,7 @@ let build_system_message_tag =
 module Q : sig
 
   val shell_escape : string -> string
+  val shell_escape_list : string list -> string
 
 end = struct
 
@@ -50,6 +51,9 @@ end = struct
     else
       (* does not need quoting *)
       s
+
+  let shell_escape_list l =
+    String.concat ~sep:" " (List.map l ~f:(fun x -> shell_escape x))
 
 end
 
@@ -466,7 +470,7 @@ let to_log_full_logger log event =
 
 let make_log ~log_filename =
   let output = [Log.Output.file `Text ~filename:log_filename] in
-  let log = Log.create ~level:`Debug ~output in
+  let log = Log.create ~level:`Debug ~output ~on_error:`Raise in
   log
 
 

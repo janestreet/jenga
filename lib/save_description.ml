@@ -6,7 +6,7 @@ type t = {
   contents : string;
   target : Path.t;
   chmod_x : bool;
-}
+} with sexp_of
 
 let create ~contents ~target ~chmod_x = { contents; target; chmod_x; }
 

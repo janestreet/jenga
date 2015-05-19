@@ -15,4 +15,3 @@ include Comparable.Make_binable(T)
 let create ~dir = { dir }
 let to_string t = sprintf "%s" (Path.Rel.to_string t.dir)
 let directory t = t.dir
-let of_goal goal = create ~dir:(Goal.directory goal)

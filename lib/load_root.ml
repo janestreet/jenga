@@ -1,6 +1,6 @@
 
 open Core.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! No_polymorphic_compare
 open Async.Std
 
 module P = Ocaml_plugin.Std
@@ -58,7 +58,7 @@ end
 
 let get_env spec =
   let plugin_cache_dir =
-    Path.Rel.to_absolute_string (Path.Rel.root_relative Misc.plugin_cache_basename)
+    Path.to_absolute_string (Path.of_relative Special_paths.Dot_jenga.plugin_cache)
   in
   let plugin_cache =
     P.Plugin_cache.Config.create

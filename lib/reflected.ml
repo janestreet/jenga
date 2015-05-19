@@ -7,7 +7,7 @@ module Action = struct
 
   let dir t = Job.dir t
 
-  let string_for_sh t = Job.string_for_sh t
+  let to_sh_ignoring_dir t = Job.to_sh_ignoring_dir t
 
   let escape_newlines_for_make s =
     if not (String.contains s '\n') then s else
@@ -25,8 +25,8 @@ module Action = struct
       | '$' -> "$$"
       | c -> String.make 1 c)
 
-  let string_for_one_line_make_recipe action =
-    let s = string_for_sh action in
+  let string_for_one_line_make_recipe_ignoring_dir action =
+    let s = to_sh_ignoring_dir action in
     let s = escape_newlines_for_make s in
     let s = escape_dollars_for_make s in
     s

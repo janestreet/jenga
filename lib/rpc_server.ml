@@ -63,7 +63,7 @@ let really_go ~root_dir progress =
     in
     start_server () >>= fun inet ->
     let port = Tcp.Server.listening_on inet in
-    (* write the server lock file - will shutdown it not possible *)
+    (* write the server lock file - will shutdown if not possible *)
     Server_lock.lock_running_server ~root_dir ~port
 
 let go config ~root_dir progress =

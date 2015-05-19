@@ -1,7 +1,7 @@
 
 open Core.Std
 open Async.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! No_polymorphic_compare
 
 let actions_run = Effort.Counter.create "act" (* for use in action.ml *)
 let saves_run = Effort.Counter.create "save" (* for use in save_description.ml *)
@@ -139,8 +139,7 @@ module Snap = struct
   let to_string t style =
     match style with
     | `omake_style ->
-      let fraction = Counts.fraction t.counts in
-      let top,bot = fraction in
+      let top, bot = Counts.fraction t.counts in
       sprintf "[= ] %d / %d" top bot
     | `jem_style ->
       let todo = Counts.todo t.counts in
@@ -152,6 +151,9 @@ module Snap = struct
         t.save
         t.act
         (Finish_time_estimator.estimated_finish_time_string estimator)
+    | `fraction ->
+      let top, bot = Counts.fraction t.counts in
+      sprintf "%d / %d" top bot
 
   let finished t =
     Int.(<=) t.counts.Counts.todo 0
@@ -195,8 +197,8 @@ let reset_effort () = (
 )
 
 let readme () = "
-Jem connects to the jenga instance running in the current repo,
-(or waits until one is started), and displays progress counts:
+jenga monitor connects to the jenga instance running in the current
+repo, (or waits until one is started), and displays progress counts:
 
     todo (built / total) !error ~failure
 

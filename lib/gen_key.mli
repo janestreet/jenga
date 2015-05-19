@@ -11,4 +11,3 @@ include Comparable_binable with type t := t
 val create : dir:Path.Rel.t -> t
 val to_string : t -> string
 val directory : t -> Path.Rel.t
-val of_goal : Goal.t -> t

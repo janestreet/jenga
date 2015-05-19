@@ -55,5 +55,30 @@ module type S = sig
   (** tells you about what happens first: heart broken ([None]) or
       the given deferred determined with [x] ([Some x]) *)
   val or_broken : t -> 'a Deferred.t -> 'a option Deferred.t
+  (**
+     [upon_broken_or_determined] : A version of [or_broken] that gives you the result
+     synchronously during the heart breakage propagation.
+     Prefer [or_broken] when you can as it's easier to reason about.
+
+     [upon_broken_or_determined heart deferred ~broken ~determined]
+     - calls [broken] or [determined] depending on what happens first:
+     (a) [heart] breaks -> call [broken]
+     (b) [deferred] becomes determined -> call [determined]
+     It is never the case that both functions are called *)
+  val upon_broken_or_determined :
+    t -> 'a Deferred.t -> broken:(unit -> unit) -> determined:('a -> unit) -> unit
+  (**
+     [upon] : A primitive mostly equivalent to [or_broken].
+
+     Watches the heart and calls [f] when it's broken.
+     [f] will not be called after you stop watching.
+     Returns [None] in case the heart is already broken or unbreakable.
+
+     Note that [f] is called during heart breakage propagation so it can see some
+     inconsistent heart states.
+
+     Consider using [when_broken]/[or_broken] instead if they work for you.
+  *)
+  val upon : t -> f:(unit -> unit) -> Watching.t option
 
 end

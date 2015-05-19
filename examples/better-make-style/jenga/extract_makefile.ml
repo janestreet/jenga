@@ -1,4 +1,3 @@
-
 open Core.Std
 open Jenga_lib.Api
 
@@ -25,7 +24,7 @@ end) = struct
     let targets = List.filter targets ~f:keep in
     let action_string =
       wrap_relative_cd_from (Reflected.Action.dir action)
-        (Reflected.Action.string_for_one_line_make_recipe action)
+        (Reflected.Action.string_for_one_line_make_recipe_ignoring_dir action)
     in
     match targets with
     | [] -> sprintf "#rule with no targets!"

@@ -20,7 +20,6 @@ let putenv_for_path =
     replacement_path
 
 type t = {
-  run_when_persist_format_has_changed : Action.t option;
   putenv : (string * string) list;
   build_begin : unit -> unit Deferred.t;
   build_end : unit -> unit Deferred.t;
@@ -29,7 +28,6 @@ type t = {
 } with fields
 
 let create
-    ?run_when_persist_format_has_changed
     ?(putenv=[])
     ?command_lookup_path
     ?(build_begin=(fun () -> Deferred.return ()))
@@ -47,7 +45,6 @@ let create
     | Some artifacts -> Artifact_policy.Artifacts artifacts
   in
   {
-    run_when_persist_format_has_changed;
     putenv; build_begin; build_end; artifacts_policy; scheme_for_dir
   }
 

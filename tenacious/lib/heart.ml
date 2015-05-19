@@ -122,7 +122,7 @@ module Breakable = struct
 
   let upon t ~f:func =
     match t.state with
-    | Broken -> func(); None (* [f] called already *)
+    | Broken -> func(); None (* [f] called immediately before returning *)
     | Fragile fragile ->
       let strong_elem = Ring.add Watching.ring t in
       let trigger = { strong_elem; func } in
@@ -182,17 +182,22 @@ module Heart = struct
           choice (Ivar.read ivar) (fun () -> None);
         ]
 
-  (**
-     A primitive mostly equivalent to [or_broken].
+  let upon_broken_or_determined t d1 ~broken ~determined = match t with
+    | None -> Deferred.upon d1 determined
+    | Some b2 ->
+      let broken_called = Ivar.create () in
+      let call_broken () = Ivar.fill broken_called (); broken () in
+      match Breakable.upon b2 ~f:call_broken with
+      | None -> ()
+      | Some w ->
+        don't_wait_for (choose [
+          choice d1 (fun x ->
+            if Ivar.is_empty broken_called then
+              (Watching.stop w; determined x));
+          choice (Ivar.read broken_called) (fun () -> ());
+        ])
 
-     Watches the heart and calls [f] when it's broken.
-     [f] will not be called after you stop watching.
-     Returns [None] in case the heart is already broken or unbreakable.
-
-     Note that [f] is called during heart breakage propagation so it can see some
-     inconsistent heart states.
-  *)
-  let _upon t ~f =
+  let upon t ~f =
     match t with
     | None -> None (* [f] not called, and never will be *)
     | Some b -> Breakable.upon b ~f

@@ -8,26 +8,63 @@ open Core.Std
 open Async.Std
 
 module Path : sig
-  type t with sexp
-  val absolute : string -> t (* string must start with / *)
-  val relative : dir:t -> string -> t (* string must NOT start with / *)
 
-  (* either absolute or relative taken w.r.t. [dir] - determined by leading char *)
+  (** Path.t can be thought of as [`abs of string list | `rel of string list]
+      with absolute paths [`abs l] referring to the unix path reachable by
+      following path compoments in [l] starting from the root ("/")
+      and [`rel l] referring to the path relative to the jenga root.
+
+      Character '/' is disallowed in path components.
+      Path components "" and "."  and ".." are disallowed and if used are simplified out.
+  *)
+  type t with sexp
+  include Comparable.S with type t := t
+  include Hashable.S with type t := t
+
+  (** an absolute path made from a /-separated path string.
+      the string must start with a '/' *)
+  val absolute : string -> t
+
+  (** a relative path made from a /-separated path string.
+      the string must NOT start with a '/' *)
+  val relative : dir:t -> string -> t
+
+  (** either absolute or relative taken w.r.t. [dir] - determined by leading char *)
   val relative_or_absolute : dir:t -> string -> t
 
-  val to_string : t -> string (* if relative, displayed as repo-root-relative string *)
-  val to_absolute_string : t -> string
-  val dirname : t -> t
-  val basename : t -> string
+  (** if relative, displayed as repo-root-relative string.
+      [relative_or_absolute ~dir:the_root (to_string t) = t] *)
+  val to_string : t -> string
+
+  (** refers to the jenga repo root *)
   val the_root : t
+
+  (** refers to the root of the unix filesystem *)
+  val unix_root : t
+
+  (** path with the last path component dropped.
+      for the roots ([the_root] or [unix_root])
+      [dirname x = x] *)
+  val dirname : t -> t
+
+  (** last component of the path.
+      for the roots we have [basename x = "."] *)
+  val basename : t -> string
+
+  (** shortcut for [relative ~dir:the_root] *)
   val root_relative : string -> t
 
+  (** [is_descendant ~dir t = true] iff there exists a ".."-free [x] such that
+      [relative ~dir x = t] *)
   val is_descendant : dir:t -> t -> bool
-  val reach_from : dir:t -> t -> string (* like [dotdot] but better! *)
 
-  (* [dotdot ~dir path]
-     compute relative ".."-based-path-string to reach [path] from [dir] *)
-  val dotdot : dir:t -> t -> string
+  (** [x = reach_from ~dir t] is such that [relative_or_absolute ~dir x = t],
+     x starts with a "." or a '/', and x is otherwise as short as possible *)
+  val reach_from : dir:t -> t -> string
+
+  (** returns absolute path string, even if the path is relative.
+      depends on jenga repo location. *)
+  val to_absolute_string : t -> string
 
 end
 
@@ -155,8 +192,8 @@ module Reflected : sig
   module Action : sig
     type t
     val dir : t -> Path.t
-    val string_for_sh : t -> string
-    val string_for_one_line_make_recipe : t -> string
+    val to_sh_ignoring_dir : t -> string
+    val string_for_one_line_make_recipe_ignoring_dir : t -> string
   end
   (* simple make-style rule triple, named [Trip.t] to distinguish from
      Jenga's more powerful rules [Rule.t] below. *)
@@ -206,7 +243,6 @@ end
 module Env : sig
   type t = Env.t
   val create :
-    ?run_when_persist_format_has_changed:Action.t ->
     ?putenv:(string * string) list ->
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?build_begin : (unit -> unit Deferred.t) ->

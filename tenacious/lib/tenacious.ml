@@ -205,10 +205,133 @@ let reify inner_t =
       else Deferred.return (Some res)
   )
 
+
+let race a b =
+  Embed (fun ~cancel ->
+    let cancel_a = Heart.Glass.create () in
+    let cancel_b = Heart.Glass.create () in
+    let ad = sample ~cancel:(Heart.combine2 cancel (Heart.watch cancel_a)) a in
+    let bd = sample ~cancel:(Heart.combine2 cancel (Heart.watch cancel_b)) b in
+    Deferred.choose
+      [ choice ad (fun x -> `a x)
+      ; choice bd (fun x -> `b x)
+      ] >>| function
+    | `a res ->
+      Glass.break cancel_b;
+      res
+    | `b res ->
+      Glass.break cancel_a;
+      res)
+
+let map2 at bt ~f =
+  all [
+    (map at ~f:(fun a -> `a a));
+    (map bt ~f:(fun b -> `b b));
+  ] |>
+  map ~f:(function
+    | [`a a; `b b] -> f a b
+    | _ -> assert false)
+
+let both =
+  map2 ~f:(fun x y -> x, y)
+
+let race_error (type e) =
+  let go cancel =
+    let module M : sig
+      val go :
+        ('a, e) Result.t t
+        -> ('b, e) Result.t t
+        -> f:('a -> 'b -> 'c)
+        -> ('c, e) Result.t comp
+
+    end = struct
+
+      (** a computation that might still be running with the ability to cancel and
+          re-start *)
+      type 'a computation =
+        { tenacious : ('a, e) Result.t t
+        ; deferred : ('a, e) Result.t comp
+        ; cancel : Heart.Glass.t
+        }
+
+      let spawn (tenacious : ('a, e) Result.t t) : 'a computation =
+        let g = Heart.Glass.create () in
+        { tenacious
+        ; deferred =
+            sample tenacious
+              ~cancel:(Heart.combine2 cancel (Heart.watch g))
+        ; cancel = g
+        }
+
+      let rec
+        one_done : (* [a] still running; [b] is done *)
+        'a 'b 'c.
+                'a computation
+        -> ('b, e) Result.t t * ('b, e) Result.t result
+        -> f_ab:('a -> 'b -> 'c)
+        -> f_ba:('b -> 'a -> 'c)
+        -> ('c, e) Result.t comp
+        =
+        fun
+          a (b, b_result)
+          ~f_ab ~f_ba
+          -> match b_result with
+            | None -> (* [b] was cancelled, hopefully not by us *)
+              assert (Heart.is_broken cancel);
+              Deferred.return None
+            | Some (Error e, b_heart) -> (* [b] is in error *)
+              Heart.Glass.break a.cancel;
+              Deferred.return (Some (Error e, b_heart))
+            | Some (Ok b_value, b_heart) -> (* b is good, let's wait for [a] as well *)
+              Heart.or_broken b_heart a.deferred
+              >>= function
+              | None -> (* [b_heart] was broken *)
+                both_running a (spawn b) ~f_ab ~f_ba
+              | Some None -> (* [a] was cancelled, hopefully not by us *)
+                assert (Heart.is_broken cancel);
+                Deferred.return None
+              | Some (Some (Error e, a_heart)) -> (* [a] is in error *)
+                Deferred.return (Some (Error e, a_heart))
+              | Some (Some (Ok a_value, a_heart)) -> (* both are good! *)
+                Deferred.return
+                  (Some (Ok (f_ab a_value b_value), Heart.combine2 a_heart b_heart))
+      and
+        both_running :
+        'a 'b 'c. 'a computation
+        -> 'b computation
+        -> f_ab:('a -> 'b -> 'c)
+        -> f_ba:('b -> 'a -> 'c)
+        -> ('c, e) Result.t comp
+        =
+        fun
+          a b
+          ~f_ab ~f_ba
+          ->
+            Deferred.choose
+              [ choice a.deferred (fun x -> `a x)
+              ; choice b.deferred (fun x -> `b x)
+              ] >>= function
+            | `a result ->
+              one_done b (a.tenacious, result) ~f_ba:f_ab ~f_ab:f_ba
+            | `b result ->
+              one_done a (b.tenacious, result) ~f_ba ~f_ab
+
+      let go a b ~f =
+        both_running
+          (spawn a)
+          (spawn b)
+          ~f_ab:f
+          ~f_ba:(Fn.flip f)
+    end
+    in
+    M.go
+  in
+  fun a b ~f -> Embed (fun ~cancel -> go cancel a b ~f)
+
 let embed f = Embed f
 
 let lift f =
-  (* Make initial check of [cancel]; afterwards [cancel is ignored].
+  (* Make initial check of [cancel]; afterwards [cancel] is ignored.
      Waits until [f ()] is determined before returning *)
   embed (fun ~cancel ->
     if Heart.is_broken cancel then Deferred.return None else
@@ -249,21 +372,185 @@ let exec t =
   | None -> assert false
   | Some result -> result
 
+module Var = struct
+  type 'a t = {
+    mutable value : 'a;
+    mutable glass : Heart.Glass.t
+  }
+  let create value =
+    { value
+    ; glass = Heart.Glass.create ()
+    }
+  let watch var =
+    embed (fun ~cancel:_ ->
+      Deferred.return (Some (var.value, Heart.watch var.glass))
+    )
+  let set var value =
+    let old_glass = var.glass in
+    var.value <- value;
+    var.glass <- Heart.Glass.create ();
+    Heart.Glass.break old_glass
+
+  let get var =
+    var.value
+
+  let replace var ~f =
+    set var (f (get var))
+end
+
+let in_progress_cutoff_count_is_zero = Var.create true
+let in_progress_cutoff_count = ref 0
+let incr_in_progress_cutoff_count () =
+  let old = !in_progress_cutoff_count in
+  in_progress_cutoff_count := old + 1;
+  if Int.(=) old 0
+  then
+    Var.set in_progress_cutoff_count_is_zero false
+let decr_in_progress_cutoff_count () =
+  decr in_progress_cutoff_count;
+  if Int.(=) (!in_progress_cutoff_count) 0
+  then
+    Var.set in_progress_cutoff_count_is_zero true
+
+let protecting_cutoffs (Embed t) = Embed (
+  fun ~cancel ->
+    t ~cancel
+    >>= function
+    | None -> Deferred.return None
+    | Some (res, heart) ->
+      let ok = Deferred.return (Some (res, heart)) in
+      if Heart.is_broken heart
+      then
+        ok
+      else
+        let rec wait_for_cutoffs () =
+          exec (Var.watch in_progress_cutoff_count_is_zero)
+          >>= fun (no_cutoffs_running, cutoffs_heart) ->
+          if no_cutoffs_running
+          then
+            ok
+          else
+            Heart.when_broken (Heart.combine [heart; cutoffs_heart; cancel])
+            >>= fun () ->
+            if Heart.is_broken heart || Heart.is_broken cancel
+            then
+              ok
+            else
+              wait_for_cutoffs ()
+        in
+        wait_for_cutoffs ())
+
 let cutoff ~equal ten =
   embed (fun ~cancel:_ ->
     let my_weak_glass, my_heart = Weak_glass.create () in
     exec ten >>| fun (first_result,first_heart) ->
     let rec loop heart =
-      Heart.or_broken heart (Weak_glass.unwatched my_weak_glass) >>>
-      function
-      | None ->
-        exec ten >>> fun (replacement_result,heart) ->
-        if (equal first_result replacement_result)
-        then loop heart
-        else Weak_glass.break my_weak_glass
-      | Some () ->
-        ()
+      Heart.upon_broken_or_determined heart (Weak_glass.unwatched my_weak_glass)
+      ~broken:(fun () ->
+          incr_in_progress_cutoff_count ();
+          exec ten >>> fun (replacement_result,heart) ->
+          decr_in_progress_cutoff_count ();
+          if (equal first_result replacement_result)
+          then loop heart
+          else Weak_glass.break my_weak_glass
+        )
+      ~determined:(fun () -> ())
     in
     loop first_heart;
     Some (first_result, my_heart)
   )
+
+let race_errors errors =
+  let rmap ~f = map ~f:(Result.map ~f) in
+  (* tree_fold to avoid potential inefficiencies due to long chains of dependencies
+     Dlist to bring the complexity further down from O(n*log(n)) to O(n)
+  *)
+  List_utils.tree_fold ~default:(return (Ok Dlist.empty)) ~f:(race_error ~f:(Dlist.(@)))
+    (List.map ~f:(rmap ~f:Dlist.singleton) errors)
+  |> rmap ~f:Dlist.to_list
+
+(**
+   Alternative implementations of functions, intended for tests.
+   These are intended to be easy to understand so we can test the real implementations
+   against them.
+
+   Here we also implement some of the primitives one in terms of the other.
+*)
+module For_tests = struct
+
+  let race_error a b ~f =
+    let a = reify a in
+    let b = reify b in
+    bind
+      (race (map ~f:(fun x -> `a x) a) (map ~f:(fun x -> `b x) b))
+      (function
+        | `a (Error e)
+        | `b (Error e) -> return (Error e)
+        | `a (Ok a) -> map ~f:(Result.map ~f:(fun b -> f a b)) b
+        | `b (Ok b) -> map ~f:(Result.map ~f:(fun a -> f a b)) a)
+
+  let map2 a b ~f =
+    let no_error = function
+      | Ok x -> x
+      | Error e -> never_returns e
+    in
+    race_error ~f (map ~f:(fun x -> Ok x) a) (map ~f:(fun x -> Ok x) b)
+    |> map ~f:no_error
+
+  let both = map2 ~f:(fun a b -> (a, b))
+
+  let all x =
+    List.map x ~f:(map ~f:List.return)
+    |>
+    List_utils.tree_fold ~default:(return []) ~f:(map2 ~f:(@))
+
+  let all_via_race_errors ts =
+    map
+      ~f:(function
+        | Ok x -> x
+        | Error _ -> assert false)
+      (race_errors (List.map ts ~f:(map ~f:(fun x -> Ok x))))
+end
+
+let all_ignore = all_unit
+let join x = bind x (fun x -> x)
+let ignore_m = map ~f:ignore
+let (>>|) x f = map x ~f
+let (>>=) = bind
+module Monad_infix = struct
+  let (>>|) = (>>|)
+  let (>>=) = (>>=)
+end
+
+module Result = struct
+
+  module Tenacious = struct
+    let return = return
+    let bind = bind
+    let map = map
+  end
+  module T = struct
+    type nonrec ('a, 'e) t = ('a, 'e) Result.t t
+  end
+
+  include T
+
+  include Monad.Make2 (struct
+    include T
+
+    let return a = Tenacious.return (Ok a)
+
+    let bind t f =
+      Tenacious.bind t (function
+        | Ok a -> f a
+        | Error _ as error -> Tenacious.return error)
+    ;;
+
+    let map t ~f = Tenacious.map t ~f:(fun r -> Result.map r ~f)
+    let map = `Custom map
+  end)
+
+  let fail e = Tenacious.return (Error e)
+  let map_error t ~f = Tenacious.map t ~f:(fun r -> Result.map_error r ~f)
+
+end

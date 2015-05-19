@@ -1,6 +1,6 @@
 open Core.Std
 open Async.Std
-open No_polymorphic_compare let _ = _squelch_unused_module_warning_
+open! No_polymorphic_compare
 
 module type S = sig
   val setup : unit -> Env.t Deferred.t

@@ -9,7 +9,7 @@ open Async.Std
    Although some actions can be run directly by the jenga process (i.e. file-save), it is
    always possible to obtain the equivalent [Job.t], which is important when we want to
    externalize the action, for example, when extracting a Makefile. *)
-type t
+type t with sexp_of
 
 val job : t -> Job.t
 
@@ -27,5 +27,6 @@ val run : t ->
    ]
   ) Result.t Deferred.t
 
+val of_job : Job.t -> t
 val process : dir:Path.t -> prog:string -> args:string list -> t
 val save : ?chmod_x:unit -> string -> target:Path.t -> t

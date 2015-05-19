@@ -2,7 +2,7 @@
 open Core.Std
 open Async.Std
 
-module Digester : sig
+module Ocaml_digest : sig
   val init : Config.t -> unit (* just once *)
 end
 
@@ -46,6 +46,7 @@ end
 module Digest_result : sig
   type t = [
   | `stat_error of Error.t
+  | `does_not_exist
   | `is_a_dir
   | `undigestable of Kind.t
   | `digest_error of Error.t
@@ -55,20 +56,19 @@ end
 
 module Listing_result : sig
   type t = [
-  | `stat_error of Error.t
-  | `not_a_dir
-  | `listing_error of Error.t
-  | `listing of Listing.t
-  ]
+    | `does_not_exist
+    | `not_a_dir
+    | `listing of Listing.t
+  ] with compare, sexp
 end
 
 module Ensure_directory_result : sig
-  type t = [`ok | `failed | `not_a_dir]
+  type t = [`ok | `failed of Error.t | `not_a_dir]
 end
 
 val contents_file : t -> file:Path.t -> Contents_result.t Tenacious.t
 val digest_file : t -> file:Path.t -> Digest_result.t Tenacious.t
-val list_glob : t -> Glob.t -> Listing_result.t Tenacious.t
+val list_glob : t -> Glob.t -> Listing_result.t Or_error.t Tenacious.t
 val ensure_directory : t -> dir:Path.t -> Ensure_directory_result.t Tenacious.t
 
 (** Locks [targets] for writing and masks the corresponding 'file changed' messages *)

@@ -38,7 +38,8 @@ let to_string_one_line = function
   | Glob_error (g,s)                  -> sprintf "%s %s" (Db.Glob.to_string g) s
   | No_definition_for_alias a         -> (sprintf "No definition found for alias: %s"
                                             (Alias.to_string a))
-  | No_source_at_abs_path a           -> sprintf "No source at absolute path: %s" (Path.Abs.to_string a)
+  | No_source_at_abs_path a           ->
+    sprintf "No source at absolute path: %s" (Path.Abs.to_string a)
   | No_rule_or_source p               -> sprintf "No rule or source for: %s" (Path.to_string p)
   | Unexpected_directory p            -> sprintf "Unexpected directory: %s" (Path.to_string p)
   | Non_zero_status _                 -> "External command has non-zero exit code"

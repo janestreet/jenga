@@ -65,12 +65,9 @@ module Stats = struct
     kind : Kind.t;
     size : int64;
     mtime : Mtime.t;
-  } with sexp, bin_io, compare
+  } with fields, sexp, bin_io, compare
 
   let equal = equal_using_compare compare
-
-  let kind t = t.kind
-  let mtime t = t.mtime
 
   let of_unix_stats u =
     let module U = Unix.Stats in
@@ -245,6 +242,36 @@ module Proxy_map = struct
   type t = Proxy.t Pm_key.Map.t with sexp_of, bin_io, compare
   let empty = Pm_key.Map.empty
   let single key proxy = Pm_key.Map.of_alist_exn [(key,proxy)]
+  let filesystem_assumptions (t : t) =
+    let dirs = Path.Hash_set.create () in
+    let files = Path.Hash_set.create () in
+    let arbitrary_files = Path.Hash_set.create () in
+    let add_if_relative set path =
+      if Path.is_absolute path then ()
+      else Hash_set.add set path
+    in
+    Map.iter t ~f:(fun ~key ~data ->
+      match key with
+      | Path file ->
+        add_if_relative dirs (Path.dirname file);
+        add_if_relative files file;
+      | Glob _ ->
+        match data with
+        | Digest _ -> assert false
+        | Fs_proxy { dir; listing } ->
+          add_if_relative dirs dir;
+          List.iter listing ~f:(fun { base; kind } ->
+            let path = Path.relative ~dir base in
+            let set =
+              match kind with
+              | `File | `Char | `Block | `Link | `Fifo | `Socket ->
+                (* Not sure about `Link, but it only matters if the link points to a
+                   directory, which should be rare in practice. *)
+                arbitrary_files
+              | `Directory -> dirs
+            in
+            add_if_relative set path));
+    `Dirs dirs, `Files files, `Arbitrary_files arbitrary_files
 end
 
 module Rule_proxy = struct
