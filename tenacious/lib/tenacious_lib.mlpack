@@ -1,0 +1,14 @@
+# OASIS_START
+# DO NOT EDIT (digest: 0d2dc0b4e0ec9c264750ec344fb20ae7)
+Dlist
+Heart
+Heart_intf
+Heart_unit_tests
+List_utils
+Ring
+Ring_unit_tests
+Tenacious
+Tenacious_intf
+Tenacious_unit_tests
+Weak_ref
+# OASIS_STOP
