@@ -1,3 +1,30 @@
+## 112.35.00
+
+- Make `.jenga.db` be format version aware, and store `.jenga` files in
+  a subdirectory.
+- Switch md5 computation to use a C binding, fixes #10.
+- Move `jem.exe` to `jenga.exe monitor`, `jenga_offline.exe` to
+  `jenga.exe offline`, `jenga.exe -cat-api` to `jenga.exe cat-api`.
+- Remove `Path.dotdot`.
+- Adjust behaviour of `Path.Repo.is_descendant` to be more consistent.
+- Repo-root invariance: remove `Path.Abs.the_root`,
+  `Path.Rel.to_absolute_string`, `Path.Rel.create_from_absolute`, and
+  make `Path.relative Path.the_root ".."` fail.
+- Add a flag `-sandbox-action` to `jenga build` to run the action in an
+  environment that (attempts to) detect missing dependencies or overly
+  large sets of targets.
+- Don't interpret paths of shape `./foo.ext` as aliases.
+- Always interpret `Dep.path path` as the file at `path` rather than the
+  default alias for the directory at `path`
+- Make jenga look for the variable JENGA_OPTIONS, and use it to add
+  a debug setting.
+- Fix handling of directories created during the build.
+- Basic support for symlink resolution.
+- Add an option to the monitor command to only display a single snapshot
+  of the progress, rather than a continually updated pipe.
+- Fix a deadlock where File_access throttle and directory lock are
+  obtained in the wrong order.
+
 ## 112.24.00
 
 - Interns strings, significantly reducing memory use.
