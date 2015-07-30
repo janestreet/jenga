@@ -1,7 +1,6 @@
-
 open Core.Std
 open Async.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 
 let actions_run = Effort.Counter.create "act" (* for use in action.ml *)
 let saves_run = Effort.Counter.create "save" (* for use in save_description.ml *)
@@ -54,8 +53,9 @@ let create config = {
     Throttle.create ~continue_on_error:true ~max_concurrent_jobs ;
 }
 
-let set_status t need status =
-  Hashtbl.set t.status ~key:need ~data:status
+let set_status t need = function
+  | None -> Hashtbl.remove t.status need
+  | Some status -> Hashtbl.set t.status ~key:need ~data:status
 
 let mask_unreachable t ~is_reachable_error = t.is_reachable_error <- is_reachable_error
 
@@ -156,11 +156,13 @@ module Snap = struct
       sprintf "%d / %d" top bot
 
   let finished t =
-    Int.(<=) t.counts.Counts.todo 0
-
-  let error_code t =
-    t.counts.Counts.error
-
+    if t.counts.Counts.todo <= 0
+    then
+      if t.counts.Counts.error > 0
+      then Some `Failure
+      else Some `Success
+    else None
+  ;;
 end
 
 let all_effort =

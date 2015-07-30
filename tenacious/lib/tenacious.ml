@@ -343,15 +343,18 @@ let with_semantics inner_t ~f =
     f (fun ~cancel -> sample inner_t ~cancel) ~cancel
   )
 
-let before_redo t ~f =
-  let first_time = ref true in
-  let hook () =
-    if !first_time
-    then first_time := false
-    else f ()
-  in
-  let f sample ~cancel = hook (); sample ~cancel in
-  with_semantics t ~f
+let bracket t ~running ~finished ~cancelled =
+  let count = ref 0 in
+  Embed (fun ~cancel ->
+    running !count;
+    incr count;
+    sample t ~cancel >>| fun res ->
+    begin match res with
+    | None -> cancelled ()
+    | Some (res, _) -> finished res
+    end;
+    res
+  )
 
 let uncancellable t =
   with_semantics t ~f:(fun sample ~cancel:__ ->
@@ -462,11 +465,13 @@ let cutoff ~equal ten =
 
 let race_errors errors =
   let rmap ~f = map ~f:(Result.map ~f) in
-  (* tree_fold to avoid potential inefficiencies due to long chains of dependencies
+  (* reduce_balanced to avoid potential inefficiencies due to long chains of dependencies
      Dlist to bring the complexity further down from O(n*log(n)) to O(n)
   *)
-  List_utils.tree_fold ~default:(return (Ok Dlist.empty)) ~f:(race_error ~f:(Dlist.(@)))
+  List.reduce_balanced
+    ~f:(race_error ~f:(Dlist.(@)))
     (List.map ~f:(rmap ~f:Dlist.singleton) errors)
+  |> Option.value ~default:(return (Ok Dlist.empty))
   |> rmap ~f:Dlist.to_list
 
 (**
@@ -501,8 +506,8 @@ module For_tests = struct
 
   let all x =
     List.map x ~f:(map ~f:List.return)
-    |>
-    List_utils.tree_fold ~default:(return []) ~f:(map2 ~f:(@))
+    |> List.reduce_balanced ~f:(map2 ~f:(@))
+    |> Option.value ~default:(return [])
 
   let all_via_race_errors ts =
     map

@@ -11,7 +11,7 @@ let test_glob glob good bad =
     if matches pat bad
     then failwithf "%S should not match %S" bad glob ()
   );
-
+;;
 (* globs support the following: *)
 
 (* escaping any character: *)

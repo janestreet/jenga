@@ -2,20 +2,22 @@
 open Core.Std
 open Async.Std
 
-let progress_stream =
-  Rpc.Pipe_rpc.create
-    ~name:"progress-stream"
-    ~version:0
-    ~bin_query:Unit.bin_t
-    ~bin_response:Progress.Snap.bin_t
-    ~bin_error:Unit.bin_t
-    ()
+module Progress_stream = struct
+  type query = unit with bin_io
+  type response = Progress.Snap.t with bin_io
+  type error = Nothing.t with bin_io
+  let rpc =
+    Rpc.Pipe_rpc.create ~name:"progress-stream" ~version:0
+      ~bin_query ~bin_response ~bin_error ()
+  ;;
+end
 
-let update_stream =
-  Rpc.Pipe_rpc.create
-    ~name:"update-stream"
-    ~version:0
-    ~bin_query:Unit.bin_t
-    ~bin_response:Progress.Updates.bin_t
-    ~bin_error:Unit.bin_t
-    ()
+module Update_stream = struct
+  type query = unit with bin_io
+  type response = Progress.Updates.t with bin_io
+  type error = Nothing.t with bin_io
+  let rpc =
+    Rpc.Pipe_rpc.create ~name:"update-stream" ~version:0
+      ~bin_query ~bin_response ~bin_error ()
+  ;;
+end

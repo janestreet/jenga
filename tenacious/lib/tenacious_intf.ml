@@ -56,7 +56,18 @@ module type S = sig
   val embed       : (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> 'a t
   val reify       : 'a t -> 'a t
 
-  val before_redo : 'a t -> f:(unit -> unit) -> 'a t
+  (* This is most useful in combination with reify:
+     [reify (bracket ~running ~finished ~cancelled x)].
+     Without [reify], you can get multiple concurrent [running..canceled] and
+     [running..finished] blocks even when your tenacious doesn't breaks its heart.
+  *)
+  val bracket
+    :  'a t
+    -> running:(int -> unit) (* Number of times this tenacious has run, starting at
+                                0 for the first execution. *)
+    -> finished:('a -> unit)
+    -> cancelled:(unit -> unit)
+    -> 'a t
   val uncancellable : 'a t -> 'a t
   val desensitize : 'a t -> ('a * Heart.t) t
 

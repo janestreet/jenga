@@ -1,3 +1,7 @@
+## 113.00.00
+
+- Treat output to stderr by an action as a failure.
+
 ## 112.35.00
 
 - Make `.jenga.db` be format version aware, and store `.jenga` files in

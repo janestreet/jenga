@@ -17,8 +17,8 @@ module List = struct
     List.map (List.cartesian_product l1 l2) ~f:(fun (x, y) -> x ^ y)
 end
 
-let put fmt = ksprintf (fun s -> Printf.printf "%s\n%!" s) fmt
-let message fmt = ksprintf (fun s -> Printf.printf "!!JengaRoot.ml : %s\n%!" s) fmt
+let put fmt = ksprintf (fun s -> Core.Std.Printf.printf "%s\n%!" s) fmt
+let message fmt = ksprintf (fun s -> Core.Std.Printf.printf "!!JengaRoot.ml : %s\n%!" s) fmt
 
 let return = Dep.return
 let ( *>>= ) = Dep.bind
@@ -436,7 +436,8 @@ let table_to_lookup ~table =
 (* Exapnd some $-vars within action strings of rules defined in jbuild files *)
 let root_var_table = [
   "-verbose"            , "";
-  "CPP"                 , "cpp";
+  "CPP"                 , "cpp -DARCH_SIXTYFOUR";
+  "PA_CPP"              , "cpp -undef -traditional -Werror -DARCH_SIXTYFOUR";
   "CC"                  , cc_prog;
   "CXX"                 , cxx_prog;
   "PROCESSOR"           , "x86_64";
@@ -1959,12 +1960,9 @@ let eval_pps ~dir ~libname ~ounit ~macro names =
   let pp_libs = List.concat_map names ~f:libs_for_code_generated_by_pp in
   pp_libs, !deps, Some (String.concat command ~sep:" ")
 
-let pa_cpp = "cpp -undef -traditional -Werror -DARCH_SIXTYFOUR"
-
 let eval_preprocess_kind ~dir ~libname ~ounit ~macro kind =
   match kind with
   (*| `no_command -> [],None*)
-  | `command "PA_CPP" -> [], [], Some pa_cpp
   | `command string -> [], [], Some string
   | `pps names -> eval_pps ~dir ~libname ~ounit ~macro names
 

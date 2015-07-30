@@ -29,7 +29,6 @@ val clear_transient : unit -> unit
 
 val job_started :
   need:string ->
-  stdout_expected:bool -> (* scanner job; output expected *)
   where:string ->
   prog:string ->
   args:string list ->
@@ -47,8 +46,6 @@ val repeat_job_summary : Job_summary.t -> unit
 
 val load_jenga_root : Path.t -> modules:string list -> unit
 val load_jenga_root_done : Path.t -> Time.Span.t -> unit
-
-val load_sexp_error : Path.Rel.t -> loc:(int*int) -> exn -> unit
 
 module Err : sig
   type t

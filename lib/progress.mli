@@ -28,7 +28,7 @@ val create : Config.t -> t
 
 val enqueue_job : t -> (unit -> 'a Deferred.t) -> 'a Deferred.t
 
-val set_status : t -> Need.t -> Status.t -> unit
+val set_status : t -> Need.t -> Status.t option -> unit
 
 val mask_unreachable : t -> is_reachable_error:(Need.t -> bool) -> unit
 
@@ -42,8 +42,7 @@ module Snap : sig
 
   val to_string : t -> [< `omake_style | `jem_style | `fraction ] -> string
   val to_effort_string : t -> string
-  val finished: t -> bool
-  val error_code: t -> int
+  val finished: t -> [ `Success | `Failure ] option
 end
 
 val snap : t -> Snap.t

@@ -30,7 +30,7 @@ end
 
 let verbose() = Config.verbose (Run.For_user.config ())
 
-exception Non_zero_status_from_action_run_now
+exception Action_run_now_failed
 
 let run_action_now_output ~output action =
   let job = Action.job action in
@@ -38,7 +38,7 @@ let run_action_now_output ~output action =
   let need = "run_now" in
   let putenv = [] in
   Job.run job ~config ~need ~putenv ~output >>= function
-  | Error (`non_zero_status _) -> raise (Non_zero_status_from_action_run_now)
+  | Error (`command_failed _) -> raise (Action_run_now_failed)
   | Error (`other_error exn)   -> raise exn
   | Ok x                       -> Deferred.return x
 

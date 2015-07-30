@@ -2,7 +2,7 @@
 open Core.Std
 open Async.Std
 
-let mes fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt
+let mes fmt = ksprintf (fun s -> Core.Std.Printf.eprintf "%s\n%!" s) fmt
 let _ = mes
 
 module Tenacious_tests(T1: Tenacious_intf.S) = struct

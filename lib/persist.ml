@@ -6,7 +6,7 @@ open Async.Std
 module Digest = Db.Digest
 
 module Version = struct
-  let current = "1"
+  let current = "2"
 end
 
 let saves_done = Effort.Counter.create "db-save"

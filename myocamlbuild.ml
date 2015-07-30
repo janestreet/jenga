@@ -93,7 +93,6 @@ let dispatch = function
       ; "heart"
       ; "heart_intf"
       ; "heart_unit_tests"
-      ; "list_utils"
       ; "ring"
       ; "ring_unit_tests"
       ; "tenacious"

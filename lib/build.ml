@@ -1,6 +1,5 @@
-
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 open Async.Std
 
 module Heart = Tenacious.Heart
@@ -217,7 +216,7 @@ module Builder : sig (* layer error monad within tenacious monad *)
 
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
-  val map : 'a t -> ('a -> 'b) -> 'b t
+  val ( *>>| ) : 'a t -> ('a -> 'b) -> 'b t
 
   val cutoff : equal:('a -> 'a -> bool) -> 'a t -> 'a t
 
@@ -235,9 +234,12 @@ module Builder : sig (* layer error monad within tenacious monad *)
   val desensitize : 'a t -> ('a * Heart.t) t
   val sensitize : Heart.t -> unit t
 
-  val before_redo : 'a t -> f:(unit -> unit) -> 'a t
-
-  val with_ore : 'a t -> f:(('a, Problem.t) Result.t -> unit) -> 'a t
+  val bracket
+    :  'a t
+    -> running:(int -> unit)
+    -> finished:(('a, Problem.t) Result.t -> unit)
+    -> cancelled:(unit -> unit)
+    -> 'a t
 
   val uncancellable : 'a t -> 'a t
 
@@ -267,7 +269,7 @@ end = struct
 
   let return = Tenacious.Result.return
   let bind = Tenacious.Result.bind
-  let map x f = Tenacious.Result.map ~f x
+  let map x ~f = Tenacious.Result.map x ~f
 
   (* we can't use Tenacious.Result.all because:
      - it's sequential, but we want parallel
@@ -285,7 +287,7 @@ end = struct
       collect [] [] ys
     )
 
-  let all_unit ts = map (all ts) (fun (_:unit list) -> ())
+  let all_unit ts = map (all ts) ~f:(fun (_ : unit list) -> ())
 
   let error reason = Tenacious.Result.fail (Problem.create reason)
 
@@ -309,14 +311,12 @@ end = struct
   let sensitize heart =
     Tenacious.lift (fun () -> Deferred.return (Ok (), heart))
 
-  let before_redo t ~f = reify (Tenacious.before_redo t ~f)
-
-  let with_ore builder ~f =
-      Tenacious.map builder ~f:(fun ore -> f ore; ore)
+  let bracket t ~running ~finished ~cancelled =
+    reify (Tenacious.bracket t ~running ~finished ~cancelled)
 
   let uncancellable builder = Tenacious.uncancellable builder
 
-  let ( *>>| ) = map
+  let ( *>>| ) x f = map x ~f
   let both : ('a t -> 'b t -> ('a * 'b) t) =
     fun a b ->
       all [
@@ -330,8 +330,8 @@ end
 let _ = Builder.(wrap,expose)
 
 let return   = Builder.return
+let ( *>>| ) = Builder.( *>>| )
 let ( *>>= ) = Builder.bind
-let ( *>>| ) = Builder.map
 let error    = Builder.error
 
 let build_all_in_sequence xs ~f = (* stopping on first error *)
@@ -659,12 +659,13 @@ let share_and_check_for_cycles :
       (* newly created node(item) is a dependency of the t.node we were at before *)
       let builder = f t in (* critical - [f] must be called only once *)
       let builder =
-        Builder.before_redo builder
-          ~f:(fun () ->
-            DG.remove_all_dependencies t.discovered_graph t.node;
-          )
+        Builder.bracket builder
+          ~running:(fun i ->
+            if i >= 1 then
+              DG.remove_all_dependencies t.discovered_graph t.node)
+          ~finished:ignore
+          ~cancelled:ignore
       in
-      let builder = Builder.reify builder in
       (* we use add_exn, because each key will be memoized exactly once *)
       Hashtbl.add_exn memo ~key ~data:(builder,t.node);
       builder
@@ -771,7 +772,7 @@ let run_action_with_message :
           Action.run action ~message ~output ~putenv ~progress ~config ~need
         ))) *>>= function
     | Ok x                                -> return x
-    | Error (`non_zero_status output)     -> error (Reason.Non_zero_status output)
+    | Error (`command_failed output)     -> error (Reason.Command_failed output)
     | Error (`other_error Job.Shutdown)   -> error Reason.Shutdown
     | Error (`other_error exn)            -> error (Reason.Running_job_raised (sexp_of_exn exn))
 
@@ -814,7 +815,7 @@ let set_status t need status =
 let report_error_for_need t need reason =
   let show_now =
     match reason with
-    | Reason.Non_zero_status _(* we see the error message from the command *)
+    | Reason.Command_failed _ (* we see the error message from the command *)
     | Reason.Shutdown
         -> false
     | _
@@ -830,43 +831,39 @@ let report_error_for_need t need reason =
 let report_status t need ore =
   match ore with
   | Ok _ ->
-    set_status t need Progress.Status.Built
+    set_status t need (Some Progress.Status.Built)
   | Error problem -> (
     let reasons = Problem.reasons_here problem in
     List.iter reasons ~f:(fun reason ->
       report_error_for_need t need reason
     );
-    set_status t need (Progress.Status.Error reasons)
+    set_status t need (Some (Progress.Status.Error reasons))
   )
-
-let builder_report_for_need t need builder =
-  Builder.with_ore builder ~f:(report_status t need)
-
 
 let build_considering_needed : (t -> Progress.Need.t -> 'a Builder.t -> 'a Builder.t) =
   (* Expose the builder's result/error for reporting *)
   fun t need builder ->
     Builder.subgoal need (
-      builder_report_for_need t need (
-        (* Report considering/re-considering; count as: check/recheck *)
-        if Config.show_considering t.config
-        then (
-          Message.message "Considering: %s" (Progress.Need.to_string need);
-        );
-        set_status t need Progress.Status.Todo;
-        let builder =
-          builder *>>| fun res ->
-          let () = Effort.incr Progress.considerations_run in
-          res
-        in
-        Builder.before_redo builder ~f:(fun () ->
-          if Config.show_considering t.config || Config.show_reconsidering t.config
-          then  (
-            Message.message "Re-considering: %s" (Progress.Need.to_string need)
-          );
-          set_status t need Progress.Status.Todo;
-        )
-      )
+      (* Report considering/re-considering; count as: check/recheck *)
+      Builder.bracket builder
+        ~running:(fun i ->
+          set_status t need (Some Progress.Status.Todo);
+          let first_time = i = 0 in
+          if Config.show_considering t.config
+          || (not first_time && Config.show_reconsidering t.config)
+          then (
+            Message.message !"%s: %{Progress.Need}"
+              (if first_time then "Considering" else "Re-considering") need
+          ))
+        ~finished:(fun a ->
+          Effort.incr Progress.considerations_run;
+          report_status t need a)
+        ~cancelled:(fun () ->
+          set_status t need None;
+          if Config.show_considering t.config
+          then (
+            Message.message !"Not considering anymore: %{Progress.Need}" need
+          ))
     )
 
 (*----------------------------------------------------------------------
@@ -2176,7 +2173,7 @@ let message_cycle_path dg ~cycle_path_with_repeated_nub =
           (DG.Item.to_string item))))
 
 let message_to_inform_omake_server_we_are_quitting () =
-  let pr fmt = ksprintf (fun s -> Printf.printf "%s\n%!" s) fmt in
+  let pr fmt = ksprintf (fun s -> Core.Std.Printf.printf "%s\n%!" s) fmt in
   pr "*** OMakeroot error:";
   pr "   dependency cycle; jenga.exe quitting\n";
   pr "*** omake error:"

@@ -28,12 +28,6 @@ val lock_directory_for_listing :
     If the value of [Action.t Dep.t] changes over time, jenga
     might decide to start the new [Action.t] before the old one is finished.
     This lock is there to prevent that.
-
-    In fact, I (aalekseyev) suspect this lock almost never blocks right now
-    because jenga avoids building the same target multiple times concurrently,
-    but it has been before and there might be corner-cases where it still does:
-    for example, I imagine it's going to be used if you build target [a] from a rule with
-    targets [a; b] and later your rule changes to [b; c] and you build target [c].
 *)
 val lock_targets_for_action :
   targets: Path.Rel.t list -> (unit -> 'a Deferred.t) -> 'a Deferred.t

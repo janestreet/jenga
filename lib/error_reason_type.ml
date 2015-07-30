@@ -13,7 +13,7 @@ type t =
   | No_source_at_abs_path             of Path.Abs.t
   | No_rule_or_source                 of Path.t
   | Unexpected_directory              of Path.t
-  | Non_zero_status                   of Message.Job_summary.t
+  | Command_failed                    of Message.Job_summary.t
   | No_directory_for_target           of string
   | Inconsistent_proxies
   | Running_job_raised                of Sexp.t

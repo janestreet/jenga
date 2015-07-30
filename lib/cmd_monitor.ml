@@ -13,8 +13,8 @@ let dont_emit_kill_line = String.(terminal_type = "dumb")
 
 let message =
   if dont_emit_kill_line
-  then fun fmt -> ksprintf (fun s -> Printf.printf "%s\r%!" s) fmt
-  else fun fmt -> ksprintf (fun s -> Printf.printf "\027[2K%s\r%!" s) fmt
+  then fun fmt -> ksprintf (fun s -> Core.Std.Printf.printf "%s\r%!" s) fmt
+  else fun fmt -> ksprintf (fun s -> Core.Std.Printf.printf "\027[2K%s\r%!" s) fmt
 
 module Connection_error = struct
   type t =
@@ -62,7 +62,8 @@ let with_connection ~root_dir ~f =
 
 let run_once ~root_dir style =
   with_connection ~root_dir ~f:(fun conn ->
-    Rpc.Pipe_rpc.dispatch_exn Rpc_intf.progress_stream conn () >>= fun (reader,_id) ->
+    Rpc.Pipe_rpc.dispatch_exn Rpc_intf.Progress_stream.rpc conn ()
+    >>= fun (reader,_id) ->
     Pipe.read reader >>| function
     | `Eof -> failwith "read: end of file"
     | `Ok snap ->
@@ -102,17 +103,22 @@ let run exit_on_finish ~root_dir style =
           )
         in loop 1
       );
-      Rpc.Pipe_rpc.dispatch_exn Rpc_intf.progress_stream conn () >>= fun (reader,_id) ->
-      Pipe.iter_without_pushback reader ~f:(fun snap ->
+      Rpc.Pipe_rpc.dispatch_exn Rpc_intf.Progress_stream.rpc conn ()
+      >>= fun (reader,_id) ->
+      Pipe.iter reader ~f:(fun snap ->
         last_snap := Some snap;
         fresh := true;
         let message_string = (Progress.Snap.to_string snap style) in
         message "%s" message_string;
-        if exit_on_finish && Progress.Snap.finished snap then begin
-          let exit_code = Progress.Snap.error_code snap in
-          printf "\n";
-          don't_wait_for (exit exit_code)
-        end
+        if exit_on_finish then
+          match Progress.Snap.finished snap with
+          | None -> Deferred.unit
+          | Some res ->
+            printf "\n";
+            exit (match res with
+                  | `Success -> 0
+                  | `Failure -> 3)
+        else Deferred.unit
       ) >>= fun () ->
       stop := true;
       return ()
@@ -130,7 +136,7 @@ let run exit_on_finish ~root_dir style =
   loop ~wait:false
 
 
-let error fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt
+let error fmt = ksprintf (fun s -> Core.Std.Printf.eprintf "%s\n%!" s) fmt
 
 let command =
   Command.basic

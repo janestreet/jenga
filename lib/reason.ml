@@ -21,7 +21,7 @@ let filesystem_related = function
   | No_definition_for_alias _
   | No_source_at_abs_path _
   | No_rule_or_source _
-  | Non_zero_status _
+  | Command_failed _
   | Inconsistent_proxies
   | Running_job_raised _
   | Multiple_rules_for_path _
@@ -42,7 +42,7 @@ let to_string_one_line = function
     sprintf "No source at absolute path: %s" (Path.Abs.to_string a)
   | No_rule_or_source p               -> sprintf "No rule or source for: %s" (Path.to_string p)
   | Unexpected_directory p            -> sprintf "Unexpected directory: %s" (Path.to_string p)
-  | Non_zero_status _                 -> "External command has non-zero exit code"
+  | Command_failed _                  -> "External command failed"
   | No_directory_for_target s         -> sprintf "No directory for target: %s" s
   | Running_job_raised _              -> "Running external job raised exception"
   | Rule_failed_to_generate_targets _ -> "Rule failed to generate targets"
@@ -71,7 +71,7 @@ let to_extra_lines = function
   | No_rule_or_source _
   | No_source_at_abs_path _
   | Unexpected_directory _
-  | Non_zero_status _
+  | Command_failed _
   | No_directory_for_target _
   | Inconsistent_proxies
   | Multiple_rules_for_path _
@@ -96,6 +96,6 @@ let message_summary config ~need t =
   List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s);
   if not (Config.brief_error_summary config) then (
     match t with
-    | Non_zero_status summary -> Message.repeat_job_summary summary
+    | Command_failed summary -> Message.repeat_job_summary summary
     | _ -> ()
   )

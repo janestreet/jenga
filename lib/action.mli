@@ -22,7 +22,7 @@ val run : t ->
   need: string ->
   ('a,
    [
-   | `non_zero_status of Message.Job_summary.t
+   | `command_failed of Message.Job_summary.t
    | `other_error of exn
    ]
   ) Result.t Deferred.t

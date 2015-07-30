@@ -10,7 +10,7 @@ let max_num_threads =
   | None -> max_num_threads
   | Some s ->
     let n = Int.of_string s in
-    Printf.eprintf "max_num_threads = %d\n%!" n;
+    Core.Std.Printf.eprintf "max_num_threads = %d\n%!" n;
     n
 
 let trace fmt = ksprintf (fun string -> Message.trace "Run: %s" string) fmt
@@ -22,7 +22,7 @@ let db_save_span =
   | None -> db_save_span
   | Some s ->
     let int = Int.of_string s in
-    Printf.eprintf "db_save_span = %d sec\n%!" int;
+    Core.Std.Printf.eprintf "db_save_span = %d sec\n%!" int;
     sec (float int)
 
 let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
@@ -36,10 +36,11 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
   | Ok persist ->
   Fs.create config persist >>= fun fs ->
   let progress = Progress.create config in
-  Rpc_server.go config ~root_dir progress >>= fun () ->
-    (match Config.demands config with
-    | [] -> return [ Goal.Alias (Alias.default ~dir:(Path.of_relative start_dir)) ]
-    | demands -> Deferred.List.map demands ~f:(Goal.parse_string ~dir:start_dir))
+  Rpc_server.go config ~root_dir progress
+  >>= fun () ->
+  (match Config.demands config with
+   | [] -> return [ Goal.Alias (Alias.default ~dir:(Path.of_relative start_dir)) ]
+   | demands -> Deferred.List.map demands ~f:(Goal.parse_string ~dir:start_dir))
   >>= fun top_level_demands ->
   let save_db_now () =
     Persist.disable_periodic_saving_and_save_now persist
@@ -59,7 +60,7 @@ let install_signal_handlers () =
   )
 
 (* for pre-init_logging errors *)
-let error fmt = ksprintf (fun s -> Printf.eprintf "%s\n%!" s) fmt
+let error fmt = ksprintf (fun s -> Core.Std.Printf.eprintf "%s\n%!" s) fmt
 
 module For_user = struct
 
@@ -84,7 +85,7 @@ let configure_scheduler ~report_long_cycle_times =
        should be enough to convince the kernel to give other threads a chance to grab the
        ocaml lock. If threads are stuck for a different reason, then we will get the
        standard warning because of the call to the default handler below.
-    
+
        This assumes async threads only grab the lock once, just before finishing their async job.
     *)
     let time_to_wait_for = ref 0.001 in
