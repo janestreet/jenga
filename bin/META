@@ -1,0 +1,12 @@
+# OASIS_START
+# DO NOT EDIT (digest: a164f6a734fcaa5932c7bea15ab5e24d)
+version = "113.00.00"
+description = "Build system"
+requires = "jenga type_conv sexplib"
+archive(byte) = "jenga_archive.cma"
+archive(byte, plugin) = "jenga_archive.cma"
+archive(native) = "jenga_archive.cmxa"
+archive(native, plugin) = "jenga_archive.cmxs"
+exists_if = "jenga_archive.cma"
+# OASIS_STOP
+
