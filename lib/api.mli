@@ -17,7 +17,7 @@ module Path : sig
       Character '/' is disallowed in path components.
       Path components "" and "."  and ".." are disallowed and if used are simplified out.
   *)
-  type t with sexp
+  type t [@@deriving sexp]
   include Comparable.S with type t := t
   include Hashable.S with type t := t
 
@@ -70,10 +70,11 @@ end
 
 module Kind : sig
   type t = [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
+  [@@deriving sexp_of]
 end
 
 module Glob : sig
-  type t with sexp
+  type t [@@deriving sexp]
   (** [create ~dir pattern] refers to anything in [dir] whose basename matches
       the [pattern]. Note that patterns with slashes or path globs (**) in them
       do not work.
@@ -92,16 +93,23 @@ module Glob : sig
 end
 
 module Alias : sig
-  type t with sexp
+  type t [@@deriving sexp]
   val create : dir: Path.t -> string -> t
 end
 
 module Action : sig
-  type t
-  (* [process ~dir ~prog ~args] - constructs an action, that when run causes a new process
-     to be created to run [prog], passing [args], in [dir].
-     No shell (sh, bash.. ) is invoked! *)
-  val process : dir:Path.t -> prog:string -> args:string list -> t
+  type t [@@deriving sexp_of]
+  (** [process ?ignore_stderr ~dir ~prog ~args] - constructs an action, that when run
+      causes a new process to be created to run [prog], passing [args], in [dir].
+      The process fails if its exit code is not zero, or if print things on stderr
+      (unless ~ignore_stderr:true is passed).*)
+  val process
+    : ?ignore_stderr:bool
+    -> dir:Path.t
+    -> prog:string
+    -> args:string list
+    -> unit
+    -> t
   val save : ?chmod_x:unit -> string -> target:Path.t -> t
 end
 
@@ -136,7 +144,7 @@ end
 
 module Dep : sig (* The jenga monad *)
 
-  type 'a t
+  type 'a t [@@deriving sexp_of]
   val return : 'a -> 'a t
   val bind : 'a t -> ('a -> 'b t) -> 'b t
   val map : 'a t -> ('a -> 'b) -> 'b t
@@ -150,6 +158,11 @@ module Dep : sig (* The jenga monad *)
   val action_stdout : Action.t t -> string t
   val alias : Alias.t -> unit t
   val path : Path.t -> unit t
+
+  (** [group_dependencies t] is equivalent to [t], however jenga will be careful to avoid
+      duplicating the set of dependencies that have been declared. This is best used under
+      an alias, as the alias will allow to share the computation as well. *)
+  val group_dependencies : 'a t -> 'a t
 
   (* [source_if_it_exists] Dont treat path as a goal (i.e. don't force it to be built)
      Just depend on its contents, if it exists. It's ok if it doesn't exist. *)
@@ -177,6 +190,7 @@ module Dep : sig (* The jenga monad *)
 
   module List : sig
     val concat_map : 'a list -> f:('a -> 'b list t) -> 'b list t
+    val concat : 'a list t list -> 'a list t
   end
 
   val buildable_targets : dir:Path.t -> Path.t list t
@@ -190,7 +204,7 @@ end
 
 module Reflected : sig
   module Action : sig
-    type t
+    type t [@@deriving sexp_of]
     val dir : t -> Path.t
     val to_sh_ignoring_dir : t -> string
     val string_for_one_line_make_recipe_ignoring_dir : t -> string
@@ -203,6 +217,7 @@ module Reflected : sig
       deps : Path.t list;
       action : Action.t;
     }
+    [@@deriving sexp_of]
   end
 end
 
@@ -222,7 +237,7 @@ module Reflect : sig
 end
 
 module Rule : sig
-  type t
+  type t [@@deriving sexp_of]
   val create : targets:Path.t list -> Action.t Dep.t -> t
   val alias : Alias.t -> unit Dep.t list -> t
   val default : dir:Path.t -> unit Dep.t list -> t
@@ -230,7 +245,7 @@ module Rule : sig
 end
 
 module Scheme : sig
-  type t
+  type t [@@deriving sexp_of]
   val rules : Rule.t list -> t
   val dep : t Dep.t -> t
   val all : t list -> t

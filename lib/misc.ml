@@ -1,6 +1,6 @@
 
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 open Async.Std
 
 let in_async ~f = (* used by: jem / offline, not jenga *)

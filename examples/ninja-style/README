@@ -1,5 +1,5 @@
 
-In this examplw we define a jengaroot.ml which supports ninja rule
+In this example we define a jengaroot.ml which supports ninja rule
 syntax; reading rules from the build.ninja file.
 
 For example, we can get the ninja distribution itself, and use jenga to build ninja

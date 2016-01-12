@@ -1,8 +1,21 @@
 
 open Core.Std
+open! Int.Replace_polymorphic_compare
 module Unix = Async.Std.Unix
 
-let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
+let equal_using_compare compare = fun x1 x2 -> 0 = compare x1 x2
+
+module Hash = struct
+  type t = int
+  let alpha = 65599
+  let combine t1 t2 : t = t1 * alpha + t2
+  let map hash_k hash_v map =
+    Map.fold ~init:0 map
+      ~f:(fun ~key ~data hash -> combine (combine hash (hash_k key)) (hash_v data))
+  let set hash_v map =
+    Set.fold ~init:0 map
+      ~f:(fun hash data -> combine hash (hash_v data))
+end
 
 module Job = struct
 
@@ -11,25 +24,27 @@ module Job = struct
       dir : Path.t;
       prog : string;
       args : string list;
-    } with sexp, bin_io, compare, fields
+      ignore_stderr : bool;
+    } [@@deriving sexp, bin_io, compare, fields]
     let hash = Hashtbl.hash
   end
   include T
   include Hashable.Make_binable(T)
 
-  let create ~dir ~prog ~args = { dir ; prog; args; }
+  let create ~dir ~prog ~args ~ignore_stderr = { dir ; prog; args; ignore_stderr; }
 
 end
 
 module Kind = struct
   type t =
   [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
-  with sexp, bin_io, compare
+  [@@deriving sexp, bin_io, compare]
   let to_string t = Sexp.to_string (sexp_of_t t)
+  let hash : t -> int = Hashtbl.hash
 end
 
 module Mtime = struct
-  type t = float with sexp, bin_io, compare
+  type t = float [@@deriving sexp, bin_io, compare]
   let of_float f = f
   let equal = equal_using_compare compare
 end
@@ -65,7 +80,7 @@ module Stats = struct
     kind : Kind.t;
     size : int64;
     mtime : Mtime.t;
-  } with fields, sexp, bin_io, compare
+  } [@@deriving fields, sexp, bin_io, compare]
 
   let equal = equal_using_compare compare
 
@@ -93,7 +108,10 @@ module Listing = struct
       type t = {
         base : string;
         kind : Kind.t;
-      } with sexp, bin_io, compare
+      } [@@deriving sexp, bin_io, compare]
+
+      let hash { base; kind } =
+        Hash.combine (String.hash base) (Kind.hash kind)
     end
     include T
     include Comparable.Make_binable(T)
@@ -103,16 +121,23 @@ module Listing = struct
   type t = {
     dir : Path.t;
     listing : Elem.t list;
-  } with sexp, bin_io, compare
+  } [@@deriving sexp, bin_io, compare]
 
   let create ~dir ~elems = { dir; listing = elems }
 
   let compare t1 t2 =
     let res = Path.compare t1.dir t2.dir in
-    if Int.(res<>0) then res
+    if res <> 0 then res
     else
       (* Allow differently ordering listings to be regarded as equal *)
       Elem.Set.compare (Elem.Set.of_list t1.listing) (Elem.Set.of_list t2.listing)
+
+  let hash { dir; listing } =
+    Hash.combine (Path.hash dir)
+      (* Combining hashes in such a way that the order of the list doesn't matter, since
+         comparison doesn't care about order either. *)
+      (List.fold listing ~init:0 ~f:(fun acc elt -> acc + Elem.hash elt))
+  ;;
 
   let equal = equal_using_compare compare
 
@@ -133,7 +158,7 @@ module Listing = struct
     type t = {
       kinds : Kind.t list option; (* None means any kind *)
       pat : Pattern.t;
-    } with sexp, bin_io, compare
+    } [@@deriving sexp, bin_io, compare]
 
     let create ~kinds pat = { kinds; pat; }
 
@@ -177,7 +202,7 @@ module Glob = struct
     type t = {
       dir : Path.t;
       restriction : Listing.Restriction.t;
-    } with sexp, bin_io, compare, fields
+    } [@@deriving sexp, bin_io, compare, fields]
     let hash = Hashtbl.hash
   end
 
@@ -197,7 +222,11 @@ module Pm_key = struct
 
   module T = struct
     type t = Path of Path.t | Glob of Glob.t
-    with sexp, bin_io, compare
+    [@@deriving sexp, bin_io, compare]
+
+    let hash = function
+      | Path path -> Hash.combine 0 (Path.hash path)
+      | Glob glob -> Hash.combine 1 (Glob.hash glob)
   end
   include T
   include Comparable.Make_binable(T)
@@ -228,7 +257,15 @@ end
 
 module Proxy = struct
 
-  type t = Digest of Digest.t | Fs_proxy of Listing.t with sexp_of, bin_io, compare
+  type t =
+    | Digest of Digest.t
+    | Fs_proxy of Listing.t
+  [@@deriving sexp_of, bin_io, compare]
+
+  let hash = function
+    | Digest d -> Hash.combine 0 (Digest.hash d)
+    | Fs_proxy listing -> Hash.combine 1 (Listing.hash listing)
+
   let of_digest x = Digest x
 
   let of_listing ~dir paths =
@@ -239,9 +276,236 @@ module Proxy = struct
 end
 
 module Proxy_map = struct
-  type t = Proxy.t Pm_key.Map.t with sexp_of, bin_io, compare
-  let empty = Pm_key.Map.empty
-  let single key proxy = Pm_key.Map.of_alist_exn [(key,proxy)]
+
+  module Id = Unique_id.Int63()
+
+  module Cache = struct
+    type t = Univ.t option
+  end
+
+  module rec T_with_shallow_ops : sig
+    type t = {
+      map : Proxy.t Pm_key.Map.t;
+      groups : (group, Group_comparator.comparator_witness) Set.t;
+    }
+    and group = {
+      id : Id.t;
+      hash : int;
+      t : t;
+      mutable cache : Cache.t;
+    }
+    val compare_group : group -> group -> int
+    val sexp_of_group : group -> Sexp.t
+  end = struct
+    include T_with_shallow_ops
+    let compare_group group1 group2 = Id.compare group1.id group2.id
+    let sexp_of_group group = Id.sexp_of_t group.id
+  end
+  and Group_comparator : Comparator.S with type t = T_with_shallow_ops.group = struct
+    type t = T_with_shallow_ops.group
+    include Comparator.Make(struct type t = T_with_shallow_ops.group [@@deriving compare, sexp_of] end)
+  end
+
+  module Group_set = struct
+    include Set.Make_using_comparator(struct
+      include Group_comparator
+      let sexp_of_t = T_with_shallow_ops.sexp_of_group
+      let t_of_sexp _ = assert false
+    end)
+    let t_of_sexp = `Undefined
+    let _ = t_of_sexp
+  end
+
+  (* We allow some values to compare as not equal even though we would prefer to think of
+     them as equal when they only differ in the structure of groups.
+     However in practice, it sounds like an inefficiency in the rules if the same big
+     dependencies are created with or without structure depending on the code path.
+  *)
+  type t = T_with_shallow_ops.t = {
+    map : Proxy.t Pm_key.Map.t;
+    groups : Group_set.t;
+  }
+  [@@deriving compare]
+
+  type group = T_with_shallow_ops.group = {
+    id : Id.t;
+    hash : int;
+    t : t;
+    mutable cache : Cache.t;
+  }
+
+  module Weak_group_set = Caml.Weak.Make(struct
+    type t = group
+    let hash t = t.hash
+    (* Not comparing the id, otherwise the lookup below would always fail. *)
+    let equal t1 t2 = t1.hash = t2.hash && compare t1.t t2.t = 0
+  end)
+  let weak_group_set = lazy (Weak_group_set.create 1000)
+  let create_group ({ map; groups } as t) =
+    let hash =
+      Hash.combine
+        (Hash.map Pm_key.hash Proxy.hash map)
+        (Hash.set (fun group -> group.hash) groups)
+    in
+    let group = { hash; t; id = Id.create (); cache = None } in
+    Weak_group_set.merge (force weak_group_set) group
+
+  module type Serialization_param = sig
+    (* identifiers on disk can be unrelated to the ones in memory once loaded *)
+    module Disk_id : sig include Binable.S include Sexpable.S with type t := t end
+    (* only one of [Saving] and [Loading] will be defined at a time *)
+    module Saving : sig
+      val to_disk : Id.t -> Disk_id.t
+    end
+    module Loading : sig
+      val group_of_id : Disk_id.t -> group
+      val define_group : Disk_id.t -> group -> unit
+    end
+  end
+
+  module T_with_serialization(X : Serialization_param) = struct
+    module Group_with_shallow_ops = struct
+      type t = group
+      let to_id t = X.Saving.to_disk t.id
+      let of_id id = X.Loading.group_of_id id
+      module Binable = Binable.Of_binable(X.Disk_id)(struct
+        type nonrec t = t
+        let to_binable = to_id
+        let of_binable = of_id
+      end)
+      module Sexpable = Sexpable.Of_sexpable(X.Disk_id)(struct
+          type nonrec t = t
+          let to_sexpable = to_id
+          let of_sexpable = of_id
+        end)
+      include Binable
+      include Sexpable
+      module Set =
+        Set.Make_binable_using_comparator(struct
+          include Group_comparator
+          include Binable
+          include Sexpable
+        end)
+    end
+    type nonrec t = t = {
+      map : Proxy.t Pm_key.Map.t;
+      groups : Group_with_shallow_ops.Set.t;
+    } [@@deriving bin_io, sexp_of]
+
+    module Group_in_index = struct
+      module Format = struct
+        type nonrec t = X.Disk_id.t * t [@@deriving bin_io, sexp_of]
+      end
+      type t = group
+      let to_format t = X.Saving.to_disk t.id, t.t
+      let of_format (id, t) =
+        let group = create_group t in
+        X.Loading.define_group id group;
+        group
+      include Binable.Of_binable(Format)(struct
+          type t = group
+          let to_binable = to_format
+          let of_binable = of_format
+        end)
+      let sexp_of_t t = Format.sexp_of_t (to_format t)
+    end
+  end
+
+  (* Traverses subgroups in post-order, avoiding visiting the same group twice. *)
+  let iter_groups' seen ~f =
+    let rec go_group ({ id; hash = _; t; cache = _ } as group) =
+      if not (Hash_set.mem seen id)
+      then begin
+        Hash_set.add seen id;
+        go t;
+        f group;
+      end
+    and go { map = _; groups } =
+      Set.iter groups ~f:go_group
+    in
+    go
+  ;;
+
+  let iter_groups t ~f =
+    let seen = Id.Hash_set.create ~size:(Set.length t.groups) () in
+    iter_groups' seen t ~f;
+  ;;
+
+  let iter_bindings t ~f =
+    let f { map; groups = _ } = Map.iteri map ~f in
+    iter_groups t ~f:(fun { id = _; hash = _; t; cache = _ } -> f t);
+    f t
+  ;;
+
+  (* We go recursively before enqueuing so the order in the index from group id to group
+     respects the dependencies between groups. This way, when we read an id, we have seen
+     its definition already, so we don't need an intermediate datastructure. *)
+  let build_index (seen, index) = iter_groups' seen ~f:(Queue.enqueue index)
+
+  let shallow_length { map; groups } =
+    Map.length map + Set.length groups
+
+  let no_groups = Group_set.empty
+  let create map groups = { map; groups }
+
+  let empty = create Pm_key.Map.empty no_groups
+
+  let single key proxy = create (Pm_key.Map.of_alist_exn [(key,proxy)]) no_groups
+
+  let group t =
+    create Pm_key.Map.empty (Group_set.singleton (create_group t))
+
+  let map_of_alist =
+    (* If [of_alist_reduce] gave us the key, we could use it in here. *)
+    let rec loop acc_t = function
+      | [] -> Ok acc_t
+      | (key,proxy)::xs ->
+        match (Map.find acc_t key) with
+        | Some proxy' ->
+          if Proxy.equal proxy proxy'
+          then loop acc_t xs
+          else
+            (* just find/report one inconsistency *)
+            Error [ (key,[proxy;proxy']) ]
+        | None ->
+          loop (Map.add acc_t ~key:key ~data:proxy) xs
+    in
+    fun xs -> loop Pm_key.Map.empty xs
+  let of_alist xs =
+    match map_of_alist xs with
+    | Ok map -> Ok (create map no_groups)
+    | Error _ as e -> e
+
+  (* This does not avoid visiting the same group twice, so we should only traverse short
+     prefixes. *)
+  let rec to_sequence { map; groups } =
+    Sequence.append
+      (Map.to_sequence map)
+      (Sequence.concat_map (Set.to_sequence groups) ~f:group_to_sequence)
+  and group_to_sequence { id = _; hash = _; t; cache = _ } =
+    to_sequence t
+  ;;
+
+  let difference { map = map1; groups = groups1 } { map = map2; groups = groups2 } =
+    let diff_map =
+      Map.symmetric_diff map1 map2 ~data_equal:Proxy.equal
+      |> Sequence.map ~f:(fun (key, _) -> key)
+    in
+    let diff_groups =
+      Set.symmetric_diff groups1 groups2
+      |> Sequence.concat_map
+           ~f:(fun (First group | Second group) ->
+             Sequence.map (group_to_sequence group) ~f:(fun (key, _) -> key))
+    in
+    Sequence.append diff_map diff_groups
+  ;;
+
+  let equal_or_witness t1 t2 =
+    match compare t1 t2 with
+    | 0 -> Ok ()
+    | _ -> Error (Sequence.to_list (Sequence.take (difference t1 t2) 5))
+  ;;
+
   let filesystem_assumptions (t : t) =
     let dirs = Path.Hash_set.create () in
     let files = Path.Hash_set.create () in
@@ -250,7 +514,7 @@ module Proxy_map = struct
       if Path.is_absolute path then ()
       else Hash_set.add set path
     in
-    Map.iter t ~f:(fun ~key ~data ->
+    iter_bindings t ~f:(fun ~key ~data ->
       match key with
       | Path file ->
         add_if_relative dirs (Path.dirname file);
@@ -272,6 +536,40 @@ module Proxy_map = struct
             in
             add_if_relative set path));
     `Dirs dirs, `Files files, `Arbitrary_files arbitrary_files
+
+  let shallow_paths t =
+    let map = t.map in
+    let r = ref [] in
+    Map.iteri map ~f:(fun ~key ~data:_ ->
+      match key with
+      | Path path -> r := path :: !r
+      | Glob _ -> ());
+    !r
+
+  module Group = struct
+    type t = group
+    let find_or_add t ~unique_id_across_jenga:type_id ~unique_f_across_jenga:f =
+      match t.cache with
+      | Some univ -> Univ.match_exn univ type_id
+      | None ->
+        let r = f (shallow_paths t.t) in
+        t.cache <- Some (Univ.create type_id r);
+        r
+  end
+
+  let to_paths_for_mtimes_check t =
+    let r = ref [] in
+    iter_groups t ~f:(fun group -> r := group :: !r);
+    shallow_paths t, !r
+
+  let merge ts =
+    let xs = List.concat_map ts ~f:(fun t -> Map.to_alist t.map) in
+    match map_of_alist xs with
+    | Ok map ->
+      let group = Group_set.union_list (List.map ts ~f:(fun t -> t.groups)) in
+      Ok (create map group)
+    | Error _ as err -> err
+
 end
 
 module Rule_proxy = struct
@@ -280,7 +578,21 @@ module Rule_proxy = struct
     targets : Proxy_map.t;
     deps : Proxy_map.t;
     action : Job.t
-  } with sexp_of, bin_io, compare, fields
+  } [@@deriving compare, fields]
+
+  let build_index acc { targets; deps; action = _ } =
+    Proxy_map.build_index acc targets;
+    Proxy_map.build_index acc deps
+  ;;
+
+  module T_with_serialization(X : Proxy_map.Serialization_param) = struct
+    module Proxy_map = Proxy_map.T_with_serialization(X)
+    type nonrec t = t = {
+      targets : Proxy_map.t;
+      deps : Proxy_map.t;
+      action : Job.t
+    } [@@deriving bin_io, sexp_of]
+  end
 
 end
 
@@ -289,16 +601,45 @@ module Output_proxy = struct
   type t = {
     deps : Proxy_map.t;
     stdout : string;
-  } with sexp_of, bin_io, compare, fields
+  } [@@deriving compare, fields]
+
+  let build_index acc { deps; stdout = _ } = Proxy_map.build_index acc deps
+
+  module T_with_serialization(X : Proxy_map.Serialization_param) = struct
+    module Proxy_map = Proxy_map.T_with_serialization(X)
+    type nonrec t = t = {
+      deps : Proxy_map.t;
+      stdout : string;
+    } [@@deriving bin_io, sexp_of]
+  end
 
 end
 
-type t = {
-  digest_cache : (Stats.t * Digest.t) Path.Table.t;
-  generated : Path.Set.t Gen_key.Table.t;
-  ruled : Rule_proxy.t Path.Rel.Table.t;
-  actioned : Output_proxy.t Job.Table.t;
-} with sexp_of, bin_io, fields
+module T = struct
+  type t = {
+    digest_cache : (Stats.t * Digest.t) Path.Table.t;
+    generated : Path.Set.t Gen_key.Table.t;
+    ruled : Rule_proxy.t Path.Rel.Table.t;
+    actioned : Output_proxy.t Job.Table.t;
+  } [@@deriving fields]
+end
+include T
+
+let build_index acc { digest_cache = _; generated = _; ruled; actioned } =
+  Hashtbl.iter_vals ruled ~f:(Rule_proxy.build_index acc);
+  Hashtbl.iter_vals actioned ~f:(Output_proxy.build_index acc);
+;;
+
+module T_with_serialization(X : Proxy_map.Serialization_param) = struct
+  module Rule_proxy = Rule_proxy.T_with_serialization(X)
+  module Output_proxy = Output_proxy.T_with_serialization(X)
+  type nonrec t = t = {
+    digest_cache : (Stats.t * Digest.t) Path.Table.t;
+    generated : Path.Set.t Gen_key.Table.t;
+    ruled : Rule_proxy.t Path.Rel.Table.t;
+    actioned : Output_proxy.t Job.Table.t;
+  } [@@deriving sexp_of, bin_io]
+end
 
 let create () = {
   digest_cache = Path.Table.create ();
@@ -306,3 +647,68 @@ let create () = {
   ruled = Path.Rel.Table.create();
   actioned = Job.Table.create();
 }
+
+module With_index = struct
+
+  module Index = struct
+    type t = Proxy_map.group Queue.t
+    let iter t ~f = Queue.iter t ~f:(fun elt -> f elt.Proxy_map.t)
+  end
+
+  (* It's important for [index] to go first because its bin_io reading implementation is
+     side-effectful and the side-effects are necessary to load [t]. *)
+  type t = { index : Index.t; t : T.t }
+  let index t = t.index
+
+  module T_with_serialization(X : Proxy_map.Serialization_param) = struct
+    module Proxy_map = Proxy_map.T_with_serialization(X)
+    module T = T_with_serialization(X)
+    type nonrec t = t = { index : Proxy_map.Group_in_index.t Queue.t; t : T.t }
+    [@@deriving bin_io, sexp_of]
+  end
+
+  let snapshot t =
+    let seen = Proxy_map.Id.Hash_set.create () in
+    let index = Queue.create () in
+    build_index (seen, index) t;
+    { index; t }
+  ;;
+
+  let value t = t.t
+
+  module Disk_id = Int
+
+  let bin_write_t, bin_size_t, sexp_of_t =
+    let module T =
+      T_with_serialization(struct
+        module Disk_id = Disk_id
+        module Loading = struct
+          let group_of_id _ = assert false
+          let define_group _ _ = assert false
+        end
+        module Saving = struct
+          let to_disk id = Proxy_map.Id.to_int_exn id
+        end
+      end) in
+    T.bin_write_t, T.bin_size_t, T.sexp_of_t
+
+  let bin_read_t buf ~pos_ref =
+    let table = Disk_id.Table.create () in
+    let module T =
+      T_with_serialization(struct
+        module Disk_id = Disk_id
+        module Loading = struct
+          let group_of_id id = Hashtbl.find_exn table id
+          let define_group id group = Hashtbl.add_exn table ~key:id ~data:group
+        end
+        module Saving = struct
+          let to_disk _ = assert false
+        end
+      end) in
+    T.bin_read_t buf ~pos_ref
+  let __bin_read_t__ _ ~pos_ref:_ = assert false
+
+  (* Define bin_writer, bin_reader etc. *)
+  include (struct type nonrec t = t [@@deriving bin_io] end
+           : sig type t [@@deriving bin_io] end with type t := t)
+end

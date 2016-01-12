@@ -1,5 +1,7 @@
+open Core.Std
 
 type t
+[@@deriving sexp_of]
 
 (* [Ruleset.t] supports a set if rules, with lookup *)
 

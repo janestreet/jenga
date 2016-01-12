@@ -1,6 +1,6 @@
 
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 
 include Scheme_type
 

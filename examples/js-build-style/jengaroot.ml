@@ -467,7 +467,7 @@ let bash ~dir command_string =
   Action.process ~dir ~prog:"bash" ~args:[
     "-e"; "-u"; "-o"; "pipefail";
     "-c"; command_string
-  ]
+  ] ()
 
 let bashf ~dir fmt =
   ksprintf (fun str -> bash ~dir str) fmt
@@ -761,7 +761,7 @@ let compile_knot ~libname ~dir =
         [ "-c";];
         ["-intf"];
         [basename mli_gen];
-      ])
+      ]) ()
   )
 
 let knot_rules ~dir ~libname ~modules =
@@ -1131,7 +1131,7 @@ let gen_objdeps ~libname ~dir name =
 let need_ounit ~libname =
   match libname with
   | "pa_bench"
-  | "pa_bench_lib"
+  | "ppx_bench_lib"
   | "pa_ounit"
   | "pa_ounit_lib"
   | "oUnit"
@@ -1140,7 +1140,7 @@ let need_ounit ~libname =
 
 let get_inferred_1step_deps ~dir ~libname =
   file_words (relative ~dir (libname ^ ".inferred-1step.deps")) *>>| fun libs ->
-  if need_ounit ~libname then "pa_bench_lib" :: "pa_ounit_lib" :: libs else libs
+  if need_ounit ~libname then "ppx_bench_lib" :: "pa_ounit_lib" :: libs else libs
 
 module Objinfo : sig
 
@@ -1521,7 +1521,7 @@ let compile_c_1 ~cflags ~autogen ~dir name =
     @ ["-c"; name ^ ".c"; "-o"; name ^ ".o"]
   in
   Rule.create1 ~deps ~targets ~action:(
-    Action.process ~dir ~prog:cc_prog ~args
+    Action.process ~dir ~prog:cc_prog ~args ()
   )
 
 let compile_c ~cflags ~autogen ~dir names =
@@ -1541,7 +1541,7 @@ let compile_cxx ~cxxflags ~autogen ~dir names ~cxx_suf =
       @ ["-c"; name ^ cxx_suf; "-o"; name ^ ".o"]
     in
     Rule.create1 ~deps ~targets ~action:(
-      Action.process ~dir ~prog:cxx_prog ~args
+      Action.process ~dir ~prog:cxx_prog ~args ()
     )
   )
 
@@ -1585,7 +1585,7 @@ let ocamllex_rule ~dir name =
     ~deps:[Dep.path mll]
     ~targets:[ml]
     ~action:(
-      Action.process ~dir ~prog:"ocamllex" ~args:["-q"; basename mll]
+      Action.process ~dir ~prog:"ocamllex" ~args:["-q"; basename mll] ()
     )
 
 let ocamlyacc_rule ~dir name =
@@ -1597,7 +1597,7 @@ let ocamlyacc_rule ~dir name =
     ~deps:[Dep.path mly]
     ~targets:[ml;mli]
     ~action:(
-      Action.process ~dir ~prog:"ocamlyacc" ~args:["-q"; basename mly]
+      Action.process ~dir ~prog:"ocamlyacc" ~args:["-q"; basename mly] ()
     )
 
 
@@ -1642,7 +1642,7 @@ let gen_dfile mc ~name ~suf ~dsuf =
         *>>| fun () -> Action.process ~dir ~prog:ocamldep_prog
                          ~args:("-modules" :: pp_opt @
                                    (if is_ml_wrap then ["-impl"] else []) @
-                                   [basename source]))
+                                   [basename source]) ())
      *>>| fun output ->
      let is_actual_dep =
        let self = prefix_name ~libname ~name in
@@ -1736,7 +1736,7 @@ let compile_mli mc ~name =
           (*["-no-alias-deps"];*)
           open_knot_args;
           [ "-c"; basename mli]
-        ])
+        ]) ()
     )
   )
 
@@ -1821,7 +1821,7 @@ let native_compile_ml mc ~name =
           [ "-c";];
           (if is_ml_wrap then ["-impl"] else []);
           [basename ml];
-        ])
+        ]) ()
     )
   )
 
@@ -1926,7 +1926,7 @@ let libs_for_code_generated_by_pp = function
   | "pa_fields_conv"    -> [ "fieldslib" ]
   | "pa_variants_conv"  -> [ "variantslib" ]
   | "pa_typerep_conv"   -> [ "typerep_lib" ]
-  | "pa_test"           -> [ "pa_test_lib" ]
+  | "pa_test"           -> [ "ppx_assert_lib" ]
   | _                   -> []
 
 
@@ -2102,7 +2102,7 @@ let share_preprocessor dc ~dir name = (* .cmx/.o -> .cmxs *)
   Rule.create1 ~deps:[Dep.path cmx; Dep.path o] ~targets:[cmxs] ~action:(
     Action.process ~dir ~prog:ocamlopt_prog ~args:(
       flags @ ["-shared"; "-o"; basename cmxs; basename cmx]
-    )
+    ) ()
   )
 
 let empty_pack_order ~dir ~libname =
@@ -2337,10 +2337,10 @@ let ocaml_archive dc ~dir ~impls ~libname =
            ocamlflags @ ocamlcompflags
            @ sorted_mod_args
            @ ocamllibflags
-           @ ["-a"; "-o"; libname ^ lib ]))))
+           @ ["-a"; "-o"; libname ^ lib ]) ())))
 
 let pack =
-  let native_action ~dir ~prog ~args ~target:_ = Action.process ~dir ~prog ~args in
+  let native_action ~dir ~prog ~args ~target:_ = Action.process ~dir ~prog ~args () in
   let tmpdir = ".tempdir_for_cmo_packing" in
   let bytecode_action ~dir ~prog ~args ~target =
     (* Build the packed .cmo in a temporary sub-dir to avoid clashing with native
@@ -2408,7 +2408,7 @@ let hg_version_rules ~dir ~exe =
   let o_rule =
     Rule.create1 ~targets:[o] ~deps:[Dep.path c]
       ~action:(
-        Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
+        Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;] ()
       )
   in
   let c_rule =
@@ -2464,7 +2464,7 @@ let build_info_rules ~dir ~name ~ext ~sexp_dep =
   let o_rule =
     Rule.create1 ~targets:[o] ~deps:[Dep.path c]
       ~action:(
-        Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
+        Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;] ()
       )
   in
   let c_rule =
@@ -2507,7 +2507,7 @@ let mycaml_rules dc ~dir ~libname =
       file_words (relative ~dir (libname ^ ".libdeps")) *>>= fun libs ->
       let libs = at_head "dynlink" libs in
       let libs = at_head "pa_ounit_lib" libs in
-      let libs = at_head "pa_bench_lib" libs in
+      let libs = at_head "ppx_bench_lib" libs in
       let libs = libs @ [libname] in
       libdeps_for dc "auto_top" *>>= fun x_libs ->
       let libs = remove_dups_preserve_order (libs @ x_libs) in
@@ -2616,7 +2616,7 @@ let utopdeps_rules ~dir ~libname =
   let o_rule =
     Rule.create1 ~targets:[o] ~deps:[Dep.path c]
       ~action:(
-        Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;]
+        Action.process ~dir ~prog:ocamlc_prog ~args:[basename c; "-o"; basename o;] ()
       )
   in
   let c_rule =
@@ -2641,7 +2641,7 @@ let utop_rules dc ~dir ~libname =
     Rule.create ~targets (
       file_words (relative ~dir (libname ^ ".libdeps")) *>>= fun libs ->
       let libs = at_head "pa_ounit_lib" libs in
-      let libs = at_head "pa_bench_lib" libs in
+      let libs = at_head "ppx_bench_lib" libs in
       let libs = libs @ [libname] in
       libdeps_for dc "js_utop" *>>= fun x_libs ->
       let libs = remove_dups_preserve_order (libs @ x_libs) in
@@ -2996,6 +2996,7 @@ end = struct
           Action.process ~dir:Path.the_root
             ~prog:(Path.to_string dynamic_lib_deps_sh)
             ~args:[Path.to_string unchecked]
+            ()
         ) *>>| fun stdout ->
         let actual = words_of_string stdout in
         let unexpected = List.filter ~f:is_unexpected actual in
@@ -3046,7 +3047,7 @@ let ocaml_plugin_handling dc ~dir name exe =
 let get_libs_for_exe ~dir ~libname =
   file_words (relative ~dir (libname ^ ".libdeps")) *>>= fun libs ->
   let libs = at_head "pa_ounit_lib" libs in
-  let libs = at_head "pa_bench_lib" libs in
+  let libs = at_head "ppx_bench_lib" libs in
   return libs
 
 let link_native dc ~dir ~libname ~link_flags ~allowed_ldd_dependencies name =
@@ -3341,7 +3342,7 @@ let run_inline_action ~dir ~user_deps filename =
     (Dep.all_unit (List.map sources ~f:Dep.path)
      *>>| fun () ->
      Action.process ~dir ~prog:(reach_from ~dir time_limit)
-       ~args:["300"; "./" ^ filename])
+       ~args:["300"; "./" ^ filename] ())
 
 let run_inline_tests_action ~dir ~user_deps =
   run_inline_action ~dir ~user_deps "inline_tests_runner"
@@ -3415,7 +3416,7 @@ let link_test_or_bench_exe dc ~dir ~libname ~x_libs name =
     x_libs *>>= fun x_libs ->
     let libs = remove_dups_preserve_order (libs @ x_libs) in
     let libs = at_head "pa_ounit_lib" libs in
-    let libs = at_head "pa_bench_lib" libs in
+    let libs = at_head "ppx_bench_lib" libs in
 
     let main_cmx = relative ~dir (prefixed_name ^ ".cmx") in
     let main_o = relative ~dir (prefixed_name ^ ".o") in

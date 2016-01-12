@@ -4,7 +4,7 @@ open Async.Std
 
 module T = struct
   type t = Path of Path.Rel.t | Alias of Alias.t
-  with sexp, compare, bin_io
+  [@@deriving sexp, compare, bin_io]
   let hash = Hashtbl.hash
 end
 

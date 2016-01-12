@@ -6,7 +6,7 @@ type t = {
   contents : string;
   target : Path.t;
   chmod_x : bool;
-} with sexp_of
+} [@@deriving sexp_of]
 
 let create ~contents ~target ~chmod_x = { contents; target; chmod_x; }
 
@@ -16,14 +16,14 @@ let escape_backslashes_and_newlines s =
   | '\\' -> "\\\\"
   | c -> String.make 1 c)
 
-let bashf ~dir fmt =
-  ksprintf (fun s -> Job.create ~dir ~prog:"bash" ~args:["-c"; s]) fmt
+let bashf ~dir ~ignore_stderr fmt =
+  ksprintf (fun s -> Job.create ~dir ~prog:"bash" ~args:["-c"; s] ~ignore_stderr) fmt
 
 let job {contents;target;chmod_x} =
     (* By escaping newlines & using "echo -e", we avoid embedded newlines which are tricky
        to escape if we later extract a Makefile *)
   let base = Message.Q.shell_escape (Path.basename target) in
-  bashf ~dir:(Path.dirname target)
+  bashf ~dir:(Path.dirname target) ~ignore_stderr:false
     "echo -n -e %s > %s%s"
     (Message.Q.shell_escape (escape_backslashes_and_newlines contents))
     base

@@ -1,5 +1,6 @@
 
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 type t = {
   decay_factor_per_second : float;
@@ -41,7 +42,7 @@ let to_min_string_no_date time =
   sprintf "%02d:%02d" parts.P.hr parts.P.min
 
 let estimated_finish_time_string t =
-  if Int.(t.last_todo <= 0) then ", finished"
+  if t.last_todo <= 0 then ", finished"
   else
       (* will never finish with a negative or zero rate *)
     if Float.(t.rate <= 0.0) then ""

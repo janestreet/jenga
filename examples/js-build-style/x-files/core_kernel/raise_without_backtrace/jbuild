@@ -1,5 +1,0 @@
-(library
- ((name raise_without_backtrace)
-  (ocamlc_flags ())
-  (ocamlopt_flags (-inline 0 -nodynlink))
-  (preprocess (((pps ()) All)))))

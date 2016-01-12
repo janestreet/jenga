@@ -1,4 +1,0 @@
-(preprocessor
- ((name pa_bin_proj_conv)
-  (libraries (pa_type_conv pa_typerep_conv))
-  (preprocess (((command "camlp4orf -loc loc") (List (pa_bin_proj_conv)))))))

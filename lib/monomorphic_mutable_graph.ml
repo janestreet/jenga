@@ -1,6 +1,6 @@
 
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 
 module Bag : sig (* Document Bag interface required *)
   module Elt : sig
@@ -20,7 +20,7 @@ type graph = {
 }
 type t = graph
 
-let equal_graph g1 g2 = Int.(=) g1.gid g2.gid
+let equal_graph g1 g2 = g1.gid = g2.gid
 
 module Node = struct
 
@@ -38,7 +38,7 @@ module Node = struct
   end
   include T
   include Hashable.Make(T)
-  let equal t1 t2 = Int.(=) t1.u t2.u
+  let equal t1 t2 = t1.u = t2.u
 
 end
 
@@ -64,7 +64,7 @@ let graph n = n.graph
 
 let equal_node n1 n2 =
   assert (equal_graph (graph n1) (graph n2));
-  Int.(=) n1.u n2.u
+  n1.u = n2.u
 
 let id_string n = sprintf "n%d" n.u
 

@@ -1,6 +1,5 @@
-
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 open Async.Std
 module Log = Async.Std.Log
 
@@ -71,13 +70,27 @@ let split_string_into_lines s =
 
 
 let pretty_span span =
-  let parts = Time.Span.to_parts span in
-  let module P = Time.Span.Parts in
-  let mins = 60 * parts.P.hr + parts.P.min in
-  if Int.(mins > 0) then              sprintf "%dm %02ds" mins parts.P.sec
-  else if Int.(parts.P.sec > 0) then  sprintf     "%d.%03ds"   parts.P.sec parts.P.ms
-  else                                sprintf        "%dms"                parts.P.ms
+  let { Time.Span.Parts.sign = _; hr; min; sec; ms; us = _ } = Time.Span.to_parts span in
+  let mins = 60 * hr + min in
+  if mins > 0     then sprintf "%dm %02ds" mins sec
+  else if sec > 0 then sprintf "%d.%03ds"  sec ms
+  else                 sprintf "%dms"      ms
+;;
 
+let parse_pretty_span span =
+  match String.lsplit2 ~on:' ' span with
+  | None -> Time.Span.of_string span
+  | Some (minutes, seconds) -> Time.Span.(of_string minutes + of_string seconds)
+;;
+
+let%test_unit _ =
+  List.iter ~f:(fun str -> [%test_result: string] ~expect:str
+                             (pretty_span (parse_pretty_span str)))
+    [ "1m 44s"
+    ; "23.123s"
+    ; "55ms"
+    ]
+;;
 
 module Job_start = struct
   type t = {
@@ -86,27 +99,27 @@ module Job_start = struct
     where : string;
     prog : string;
     args : string list;
-  } with bin_io, fields, sexp_of
+  } [@@deriving bin_io, fields, sexp_of]
 end
 
 module Job_finish = struct
   type t = {
     outcome : [`success | `error of string];
     duration : Time.Span.t;
-  } with bin_io, fields, sexp_of
+  } [@@deriving bin_io, fields, sexp_of]
 end
 
 module Job_output = struct
   type t = {
     stdout : string list;
     stderr : string list;
-  } with bin_io, fields, sexp_of
+  } [@@deriving bin_io, fields, sexp_of]
 end
 
 module Job_summary = struct
 
   type t = Job_start.t * Job_finish.t * Job_output.t
-  with bin_io, sexp_of
+  [@@deriving bin_io, sexp_of]
 
   let output_with ~put (
     {Job_start. where; need; prog; args; uid=_},
@@ -133,7 +146,7 @@ end
 
 module Tag = struct
   (* Error, Message(info), Verbose, Trace, Unlogged *)
-  type t = E | M | V | T | U with sexp_of
+  type t = E | M | V | T | U [@@deriving sexp_of]
   let to_string t = Sexp.to_string (sexp_of_t t)
 end
 
@@ -143,7 +156,7 @@ module Err = struct
     col : int;
     short : string;
     extra : string option;
-  } with sexp
+  } [@@deriving sexp]
   let create ?(pos=(1,1)) ?extra short =
     let line,col = pos in
     {line;col;short;extra}
@@ -166,7 +179,7 @@ module Event = struct
   | File_changed of string
   | Rebuilding
 
-  with sexp_of
+  [@@deriving sexp_of]
 end
 
 module T = struct
@@ -283,25 +296,47 @@ let fixed_span_for_message_prefix span =
   let module P = Time.Span.Parts in
   sprintf "%02d:%02d.%03d" (60 * parts.P.hr + parts.P.min) parts.P.sec parts.P.ms
 
+let stat_since_last_checked get_current zero (-) =
+  let last = ref zero in
+  fun stat ->
+    let current = get_current stat in
+    let diff = current - !last in
+    last := current;
+    diff
+;;
 
-let major_collections_since_last_checked =
-  let last = ref 0 in
-  fun () ->
-    let stat = Gc.stat () in
-    let n = stat.Gc.Stat.major_collections in
-    let res = n - (!last) in
-    last := n;
-    res
+let stat_since_last_checked_int get_current =
+  stat_since_last_checked get_current 0 (-)
+let stat_since_last_checked_float get_current =
+  stat_since_last_checked get_current 0. (-.)
 
 let pretty_mem_usage =
-  let words_per_kb = 1024 / 8 in
-  fun () ->
-    let stat = Gc.stat () in
-    let live = stat.Gc.Stat.live_words / words_per_kb in
-    let heap = stat.Gc.Stat.heap_words / words_per_kb in
-    let major = major_collections_since_last_checked() in
-    sprintf "heap(Kb)= %d/%d, major=%d" live heap major
-
+  let float_words x = Byte_units.create `Words x in
+  let int_words x = float_words (Float.of_int x) in
+  let major_collections = stat_since_last_checked_int Gc.Stat.major_collections in
+  let minor_words = stat_since_last_checked_float Gc.Stat.minor_words in
+  let major_words = stat_since_last_checked_float Gc.Stat.major_words in
+  let promoted_words = stat_since_last_checked_float Gc.Stat.promoted_words in
+  fun (config : Config.t) ->
+    let stat = Gc.quick_stat () in
+    let heap = int_words stat.heap_words in
+    let gc_details =
+      if config.show_memory_allocations
+      then sprintf !", m=%{Byte_units}, M=%{Byte_units}, p=%{Byte_units}, major=%d"
+             (float_words (minor_words stat))
+             (float_words (major_words stat))
+             (float_words (promoted_words stat))
+             (major_collections stat)
+      else ""
+    in
+    let top_heap =
+      let top_heap = int_words stat.top_heap_words in
+      if Byte_units.(=) heap top_heap
+      then ""
+      else sprintf !", top heap=%{Byte_units}" top_heap
+    in
+    sprintf !"heap=%{Byte_units}%s%s" heap top_heap gc_details
+;;
 
 let omake_style_logger config event =
 
@@ -411,11 +446,13 @@ let omake_style_logger config event =
 
   | Event.Build_done (duration,`u u,total,s) ->
     jput (sprintf "%d/%d targets are up to date" total total);
-    jput (sprintf "done (#%d, %s, %s, %s) -- HURRAH" u (pretty_span duration) (pretty_mem_usage()) s)
+    jput (sprintf "done (#%d, %s, %s, %s) -- HURRAH"
+            u (pretty_span duration) (pretty_mem_usage config) s)
 
   | Event.Build_failed (duration, `u u,(num,den),s) -> (
     jput (sprintf "%d/%d targets are up to date" num den);
-    jput (sprintf "failed (#%d, %s, %s, %s)" u (pretty_span duration) (pretty_mem_usage()) s);
+    jput (sprintf "failed (#%d, %s, %s, %s)"
+            u (pretty_span duration) (pretty_mem_usage config) s);
   )
 
   | Event.Polling ->
@@ -429,7 +466,58 @@ let omake_style_logger config event =
 
   | Event.Rebuilding ->
     jput "rebuilding--------------------------------------------------"
+;;
 
+let parse_build_measures_assoc_list =
+  let parse =
+    let open Re2.Std.Parser in
+    Staged.unstage (compile (
+      or_ [string "done"; string "failed"]
+      *> string " ("
+      *> capture (
+        string "#"
+        *> ignore Decimal.int
+        *> string ", "
+        *> repeat (ignore Char.any)
+      )
+      <* string ")"
+      <* ignore (optional (string " -- HURRAH"))))
+  in
+  (fun str ->
+     Option.map (parse str)
+       ~f:(fun csv ->
+         List.map (String.split ~on:',' csv) ~f:(fun value ->
+           let value = String.strip value in
+           match String.lsplit2 ~on:'=' value with
+           | Some (key, value) -> (key, value)
+           | None -> ("", value)
+         ))
+  )
+;;
+
+let%test_unit _ =
+  let test str expect =
+    [%test_result: (string * string) list option] (parse_build_measures_assoc_list str)
+      ~expect
+  in
+  test "\
+*** jenga: done (#1, 30.199s, heap=1.17188g, m=8.25294g, M=1.54731g, p=1.43634g, \
+major=11, stat=95340, digest=16, ls=4570, db-save=0) -- HURRAH
+"
+    (Some [ ""        , "#1"
+          ; ""        , "30.199s"
+          ; "heap"    , "1.17188g"
+          ; "m"       , "8.25294g"
+          ; "M"       , "1.54731g"
+          ; "p"       , "1.43634g"
+          ; "major"   , "11"
+          ; "stat"    , "95340"
+          ; "digest"  , "16"
+          ; "ls"      , "4570"
+          ; "db-save" , "0"
+          ]);
+  test "blah" None
+;;
 
 let install_logger ~f ~flushed = T.install_logger the_log ~f ~flushed
 

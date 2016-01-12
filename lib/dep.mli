@@ -19,6 +19,7 @@ val action : Action.t t -> unit t
 val action_stdout : Action.t t -> string t
 val alias : Alias.t -> unit t
 val path : Path.t -> unit t
+val group_dependencies : 'a t -> 'a t
 
 val source_if_it_exists : Path.t -> unit t
 
@@ -39,7 +40,7 @@ val source_files : dir:Path.t -> Path.t list t
 val glob_listing : Fs.Glob.t -> Path.t list t
 val glob_change : Fs.Glob.t -> unit t
 
-
 module List : sig
   val concat_map : 'a list -> f:('a -> 'b list t) -> 'b list t
+  val concat : 'a list t list -> 'a list t
 end

@@ -1,4 +1,0 @@
-(library
- ((name pa_bench_lib)
-  (modules (list (benchmark_accumulator)))
-  (preprocess (((pps ()) All)))))

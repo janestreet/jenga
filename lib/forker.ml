@@ -97,12 +97,24 @@ end = struct
     don't_wait_for (
       channel_def >>= fun channel ->
       let rec loop () =
-        Async_parallel_deprecated.Std.Channel.read channel >>= fun (uid,reply) ->
-        match (Hashtbl.find_and_remove reply_table uid) with
-        | None -> failwith "Forker_proc, unknown reply uid";
-        | Some ivar ->
-          Ivar.fill ivar reply;
-          loop()
+        Async_parallel_deprecated.Std.Channel.read_full channel
+        >>= function
+        | `Eof ->
+          (* When C-c'ing in a terminal, the kernel kills the process group containing
+             jenga and the async parallel processes. So we can get multiple `End_of_file
+             here before jenga itself stops, so multiple exceptions reach the toplevel
+             monitor, creating noise. So instead, we stop quietly if we are already
+             quitting, and we wait a tiny bit in case the children stop too fast. *)
+          after Time.Span.microsecond >>= fun () ->
+          if Quit.is_quitting ()
+          then Deferred.unit
+          else raise End_of_file
+        | `Ok (uid,reply) ->
+          match (Hashtbl.find_and_remove reply_table uid) with
+          | None -> failwith "Forker_proc, unknown reply uid";
+          | Some ivar ->
+            Ivar.fill ivar reply;
+            loop()
       in
       loop ()
     );

@@ -1,6 +1,6 @@
 open Core.Std
 open Async.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 
 module type S = sig
   val setup : unit -> Env.t Deferred.t

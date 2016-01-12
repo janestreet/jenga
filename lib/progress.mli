@@ -20,7 +20,6 @@ module Status : sig
     | Todo
     | Built
     | Error of Reason.t list (* empty list means failure in deps *)
-  with bin_io
 end
 
 type t
@@ -34,7 +33,7 @@ val mask_unreachable : t -> is_reachable_error:(Need.t -> bool) -> unit
 
 module Snap : sig
 
-  type t with bin_io
+  type t [@@deriving bin_io]
 
   val no_errors : t -> bool (*bad=0*)
   val built : t -> int
@@ -52,7 +51,10 @@ val readme : unit -> string
 
 (** A snapshot of the status table would be large. *)
 module Update : sig
-  type t = Set of Need.t * Status.t | Remove of Need.t with bin_io
+  type t =
+    | Set of Need.t * [`todo | `built | `error]
+    | Remove of Need.t
+  [@@deriving bin_io]
 
   module State : sig
     type t
@@ -60,6 +62,6 @@ module Update : sig
   end
 end
 
-module Updates : sig type t = Update.t list with bin_io end
+module Updates : sig type t = Update.t list [@@deriving bin_io] end
 
 val updates : t -> Update.State.t -> Updates.t

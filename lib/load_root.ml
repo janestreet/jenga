@@ -1,6 +1,6 @@
 
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 open Async.Std
 
 module P = Ocaml_plugin.Std
@@ -13,7 +13,7 @@ module Plugin = P.Ocaml_compiler.Make(struct
 end)
 
 let loading_count = ref 0
-let is_loading () = Int.(!loading_count > 0)
+let is_loading () = !loading_count > 0
 
 let begin_loading () =
   if is_loading() then (
@@ -56,7 +56,7 @@ module Spec = struct
 
 end
 
-let get_env spec =
+let get_env config spec =
   let plugin_cache_dir =
     Path.to_absolute_string (Path.of_relative Special_paths.Dot_jenga.plugin_cache)
   in
@@ -70,8 +70,10 @@ let get_env spec =
   Message.load_jenga_root path_for_message ~modules:(Spec.modules_for_message spec);
   let start_time = Time.now() in
   (*Ocaml_plugin.Shell.set_defaults ~echo:true ~verbose:true ();*)
+  let code_style = if config.Config.deprecated_camlp4 then Some `Camlp4_style else None in
   track_loading (fun () ->
     Plugin.load_ocaml_src_files
+      ?code_style
       ~persistent_archive_dirpath:plugin_cache_dir
       ~use_cache:plugin_cache
       (List.map ~f:Path.to_absolute_string (Spec.ml_paths_to_load spec))

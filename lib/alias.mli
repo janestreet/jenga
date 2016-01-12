@@ -6,7 +6,7 @@ open Async.Std
    indicates an alias when running jenga by a leading period.  So for example ".DEFAULT"
    or ".runtest". Aliases are directory relative. *)
 
-type t with sexp, bin_io
+type t [@@deriving sexp, bin_io]
 include Hashable with type t := t
 
 val split : t -> Path.Rel.t * string

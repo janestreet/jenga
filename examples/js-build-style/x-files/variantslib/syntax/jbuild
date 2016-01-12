@@ -1,4 +1,0 @@
-(preprocessor
- ((name pa_variants_conv)
-  (libraries (pa_type_conv))
-  (preprocess (((command "camlp4orf") (List (pa_variants_conv)))))))

@@ -1,6 +1,6 @@
 
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 
 module MG = Monomorphic_mutable_graph
 
@@ -13,14 +13,9 @@ module Item = struct
   | Dep_scheme of (Path.t * int)
   | Artifacts of Path.t
   | Buildable of Path.t
+  [@@deriving sexp_of]
 
-  let to_string = function
-    | Root -> "ROOT"
-    | Goal goal -> sprintf "GOAL: %s" (Goal.to_string goal)
-    | Reflect path -> sprintf "REFLECT: %s" (Path.to_string path)
-    | Dep_scheme (path, dep_u) -> sprintf "DEP-SCHEME: %s %d" (Path.to_string path) dep_u
-    | Artifacts dir -> sprintf "ARTIFACTS: %s" (Path.to_string dir)
-    | Buildable dir -> sprintf "BUILDABLE: %s" (Path.to_string dir)
+  let to_string t = Sexp.to_string (sexp_of_t t)
 
 end
 

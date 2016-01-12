@@ -8,7 +8,7 @@ open Async.Std
    Internally represented & displayed without a leading /.
 *)
 module Rel : sig
-  type t with sexp, compare, bin_io
+  type t [@@deriving sexp, compare, bin_io]
   include Hashable_binable with type t := t
   include Comparable_binable with type t := t
   val the_root : t
@@ -32,7 +32,7 @@ end
 module Abs : sig
 
   (** Type for absolute paths. *)
-  type t with sexp_of, compare, bin_io
+  type t [@@deriving sexp_of, compare, bin_io]
 
   val unix_root : t
   val create : string -> t
@@ -57,7 +57,7 @@ module Abs : sig
 end
 
 (* [t] Type for relative or absolute path *)
-type t with sexp, compare, bin_io
+type t [@@deriving sexp, compare, bin_io]
 include Hashable_binable with type t := t
 include Comparable_binable with type t := t
 
@@ -82,23 +82,24 @@ val reach_from : dir:t -> t -> string
     [relative ~dir x = t] *)
 val is_descendant : dir:t -> t -> bool
 
+val relative_or_absolute : dir:t -> string -> t
+
 module Repo : sig
-  val set_root : dir:Abs.t -> unit
+  val set_root : Abs.t -> unit
   val root : unit -> Abs.t
 end
 
 (*** repo-root-dependent! ***)
-val relative_or_absolute : dir:t -> string -> t
 val to_absolute_string : t -> string
 
 (* [of_absolute_string] - create repo-relative path if possible. *)
 val of_absolute_string : string -> t
 
-(** [is_a_root t = (t = the_root) || (t = absolute "/")]*)
+(** [is_a_root t = (t = the_root) || (t = unix_root)]*)
 val is_a_root : t -> bool
 
 module With_store : sig
-  type 'a t with bin_io
+  type 'a t [@@deriving bin_io]
   val snapshot : 'a -> 'a t
   val value : 'a t -> 'a
 end

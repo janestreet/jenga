@@ -1,11 +1,13 @@
 
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 module Target_rule = Rule.Target_rule
 
-let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
+let equal_using_compare compare = fun x1 x2 -> 0 = compare x1 x2
 
 type t = { rules : Rule.t list }
+[@@deriving sexp_of]
 
 let create rules = { rules }
 let rules t = t.rules

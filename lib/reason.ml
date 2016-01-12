@@ -27,6 +27,7 @@ let filesystem_related = function
   | Multiple_rules_for_path _
   | Rule_failed_to_generate_targets _
   | Usercode_raised _
+  | Jengaroot_load_failed _
     -> false
 
 let to_string_one_line = function
@@ -52,6 +53,8 @@ let to_string_one_line = function
 
   | Usercode_raised _ ->
     "User-code raised exception"
+  | Jengaroot_load_failed _ ->
+    "User-code load failed"
   | Undigestable k                    ->
     sprintf "undigestable file kind: %s" (Db.Kind.to_string k)
   | Inconsistent_proxies ->
@@ -80,6 +83,7 @@ let to_extra_lines = function
 
   | Running_job_raised sexp
   | Usercode_raised sexp
+  | Jengaroot_load_failed sexp
   | File_read_error sexp
   | Digest_error sexp
     -> [Sexp.to_string sexp]

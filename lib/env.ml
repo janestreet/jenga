@@ -25,7 +25,7 @@ type t = {
   build_end : unit -> unit Deferred.t;
   artifacts_policy : Artifact_policy.t;
   scheme_for_dir : (dir:Path.t -> Scheme.t);
-} with fields
+} [@@deriving fields]
 
 let create
     ?(putenv=[])

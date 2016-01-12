@@ -7,7 +7,7 @@ open Async.Std
    [Path path] demands the target at [path];
    [Alias] demands the particular alias t;
 *)
-type t = Path of Path.Rel.t | Alias of Alias.t with sexp, bin_io
+type t = Path of Path.Rel.t | Alias of Alias.t [@@deriving sexp, bin_io]
 include Hashable with type t := t
 
 val to_string : t -> string

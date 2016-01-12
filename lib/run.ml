@@ -95,32 +95,25 @@ let configure_scheduler ~report_long_cycle_times =
     let completed_after = Async_unix.Thread_pool.num_work_completed sched.thread_pool in
     if completed_before = completed_after then
       Async.Std.Scheduler.default_handle_thread_pool_stuck ~stuck_for;
-    if Jenga_options.t.sigstop_on_thread_pool_stuck && Time.Span.(stuck_for > sec 5.) then
+    if Jenga_options.t.sigstop_on_thread_pool_stuck && Time_ns.Span.(stuck_for > of_sec 5.) then
       Signal.send_exn Signal.stop (`Pid (Unix.getpid ()));
   )
 ;;
 
-let main config =
-  For_user.install_config_for_user_rules config;
+let tune_gc config =
+  let words_per_mb = 1024 * 1024 / 8 in
+  let open Config.Gc in
+  Gc.tune
+    ~minor_heap_size: (words_per_mb * config.minor_heap_size)
+    ~major_heap_increment: (words_per_mb * config.major_heap_increment)
+    ~space_overhead: config.space_overhead
+    ()
 
-  (* The jenga root discovery must run before we call Parallel.init *)
-  let root_dir,jr_spec =
-    match Config.path_to_jenga_conf config with
-    | Some jenga_root ->
-      let dir = Core.Std.Sys.getcwd () in
-      Path.Repo.set_root ~dir:(Path.Abs.create dir);
-      dir, Build.Jr_spec.path (Path.of_absolute (Path.Abs.create jenga_root))
-    | None ->
-      begin
-        match Special_paths.discover_root () with
-        | Ok () ->
-          let dir = Path.Abs.to_string (Path.Repo.root ()) in
-          dir, Build.Jr_spec.in_root_dir
-        | Error e ->
-          error "%s" (Error.to_string_hum e);
-          Pervasives.exit Exit_code.cant_start
-      end
-  in
+let main' jr_spec ~root_dir config =
+
+  Path.Repo.set_root root_dir;
+  tune_gc (Config.gc config);
+  For_user.install_config_for_user_rules config;
 
   Special_paths.Dot_jenga.prepare ();
 
@@ -142,23 +135,24 @@ let main config =
   in
 
   trace "----------------------------------------------------------------------";
-  trace "Root: %s" root_dir;
-  trace "Start: %s" (Path.Rel.to_string start_dir);
+  trace !"Root: %{Path.Abs}" root_dir;
+  trace !"Start: %{Path.Rel}" start_dir;
 
-  Core.Std.Sys.chdir root_dir;
+  Core.Std.Sys.chdir (Path.Abs.to_string root_dir);
 
   let pid_string () = Pid.to_string (Unix.getpid ()) in
 
-  Message.message "[%s] root=%s, sys=%s, j=%d, f=%d"
+  Message.message !"[%s] root=%{Path.Abs}, sys=%s, j=%d, f=%d (%s)"
     (pid_string()) root_dir
     System.description
-    (Config.j_number config) (Config.f_number config);
+    (Config.j_number config) (Config.f_number config)
+    Version_util.version;
 
   (* Must do the chdir before Parallel.init is called, so that we have the same cwd when
      using parallel forkers or not *)
 
   let config =
-    if Int.(Config.f_number config >= 0) then config else (
+    if Config.f_number config >= 0 then config else (
       Message.error "Ignoring negative value to -f flag; treating as 0";
       {config with Config. f_number = 0}
     )
@@ -166,7 +160,7 @@ let main config =
 
   let config =
     try
-      if Int.(Config.f_number config > 0) then (
+      if Config.f_number config > 0 then (
         Async_parallel_deprecated.Std.Parallel.init();
       );
       config
@@ -189,7 +183,21 @@ let main config =
     install_signal_handlers()
   in
 
-
   never_returns (
     Scheduler.go_main ~max_num_threads ~raise_unhandled_exn:true ~main ()
   )
+
+let main config =
+  (* The jenga root discovery must run before we call Parallel.init *)
+  match Config.path_to_jenga_conf config with
+  | Some jenga_root ->
+    let root_dir = Path.Abs.create (Core.Std.Sys.getcwd ()) in
+    let jenga_root = Path.relative_or_absolute ~dir:Path.the_root jenga_root in
+    main' ~root_dir (Build.Jr_spec.Path jenga_root) config
+  | None ->
+    match Special_paths.discover_root () with
+    | Ok root_dir ->
+      main' ~root_dir Build.Jr_spec.In_root_dir config
+    | Error e ->
+      error "%s" (Error.to_string_hum e);
+      Pervasives.exit Exit_code.cant_start

@@ -11,16 +11,22 @@ module Dot_jenga = struct
   let prepare () =
     Core.Std.Unix.mkdir_p (Path.to_absolute_string (Path.root_relative dot_jenga))
 
-  (* we name everything ".jenga/.jenga." so it gets ignored by
+  (* We name everything ".jenga/.jenga." so it gets ignored by
      the old .hgignore (Jan 2015).
      eventually we can change the prefix to just ".jenga/".
   *)
-  let file suf = Rel.create (dot_jenga ^/ dot_jenga ^ "." ^ suf)
+  let file ?(old_convention = false) suf =
+    if old_convention
+    then Rel.create (dot_jenga ^/ dot_jenga ^ "." ^ suf)
+    else Rel.create (dot_jenga ^/                   suf)
 
   let log = file "debug"
   let server = file "server"
   let plugin_cache = file "plugin-cache"
-  let db ~version = file ("db-v" ^ version)
+  let db ~version =
+    let old_convention = version = "3" in
+    file ~old_convention ("db-v" ^ version)
+  let local_lock = file ~old_convention:false "lock"
 
   let matches path =
     match Path.case path with
@@ -57,7 +63,7 @@ let discover_root () =
   let start_dir = Core.Std.Sys.getcwd() in
   let rec loop dir =
     if jenga_root_exists_in ~dir
-    then (Path.Repo.set_root ~dir:(Path.Abs.create dir); Ok ())
+    then Ok (Path.Abs.create dir)
     else
     if String.equal dir Filename.root
     then
@@ -67,3 +73,6 @@ let discover_root () =
     else loop (Filename.dirname dir)
   in
   loop start_dir
+
+let discover_and_set_root () =
+  Result.map ~f:Path.Repo.set_root (discover_root ())

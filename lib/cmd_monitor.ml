@@ -1,5 +1,5 @@
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 open Async.Std
 
 let retry_span = sec 0.5
@@ -155,8 +155,8 @@ let command =
        match Special_paths.discover_root () with
        | Error e ->
          error "%s" (Error.to_string_hum e)
-       | Ok () ->
-         let root_dir = Path.Abs.to_string (Path.Repo.root ()) in
+       | Ok root_dir ->
+         Path.Repo.set_root root_dir;
          let style = if progress_fraction then `fraction else `jem_style in
          Misc.in_async ~f:(fun () ->
            if snapshot then run_once ~root_dir style

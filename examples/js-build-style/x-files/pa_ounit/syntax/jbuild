@@ -1,3 +1,0 @@
-(preprocessor
- ((name pa_ounit)
-  (preprocess (((command "camlp4orf") (List (pa_ounit)))))))

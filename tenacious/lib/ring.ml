@@ -14,14 +14,19 @@ open Core.Std
    atomically. We claim this atomicity is guaranteed by the (current) Ocaml implementation
    because the statements do no allocation and so can not be preempted. *)
 
-type 'a t = {mutable prev: 'a t; value: 'a; mutable next: 'a t}
+type 'a t = {mutable prev: 'a t; mutable value: 'a; mutable next: 'a t}
 type 'a elem = 'a t
 
 (* An empty ring is represented by self-referencing [sentinel] element. The never-used
    [value] is created using [Obj.magic] since there are no values of type ['a] to hand. *)
 let create () =
-  let rec t = {prev = t; next = t; value = Obj.magic []} in
+  let rec t = {prev = t; next = t; value = Obj.magic None} in
   t
+
+let keep_alive t parent =
+  (* Note that this only works on type [t] and not [elem], because no function ever looks
+     at the [value] inside a [t]. *)
+  t.value <- Obj.magic parent
 
 (* New elements are added at the end of the ring. The new element becomes the [next] of
    the previously added element. The new element's [next] points to the [sentinel]. *)

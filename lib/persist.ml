@@ -1,20 +1,18 @@
 
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 open Async.Std
 
 module Digest = Db.Digest
 
 module Version = struct
-  let current = "2"
+  let current = "4"
 end
 
 let saves_done = Effort.Counter.create "db-save"
 
 let jenga_show_persist =
-  match Core.Std.Sys.getenv "JENGA_SHOW_PERSIST" with
-  | None -> false
-  | Some _ -> true
+  Option.is_some (Core.Std.Sys.getenv "JENGA_SHOW_PERSIST")
 
 let trace = Message.(if jenga_show_persist then message else trace)
 let trace fmt = ksprintf (fun s -> trace "Persist: %s" s) fmt
@@ -35,32 +33,32 @@ let modify who x =
   else (trace "setting MODIFIED flag, for: %s" who; r_is_modified := true ; x)
 
 module Quality = struct
-  type t = [`initial | `good] with sexp_of
+  type t = [`initial | `good] [@@deriving sexp_of]
   let to_string t = Sexp.to_string (sexp_of_t t)
 end
 
 module State : sig
 
-  type t with bin_io
+  type t [@@deriving bin_io]
   val snapshot : Db.t -> t
   val value : t -> Db.t
 
 end = struct
 
-  type t = Db.t Digest.With_store.t Path.With_store.t
-  with bin_io
+  type t = Db.With_index.t Digest.With_store.t Path.With_store.t
+  [@@deriving bin_io]
 
   let snapshot db =
-    let x = db in
-    let x = Digest.With_store.snapshot x in
-    let x = Path.With_store.snapshot x in
-    x
+    db
+    |> Db.With_index.snapshot
+    |> Digest.With_store.snapshot
+    |> Path.With_store.snapshot
 
-  let value t =
-    let x = t in
-    let x = Path.With_store.value x in
-    let x = Digest.With_store.value x in
+  let value x =
     x
+    |> Path.With_store.value
+    |> Digest.With_store.value
+    |> Db.With_index.value
 
 end
 
@@ -71,7 +69,7 @@ module Ops : sig
 
 end = struct
 
-  let max_len = 800 * 1024 * 1024 (* default 100Mb is too small *)
+  let max_len = 800 * 1024 * 1024 (* default 100MiB is too small *)
 
   let load_db_with_quality ~db_filename =
     Sys.file_exists db_filename >>= function
@@ -81,36 +79,34 @@ end = struct
     | `Unknown ->
       return (Error (Error.createf "access to %S failed" db_filename))
     | `Yes ->
-    try_with (fun () ->
-      Reader.with_file db_filename ~f:(fun r ->
-        Reader.read_bin_prot ~max_len r State.bin_reader_t
-      )
-    ) >>= fun res ->
-      match (
-        match res with
-        | Ok (`Ok state) -> Some state (* successful load *)
-        | Ok `Eof -> trace "load: %s: `Eof" db_filename; None
-        | Error exn -> trace "load: %s:\n%s" db_filename (Exn.to_string exn); None
-      ) with
-      | Some state -> return (Ok (State.value state, `good))
-      | None -> return (Error (Error.of_string "failed to load jenga db"))
-
-  let save_db db ~db_filename =
-    Effort.track saves_done (fun () ->
-      Monitor.try_with (fun () ->
-        Writer.with_file_atomic db_filename ~f:(fun w ->
-          (* snapshot & write must be in same async-block *)
-          let state = State.snapshot db in
-          Writer.write_bin_prot w State.bin_writer_t state;
-          set_is_saved();
-          return ()
+      Deferred.Or_error.try_with (fun () ->
+        Reader.with_file db_filename ~f:(fun r ->
+          Reader.read_bin_prot ~max_len r State.bin_reader_t
         )
       ) >>| function
-      | Ok () -> ()
-      | Error exn ->
-        Message.error "exception thrown while saving %s:\n%s"
-          db_filename (Exn.to_string exn)
-    )
+      | Ok (`Ok state) -> Ok (State.value state, `good)
+      | Ok `Eof -> Or_error.error_string "reached eof while bin_read'ing"
+      | Error _ as e -> e
+
+  let save_db db ~db_filename =
+    if Jenga_options.t.turn_off_db_saves
+    then Deferred.unit
+    else
+      Effort.track saves_done (fun () ->
+        Monitor.try_with (fun () ->
+          Writer.with_file_atomic db_filename ~f:(fun w ->
+            (* snapshot & write must be in same async-block *)
+            let state = State.snapshot db in
+            Writer.write_bin_prot w State.bin_writer_t state;
+            set_is_saved();
+            return ()
+          )
+        ) >>| function
+        | Ok () -> ()
+        | Error exn ->
+          Message.error "exception thrown while saving %s:\n%s"
+            db_filename (Exn.to_string exn)
+      )
 
 end
 
@@ -128,7 +124,7 @@ type t = {
   db_filename : string;
   mutable save_status : [ `saving of unit Deferred.t | `not_saving ];
   mutable periodic_saving_enabled : bool;
-} with fields
+} [@@deriving fields]
 
 let create () =
   let db_filename = get_db_filename () in

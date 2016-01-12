@@ -66,7 +66,7 @@ module String(X : sig val who : string end) = struct
   module Handle = struct
     (* [Handle.t] represents an interned-string when saved persistently (via bin_io) *)
     module T = struct
-      type t = int with sexp, bin_io, compare
+      type t = int [@@deriving sexp, bin_io, compare]
       let hash x = x
     end
     include T
@@ -76,7 +76,7 @@ module String(X : sig val who : string end) = struct
   module Snap : sig
 
     (* [Snap.t] represents a reified interning-store suitable for bin_io loading/saving *)
-    type t with bin_io
+    type t [@@deriving bin_io]
     val create : (string * Handle.t) list -> t
     val alist : t -> (string * Handle.t) list
 
@@ -85,7 +85,7 @@ module String(X : sig val who : string end) = struct
     type t = {
       alist: (string * Handle.t) list;
     }
-    with bin_io, fields
+    [@@deriving bin_io, fields]
 
     let create alist = { alist }
 
@@ -173,7 +173,7 @@ module String(X : sig val who : string end) = struct
     struct
 
       type t = Snap.t
-      include Binable.Of_binable (Snap) (struct
+      include Binable.Stable.Of_binable.V1 (Snap) (struct
           type nonrec t = t
           let to_binable x = x
           let of_binable snap =
@@ -187,13 +187,13 @@ module String(X : sig val who : string end) = struct
         snap : Loaded_snap.t;
         via_string : Handle.t String.Table.t;
         value : 'a;
-      } with fields
+      } [@@deriving fields]
 
       type 'a disk = {
         snap : Loaded_snap.t;
         value : 'a
       }
-      with bin_io
+      [@@deriving bin_io]
 
       let of_disk { snap; value } =
         { snap; value
@@ -222,7 +222,7 @@ module String(X : sig val who : string end) = struct
         failwith "not a polymorphic variant"
     end
 
-    type 'a t = 'a Bin.t with bin_io
+    type 'a t = 'a Bin.t [@@deriving bin_io]
 
     let snapshot value =
       let snap, via_string = Saving.snap () in
@@ -235,7 +235,7 @@ module String(X : sig val who : string end) = struct
 
   end
 
-  include Binable.Of_binable (Handle) (struct
+  include Binable.Stable.Of_binable.V1 (Handle) (struct
     type nonrec t = t
     let to_binable = Saving.to_handle
     let of_binable = Loading.to_shared

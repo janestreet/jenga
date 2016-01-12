@@ -6,8 +6,9 @@ open Core.Std
 let toplevel_group =
   [ "build", Jenga_lib.Cmd_build.command ~toplevel:false
   ; "cat-api", Jenga_lib.Cmd_cat_api.command
-  ; "monitor", Jenga_lib.Cmd_monitor.command
   ; "db", Jenga_lib.Cmd_db.command
+  ; "monitor", Jenga_lib.Cmd_monitor.command
+  ; "stop", Jenga_lib.Cmd_stop.command
   ]
 ;;
 

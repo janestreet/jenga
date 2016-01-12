@@ -3,7 +3,7 @@ open Core.Std
 
 module Action = struct
 
-  type t = Job.t with sexp_of
+  type t = Job.t [@@deriving sexp_of]
 
   let dir t = Job.dir t
 
@@ -38,7 +38,7 @@ module Trip = struct
     targets: Path.t list;
     deps : Path.t list;
     action : Action.t;
-  } with sexp_of
+  } [@@deriving sexp_of]
   let to_string t = Sexp.to_string (sexp_of_t t)
 end
 

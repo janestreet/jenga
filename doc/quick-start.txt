@@ -3,7 +3,7 @@ Jenga quick-start guide.
 
 Jenga is a general purpose build system. The jenga executable is used
 to run commands to generate target files from source files, based on a
-rules written in jengaroot.ml A single jenga instance is used to
+rules written in jengaroot.ml. A single jenga instance is used to
 perform the build for an entire directory tree of files.
 
 If you are a developer using jenga but working in a build framework

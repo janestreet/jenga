@@ -9,17 +9,17 @@ include Dep_type
 module Glob = Fs.Glob
 
 let return x = Return x
-let bind t f = Bind (t,f)
-let map t f = bind t (fun x -> return (f x))
+let bind t f = Bind (t, f)
+let map t f = Map (t, f)
 let all ts = All ts
-let cutoff ~equal x = Cutoff (equal,x)
+let cutoff ~equal x = Cutoff (equal, x)
 let deferred t = Deferred t
 let action_stdout t = Action_stdout t
 let alias x = Alias x
 let path p = Path p
 let source_if_it_exists p = Source_if_it_exists p
 let contents p = Contents p
-
+let group_dependencies t = Group_dependencies t
 let ( *>>| ) = map
 
 let all_unit ts = all ts *>>| fun (_:unit list) -> ()
@@ -68,4 +68,5 @@ let glob_change g = Glob_change g
 
 module List = struct
   let concat_map xs ~f = map (all (List.map xs ~f)) List.concat
+  let concat xs = map (all xs) List.concat
 end

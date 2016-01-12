@@ -1,4 +1,0 @@
-(preprocessor
- ((name pa_bench)
-  (libraries (pa_ounit pa_type_conv))
-  (preprocess (((command "camlp4orf") (List (pa_bench)))))))

@@ -1,6 +1,6 @@
 
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 
 let empty_string = function "" -> true | _ -> false
 
@@ -32,7 +32,7 @@ module Rel = struct
 
   module Inner : sig
 
-    type t with sexp, bin_io, compare
+    type t [@@deriving sexp, bin_io, compare]
     include Hashable_binable with type t := t
     include Comparable_binable with type t := t
     val unpack : t -> string
@@ -105,46 +105,46 @@ module Rel = struct
     | "" -> []
     | s -> String.split ~on:'/' s
 
-  TEST_UNIT "parts 1" =
-    <:test_result< string list >>
+  let%test_unit "parts 1" =
+    [%test_result: string list]
       ~expect:[]
       (parts (create "."))
 
-  TEST_UNIT "parts 2" =
-    <:test_result< string list >>
+  let%test_unit "parts 2" =
+    [%test_result: string list]
       ~expect:["foo"]
       (parts (create "foo"))
 
-  TEST_UNIT "parts 3" =
-    <:test_result< string list >>
+  let%test_unit "parts 3" =
+    [%test_result: string list]
       ~expect:["foo"; "bar"]
       (parts (create "foo/bar"))
 
-  TEST_UNIT "parts 4" =
-    <:test_result< string list >>
+  let%test_unit "parts 4" =
+    [%test_result: string list]
       ~expect:["bar"]
       (parts (create "foo/../bar"))
 
   let reach_from ~dir path =
     reach_from_common ~dir:(parts dir) (parts path)
 
-  TEST_UNIT "reach_from 1" =
-    <:test_result< string >>
+  let%test_unit "reach_from 1" =
+    [%test_result: string]
       ~expect:"../baz"
       (reach_from ~dir:(create "foo/bar") (create "foo/baz"))
 
-  TEST_UNIT "reach_from 2" =
-    <:test_result< string >>
+  let%test_unit "reach_from 2" =
+    [%test_result: string]
       ~expect:"."
       (reach_from ~dir:(create "foo/bar") (create "foo/bar"))
 
-  TEST_UNIT "reach_from 2" =
-    <:test_result< string >>
+  let%test_unit "reach_from 2" =
+    [%test_result: string]
       ~expect:"./baz"
       (reach_from ~dir:(create "foo/bar") (create "foo/bar/baz"))
 
-  TEST_UNIT "reach_from 3" =
-    <:test_result< string >>
+  let%test_unit "reach_from 3" =
+    [%test_result: string]
       ~expect:"../../bar/foo"
       (reach_from ~dir:(create "foo/bar") (create "bar/foo"))
 
@@ -160,7 +160,7 @@ end
 
 module Abs : sig
 
-  type t with sexp_of, compare, bin_io
+  type t [@@deriving sexp_of, compare, bin_io]
   val create : string -> t
   val to_string : t -> string
   val relative_seg : dir:t -> string -> t
@@ -209,16 +209,16 @@ end = struct
     then failwithf "Path.Abs.create, doesn't start with / - %s" s ()
     else of_parts_relative ~dir:unix_root (String.split s ~on:'/')
 
-  TEST_UNIT "create 1" =
-    <:test_result< string >>
+  let%test_unit "create 1" =
+    [%test_result: string]
       ~expect:"/"
       (IPS.extern (create "/"))
-  TEST_UNIT "create 2" =
-    <:test_result< string >>
+  let%test_unit "create 2" =
+    [%test_result: string]
       ~expect:"/"
       (IPS.extern (create "/.."))
-  TEST_UNIT "create 3" =
-    <:test_result< string >>
+  let%test_unit "create 3" =
+    [%test_result: string]
       ~expect:"/foo"
       (IPS.extern (create "/./foo/bar/.."))
 
@@ -250,16 +250,16 @@ end = struct
   let test_descendant a b r1 r2 =
     let b1 = Option.is_some r1 in
     let b2 = Option.is_some r2 in
-    <:test_result< bool >>
+    [%test_result: bool]
       ~expect:b1
       (is_descendant ~dir:a b);
-    <:test_result< bool >>
+    [%test_result: bool]
       ~expect:b2
       (is_descendant ~dir:b a);
-    <:test_result< string option >>
+    [%test_result: string option]
       ~expect:r1
       (reach_descendant ~dir:a b);
-    <:test_result< string option >>
+    [%test_result: string option]
       ~expect:r2
       (reach_descendant ~dir:b a)
 
@@ -272,19 +272,19 @@ end = struct
   let test_unrelated a b =
     test_descendant a b None None
 
-  TEST_UNIT "is_descendant 1" =
+  let%test_unit "is_descendant 1" =
     test_gt unix_root (create "/foo/bar") "foo/bar"
 
-  TEST_UNIT "is_descendant 2" =
+  let%test_unit "is_descendant 2" =
     test_gt (create "/foo") (create "/foo/bar") "bar"
 
-  TEST_UNIT "is_descendant 3" =
+  let%test_unit "is_descendant 3" =
     test_eq (create "/foo/bar") (create "/foo/bar")
 
-  TEST_UNIT "is_descendant 4" =
+  let%test_unit "is_descendant 4" =
     test_unrelated (create "/foo/bar") (create "/foo/baz")
 
-  TEST_UNIT "is_descendant 5" =
+  let%test_unit "is_descendant 5" =
     test_eq (create "/foo/../bar") (create "/bar")
 
 end
@@ -293,7 +293,7 @@ module Repo = struct
 
   let r = ref None
 
-  let set_root ~dir =
+  let set_root dir =
     match !r with
     | Some _ -> failwith "Path.Root.set - called more than once"
     | None -> r := Some dir

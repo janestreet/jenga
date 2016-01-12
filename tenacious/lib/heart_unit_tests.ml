@@ -5,7 +5,7 @@ open Async.Std
 module Heart = Heart
 module Glass = Heart.Glass
 
-TEST_UNIT = (
+let%test_unit _ = (
   (* Check [when_broken] has strong reference to the heart being watched *)
   let g1 = Glass.create () in
   let g2 = Glass.create () in
@@ -52,7 +52,7 @@ module Memory = struct
 
 end
 
-TEST_UNIT = (
+let%test_unit _ = (
   let h1 = Heart.watch (Heart.Glass.create ()) in
   let h2 = Heart.watch (Heart.Glass.create ()) in
   let job () =

@@ -4,7 +4,7 @@ open Core.Std
 module T = struct
   type t = {
     dir : Path.Rel.t;
-  } with sexp, bin_io, compare
+  } [@@deriving sexp, bin_io, compare]
   let hash = Hashtbl.hash
 end
 

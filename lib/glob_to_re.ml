@@ -80,10 +80,10 @@ let convert_unanchored s =
     failwith "unclosed { in glob";
   Buffer.contents res
 
-TEST_UNIT =
+let%test_unit _ =
   assert (convert_unanchored "{a,b}" = "\\(a\\|b\\)")
 
-TEST_UNIT =
+let%test_unit _ =
   assert (
     convert_unanchored "{*.[ch],*.cpp,*.hh}"
     = "\\([^/]*\\.[ch]\\|[^/]*\\.cpp\\|[^/]*\\.hh\\)")

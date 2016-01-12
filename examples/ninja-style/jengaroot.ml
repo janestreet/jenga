@@ -43,7 +43,7 @@ end = struct
   let ninja_root_dir = dirname build_dot_ninja
 
   let sh command_string =
-    J.Action.process ~dir:ninja_root_dir ~prog:"sh" ~args:["-c"; command_string]
+    J.Action.process ~dir:ninja_root_dir ~prog:"sh" ~args:["-c"; command_string] ()
 
   module Pos : sig (* line/column number positions, for accurate error messages *)
 

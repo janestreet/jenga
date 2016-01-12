@@ -1,4 +1,0 @@
-(library
- ((name async_unix)
-  (libraries (core async_kernel))
-  (preprocess (((pps (JANE pa_macro)) All)))))

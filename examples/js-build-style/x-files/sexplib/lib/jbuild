@@ -1,7 +1,0 @@
-(library
- ((name sexplib)
-  (ocamllex (lexer))
-  (ocamlyacc (parser parser_with_layout))
-  (preprocess 
-   (((command "PA_CPP") (List (pre_sexp)))
-    ((pps (pa_macro)) (List (conv)))))))

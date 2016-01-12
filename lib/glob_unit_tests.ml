@@ -15,7 +15,7 @@ let test_glob glob good bad =
 (* globs support the following: *)
 
 (* escaping any character: *)
-TEST_UNIT =
+let%test_unit _ =
   List.iter (List.init 256 ~f:(fun i -> Option.value_exn (Char.of_int i)))
     ~f:(fun char ->
       let escaped = sprintf "\\%cq" char in
@@ -23,68 +23,68 @@ TEST_UNIT =
       test_glob escaped [literal] [""; escaped])
 
 (* choosing between alternatives with '{' and ',' *)
-TEST_UNIT =
+let%test_unit _ =
   test_glob "{a,b}" ["a"; "b"] [""; "c"; "ab"; "ba"; "bc"]
 
 (* sequence of alternations *)
-TEST_UNIT =
+let%test_unit _ =
   test_glob "{a,b}{c,d}" ["ac"; "ad"; "bc"; "bd"] [""; "a"; "aa"; "ab"; "cb"; "cd"; "abc"]
 
 (* nested alternations *)
-TEST_UNIT =
-  test_glob "{a{b,c},d}" ["ab"; "ac"; "d"] [""; "a"; "b"; "c"; "ad"; "bd"; "abc"; "abd"];
+let%test_unit _ =
+  test_glob "{a{b,c},d}" ["ab"; "ac"; "d"] [""; "a"; "b"; "c"; "ad"; "bd"; "abc"; "abd"]
 
 (* wildcard filename character *)
-TEST_UNIT =
+let%test_unit _ =
   test_glob "x?z"
     ["xyz"; "x?z"]
     ["xz"; "x/z"]
 
 (* wildcard filename *)
-TEST_UNIT =
+let%test_unit _ =
   test_glob "a/*/b"
     ["a/foo/b"; "a/*/b"]
     ["aa/foo/b"; "a/foo/bb"; "afoob"; "a/foo/bar/b"]
 
 (* wildcard partial filename *)
-TEST_UNIT =
+let%test_unit _ =
   test_glob "a*b"
     ["afoob"; "ab"]
     ["a/foo/b"; "afo/ob"; ""]
 
-TEST_UNIT =
+let%test_unit _ =
   test_glob "*"
     ["foo"]
     [".foo"; ""]
 
-TEST_UNIT =
+let%test_unit _ =
   test_glob "bar/*"
     ["bar/foo"; "bar/.foo"; "bar/"]
     []
 
-TEST_UNIT =
+let%test_unit _ =
   test_glob "a/*/c"
     ["a//c"; "a/b/c"]
     []
 
 (* wildcard path *)
-TEST_UNIT =
+let%test_unit _ =
   test_glob "a/**/b"
     ["a/foo/bar/b"; "a/foo/b"; "a//b"]
     ["ab"; "aa/foo/b"; "a/foo/bb"; "afoob"]
 
 (* character classes *)
-TEST_UNIT =
+let%test_unit _ =
   test_glob "[a-z]"
     ["a"; "b"; "c"; "d"; "z"]
     ["."; "A"; ""; "-"; "aa"]
 
-TEST_UNIT =
+let%test_unit _ =
   test_glob "[!^]"
     ["a"; "!"]
     ["^"]
 
-TEST_UNIT =
+let%test_unit _ =
   test_glob "[!!]"
     ["a"; "^"]
     ["!"]
@@ -94,17 +94,17 @@ TEST_UNIT =
     ["^"]
     ["a"; "!"; "\\"] *)
 
-TEST_UNIT =
+let%test_unit _ =
   test_glob "[!a-z-]"
     ["1"; "."]
     ["a"; "c"; "-"]
 
-TEST_UNIT =
+let%test_unit _ =
   test_glob "[-a-z]"
     ["a"; "c"; "-"]
     ["1"; "."]
 
-TEST_UNIT =
+let%test_unit _ =
   test_glob "[]!a-z-]"
     ["a"; "c"; "-"; "]"; "!"]
     ["1"; "."; ""]

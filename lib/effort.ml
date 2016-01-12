@@ -1,6 +1,6 @@
 
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 
 module Counter = struct
 
@@ -23,7 +23,7 @@ module Counter = struct
     type t = {
       name : string;
       start : int;
-    } with bin_io
+    } [@@deriving bin_io]
 
     let to_string t =
       String.concat [
@@ -63,7 +63,7 @@ module Counts = struct
 
   type t = {
     counts : Counter.Counts.t list;
-  } with bin_io
+  } [@@deriving bin_io]
 
   let to_string ?limit t =
     let restricted =

@@ -69,14 +69,14 @@ let rec all_interleavings ls = match take_one_head ls with
   | l -> List.bind l (fun (h, ls) ->
     List.map (all_interleavings ls) ~f:(fun l -> h :: l))
 
-TEST_UNIT "all_interleavings" =
-  <:test_result<int list list>>
+let%test_unit "all_interleavings" =
+  [%test_result: int list list]
     (all_interleavings [[1;2];[3;4]])
     ~expect:[[1;2;3;4];[1;3;2;4];[1;3;4;2];[3;1;2;4];[3;1;4;2];[3;4;1;2]]
 
 (* This test covers all the small non-concurrent tests including double-detach.
    So we might remove some of the tests below... but lets have both. *)
-TEST_UNIT "all_small_tests" = (
+let%test_unit "all_small_tests" = (
   List.iter [0;1;2;3]
     ~f:(fun length ->
       List.iter
@@ -98,18 +98,18 @@ TEST_UNIT "all_small_tests" = (
 )
 
 (* zero elements *)
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   assert (ring_to_list r = [])
 )
 
 (* one element *)
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   assert (ring_to_list r = [1])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   Ring.detach e1;
@@ -118,34 +118,34 @@ TEST_UNIT = (
 
 
 (* two elements *)
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
   assert (ring_to_list r = [1;2])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
   Ring.detach e1;
   assert (ring_to_list r = [2])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   Ring.detach e1;
   let _e2 = Ring.add r 2 in
   assert (ring_to_list r = [2])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
   Ring.detach e2;
   assert (ring_to_list r = [1])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -153,7 +153,7 @@ TEST_UNIT = (
   Ring.detach e2;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   Ring.detach e1;
@@ -161,7 +161,7 @@ TEST_UNIT = (
   Ring.detach e2;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -171,14 +171,14 @@ TEST_UNIT = (
 )
 
 (* three elements *)
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
   let _e3 = Ring.add r 3 in
   assert (ring_to_list r = [1;2;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   Ring.detach e1;
@@ -186,7 +186,7 @@ TEST_UNIT = (
   let _e3 = Ring.add r 3 in
   assert (ring_to_list r = [2;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -194,7 +194,7 @@ TEST_UNIT = (
   let _e3 = Ring.add r 3 in
   assert (ring_to_list r = [2;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -202,7 +202,7 @@ TEST_UNIT = (
   Ring.detach e1;
   assert (ring_to_list r = [2;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -210,7 +210,7 @@ TEST_UNIT = (
   let _e3 = Ring.add r 3 in
   assert (ring_to_list r = [1;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -218,7 +218,7 @@ TEST_UNIT = (
   Ring.detach e2;
   assert (ring_to_list r = [1;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -234,7 +234,7 @@ let check_ring_to_list_and_iter ring ~f expect_before expect_during expect_after
   (ring_to_list_and_iter ring ~f = expect_during) &&
   (ring_to_list ring = expect_after)
 
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -244,7 +244,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;2;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   (* First testcase which fails on a buggy [detach] which changes [t.next] so the
      [detach]ed element no longer points into the ring *)
   let r = Ring.create() in
@@ -257,7 +257,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [2;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -268,7 +268,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [2;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -279,7 +279,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [2;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -290,7 +290,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;3] [1;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -301,7 +301,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -312,7 +312,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -323,7 +323,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [1;2])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -334,7 +334,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [1;2])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -345,7 +345,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;2])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -356,7 +356,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -367,7 +367,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -378,7 +378,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -389,7 +389,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -400,7 +400,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1] [1])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -411,7 +411,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -422,7 +422,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -433,7 +433,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [2])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -444,7 +444,7 @@ TEST_UNIT = (
   in
   assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [2])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -458,20 +458,20 @@ TEST_UNIT = (
 
 (* [detach] during [add] *)
 
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = add_detaching r 2 [e1] in
   assert (ring_to_list r = [2])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = add_detaching r 2 [e1] in
   let _e3 = Ring.add r 3 in
   assert (ring_to_list r = [2;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   (* This is the simplest test case which fails on a buggy [add] which fails to (re)assign
      t'.prev after the potential GC which detaches the origin [t.prev] *)
   let r = Ring.create() in
@@ -480,28 +480,28 @@ TEST_UNIT = (
   Ring.detach e2;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
   let _e3 = add_detaching r 3 [e1] in
   assert (ring_to_list r = [2;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
   let _e3 = add_detaching r 3 [e2] in
   assert (ring_to_list r = [1;3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
   let _e3 = add_detaching r 3 [e1;e2] in
   assert (ring_to_list r = [3])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -509,7 +509,7 @@ TEST_UNIT = (
   let _e4 = Ring.add r 4 in
   assert (ring_to_list r = [2;3;4])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -517,7 +517,7 @@ TEST_UNIT = (
   let _e4 = Ring.add r 4 in
   assert (ring_to_list r = [1;3;4])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -525,7 +525,7 @@ TEST_UNIT = (
   let _e4 = Ring.add r 4 in
   assert (ring_to_list r = [3;4])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -533,7 +533,7 @@ TEST_UNIT = (
   Ring.detach e3;
   assert (ring_to_list r = [2])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -541,7 +541,7 @@ TEST_UNIT = (
   Ring.detach e3;
   assert (ring_to_list r = [1])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -552,14 +552,14 @@ TEST_UNIT = (
 
 (* double detach *)
 
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   Ring.detach e1;
   Ring.detach e1;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
@@ -567,7 +567,7 @@ TEST_UNIT = (
   Ring.detach e1;
   assert (ring_to_list r = [2])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -575,7 +575,7 @@ TEST_UNIT = (
   Ring.detach e2;
   assert (ring_to_list r = [1])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -584,7 +584,7 @@ TEST_UNIT = (
   Ring.detach e2;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   (* This test break if the code fails to guard against double [detach]ing. *)
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
@@ -594,7 +594,7 @@ TEST_UNIT = (
   Ring.detach e1; (* Must not accidentally re-attach e2 ! *)
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -603,7 +603,7 @@ TEST_UNIT = (
   Ring.detach e1;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -612,7 +612,7 @@ TEST_UNIT = (
   Ring.detach e2;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -621,7 +621,7 @@ TEST_UNIT = (
   Ring.detach e2;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -631,7 +631,7 @@ TEST_UNIT = (
   assert (ring_to_list r = [])
 )
 
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -641,7 +641,7 @@ TEST_UNIT = (
   Ring.detach e2;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -651,7 +651,7 @@ TEST_UNIT = (
   Ring.detach e2;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -661,7 +661,7 @@ TEST_UNIT = (
   Ring.detach e1;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -671,7 +671,7 @@ TEST_UNIT = (
   Ring.detach e2;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
@@ -681,7 +681,7 @@ TEST_UNIT = (
   Ring.detach e1;
   assert (ring_to_list r = [])
 )
-TEST_UNIT = (
+let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in

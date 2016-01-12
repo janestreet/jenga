@@ -78,16 +78,13 @@ module type S = sig
       it will delay heart breakage for the time it takes to re-compute the value so
       evaluating a [reify (cutoff x)] might give you stale values even when [reify x]
       wouldn't.
-      Consider using [protecting_cutoffs] to protect against this effect.
+
+      We have had a solution in the form of [val protecting_cutoffs : 'a t -> 'a t]
+      that would only return a value after waiting for all cutoffs to finish.
+      We removed the function right after [f322aafe57c1] because it was unused
+      and was preventing an optimization for [Heart.or_broken].
   *)
   val cutoff : equal:('a -> 'a -> bool) -> 'a t -> 'a t
-
-  (** Provides protection from "stale values
-      introduced by cutoffs" for the duration of a single execution.
-      The heart returned does not get the same protection: it will stay valid while cutoff
-      nodes are considering whether to break their hearts.
-  *)
-  val protecting_cutoffs : 'a t -> 'a t
 
   (**
      [race] non-deterministically chooses the first computation to succeed,

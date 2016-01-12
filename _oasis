@@ -1,163 +1,143 @@
-OASISFormat:      0.3
-OCamlVersion:     >= 4.00.0
-FindlibVersion:   >= 1.3.2
-Name:             jenga
-Version:          113.00.00
-Synopsis:         Build system
-Authors:          Jane Street Group, LLC <opensource@janestreet.com>
-Copyrights:       (C) 2013 Jane Street Group LLC <opensource@janestreet.com>
-Maintainers:      Jane Street Group, LLC <opensource@janestreet.com>
-License:          Apache-2.0
-LicenseFile:      LICENSE.txt
-Homepage:         https://github.com/janestreet/jenga
-Plugins:          StdFiles (0.3), DevFiles (0.3), META (0.3)
-XStdFilesAUTHORS: false
-XStdFilesREADME:  false
-BuildTools:       ocamlbuild, camlp4o
+OASISFormat:           0.4
+OCamlVersion:          >= 4.02.3
+FindlibVersion:        >= 1.3.2
+Name:                  jenga
+Version:               113.24.00
+Synopsis:              Build system
+Authors:               Jane Street Group, LLC <opensource@janestreet.com>
+Copyrights:            (C) 2013-2016 Jane Street Group LLC <opensource@janestreet.com>
+Maintainers:           Jane Street Group, LLC <opensource@janestreet.com>
+License:               Apache-2.0
+LicenseFile:           LICENSE.txt
+Homepage:              https://github.com/janestreet/jenga
+Plugins:               StdFiles (0.3), DevFiles (0.3), META (0.3)
+XStdFilesAUTHORS:      false
+XStdFilesREADME:       false
+BuildTools:            ocamlbuild
+AlphaFeatures:         ocamlbuild_more_args
+XOCamlbuildPluginTags: package(ppx_driver.ocamlbuild)
+FilesAB:               META.ab
 
 Library jenga_lib
-  Path:               lib
-  FindlibName:        jenga
-  Pack:               true
-  Modules:            Action,
-                      Action_sandbox,
-                      Alias,
-                      Api,
-                      Artifact_policy,
-                      Build,
-                      Cat_api,
-                      Cmd_build,
-                      Cmd_cat_api,
-                      Cmd_db,
-                      Cmd_monitor,
-                      Config,
-                      Db,
-                      Dep,
-                      Dep_type,
-                      Discovered_graph,
-                      Effort,
-                      Env,
-                      Error_reason_type,
-                      Exit_code,
-                      File_access,
-                      Finish_time_estimator,
-                      Forker,
-                      Fs,
-                      Gen_key,
-                      Glob_unit_tests,
-                      Glob_to_re,
-                      Goal,
-                      Interning,
-                      Jenga_options,
-                      Jenga_root_interface,
-                      Job,
-                      Load_root,
-                      Locking,
-                      Message,
-                      Misc,
-                      Monomorphic_mutable_graph,
-                      Path,
-                      Pattern,
-                      Persist,
-                      Progress,
-                      Quit,
-                      Reason,
-                      Reflect,
-                      Reflected,
-                      Rpc_intf,
-                      Rpc_server,
-                      Rule,
-                      Ruleset,
-                      Run,
-                      Save_description,
-                      Server_lock,
-                      Scheme,
-                      Scheme_type,
-                      Special_paths,
-                      System,
-                      Tenacious
-  CSources:           digest_stubs.c
-  BuildDepends:       async,
-                      async_inotify,
-                      async_parallel,
-                      async_shell,
-                      bin_prot,
-                      bin_prot.syntax,
-                      comparelib,
-                      comparelib.syntax,
-                      custom_printf,
-                      custom_printf.syntax,
-                      core,
-                      core_extended,
-                      fieldslib,
-                      fieldslib.syntax,
-                      ocaml_plugin,
-                      pa_ounit,
-                      pa_ounit.syntax,
-                      pcre,
-                      sexplib,
-                      sexplib.syntax,
-                      str,
-                      threads,
-                      jenga.tenacious
-  XMETARequires:      sexplib,
-                      fieldslib,
-                      comparelib,
-                      core,
-                      core_extended,
-                      async,
-                      async_shell,
-                      async_inotify,
-                      async_parallel,
-                      pa_ounit,
-                      pcre,
-                      ocaml_plugin,
-                      str,
-                      threads,
-                      jenga.tenacious
+  Path:         lib
+  Pack:         true
+  Modules:      Action,
+                Action_sandbox,
+                Alias,
+                Api,
+                Artifact_policy,
+                Build,
+                Cat_api,
+                Cmd_build,
+                Cmd_cat_api,
+                Cmd_db,
+                Cmd_monitor,
+                Cmd_stop,
+                Config,
+                Db,
+                Dep,
+                Dep_type,
+                Discovered_graph,
+                Effort,
+                Env,
+                Error_reason_type,
+                Exit_code,
+                File_access,
+                Finish_time_estimator,
+                Forker,
+                Fs,
+                Gen_key,
+                Glob_to_re,
+                Glob_unit_tests,
+                Goal,
+                Interning,
+                Jenga_options,
+                Jenga_root_interface,
+                Job,
+                Load_root,
+                Locking,
+                Message,
+                Misc,
+                Monomorphic_mutable_graph,
+                Path,
+                Pattern,
+                Persist,
+                Progress,
+                Quit,
+                Reason,
+                Reflect,
+                Reflected,
+                Rpc_intf,
+                Rpc_server,
+                Rule,
+                Ruleset,
+                Run,
+                Save_description,
+                Scheme,
+                Scheme_type,
+                Server_lock,
+                Special_paths,
+                System,
+                Tenacious
+  BuildDepends: async,
+                async_inotify,
+                async_parallel,
+                bin_prot,
+                core,
+                fieldslib,
+                ocaml_plugin,
+                ppx_assert.runtime-lib,
+                ppx_bench.runtime-lib,
+                ppx_expect.collector,
+                ppx_inline_test.runtime-lib,
+                re2,
+                sexplib,
+                str,
+                tenacious_lib,
+                typerep,
+                variantslib
+  CSources:     batched_mtimes_stubs.c,
+                digest_stubs.c
 
 Library tenacious_lib
-  Path:               tenacious/lib
-  FindlibParent:      jenga_lib
-  FindlibName:        tenacious
-  Pack:               true
-  Modules:            Dlist,
-                      Heart,
-                      Heart_intf,
-                      Heart_unit_tests,
-                      Ring,
-                      Ring_unit_tests,
-                      Tenacious,
-                      Tenacious_intf,
-                      Tenacious_unit_tests,
-                      Weak_ref
-  BuildDepends:       core,
-                      core.syntax,
-                      async,
-                      threads,
-                      pa_ounit,
-                      pa_ounit.syntax,
-                      pa_test,
-                      pa_structural_sexp.syntax,
-                      pa_test.syntax
-  XMETARequires:      core,
-                      async,
-                      threads,
-                      pa_ounit,
-                      pa_structural_sexp,
-                      pa_test
-
-Library jenga_archive
-  Path:               bin
-  Install:            false
-  BuildDepends:       jenga,type_conv,sexplib
-  Modules:            Jenga_archive_dummy
-  CSources:           jenga_archive.c
+  Path:         tenacious/lib
+  Pack:         true
+  Modules:      Dlist,
+                Heart,
+                Heart_intf,
+                Heart_unit_tests,
+                List_utils,
+                Ring,
+                Ring_unit_tests,
+                Tenacious,
+                Tenacious_intf,
+                Tenacious_unit_tests,
+                Weak_ref
+  BuildDepends: async,
+                bin_prot,
+                core,
+                fieldslib,
+                ppx_assert.runtime-lib,
+                ppx_bench.runtime-lib,
+                ppx_expect.collector,
+                ppx_inline_test.runtime-lib,
+                sexplib,
+                typerep,
+                variantslib
 
 Executable jenga
-  Path:               bin
-  MainIs:             jenga.ml
-  CompiledObject:     best
-  BuildDepends:       jenga,
-                      jenga_archive,
-                      threads
+  Path:           bin
+  MainIs:         jenga.ml
+  CompiledObject: best
+  BuildDepends:   async,
+                  bin_prot,
+                  core,
+                  fieldslib,
+                  jenga_lib,
+                  ppx_assert.runtime-lib,
+                  ppx_bench.runtime-lib,
+                  ppx_expect.collector,
+                  ppx_inline_test.runtime-lib,
+                  sexplib,
+                  typerep,
+                  variantslib

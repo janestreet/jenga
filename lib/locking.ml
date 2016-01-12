@@ -1,6 +1,7 @@
 
 open Core.Std
 open Async.Std
+open! Int.Replace_polymorphic_compare
 
 let with_acquire_release : (
   acquire:(unit-> 'lock Deferred.t) ->
@@ -82,8 +83,8 @@ module Dir_resource : sig
 end = struct
 
   module Mode = struct
-    type t = A | L with compare
-    let (=) x1 x2 = Int.(=) 0 (compare x1 x2)
+    type t = A | L [@@deriving compare]
+    let (=) x1 x2 = 0 = compare x1 x2
   end
 
   type state =
@@ -129,7 +130,7 @@ end = struct
       failwith "tried to release a free lock!"
     | Locked (mode, count, finish) ->
       let count = count - 1 in
-      if Int.(=) count 0
+      if count = 0
       then
         (t := Free; Ivar.fill finish ())
       else

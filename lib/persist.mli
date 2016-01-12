@@ -13,7 +13,7 @@ val disable_periodic_saving_and_save_now : t -> unit Deferred.t
 val re_enable_periodic_saving : t -> unit
 
 module Quality : sig
-  type t = [`initial | `good] with sexp_of
+  type t = [`initial | `good] [@@deriving sexp_of]
   val to_string : t -> string
 end
 

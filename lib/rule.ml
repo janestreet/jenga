@@ -9,7 +9,7 @@ module Target_rule = struct
     targets : Path.Rel.t list;
     action_depends : Action.t Dep.t
   }
-  with fields
+  [@@deriving fields, sexp_of]
 
   let create ~targets action_depends =
     (* Sort targets on construction.
@@ -17,10 +17,10 @@ module Target_rule = struct
        which differ only in the order of their targets/deps.
     *)
     let targets = List.sort ~cmp:Path.Rel.compare targets in
-    {
-      targets;
-      action_depends;
-    }
+    match List.find_consecutive_duplicate targets ~equal:Path.Rel.equal with
+    | Some (path, _path2) ->
+      raise_s [%sexp "duplicate target in rule", (path : Path.Rel.t)]
+    | None -> { targets; action_depends }
 
   let head_target_and_rest t =
     match t.targets with
@@ -37,6 +37,7 @@ end
 type t =
 | Target of Target_rule.t
 | Alias of Alias.t * unit Dep.t
+[@@deriving sexp_of]
 
 let targets = function
   | Target tr -> Target_rule.targets tr
@@ -48,12 +49,15 @@ let default ~dir deps = alias (Alias.default ~dir) deps
 
 let create ~targets action_depends =
   match
-    List.partition_map targets ~f:(fun target -> match Path.case target with
-    | `absolute _ -> `Fst ()
-    | `relative p -> `Snd p)
+    List.partition_map targets ~f:(fun target ->
+      match Path.case target with
+      | `absolute abs -> `Fst abs
+      | `relative p -> `Snd p)
   with
-  | _::_,_ -> failwith "[Rule.create] called with absolute targets"
-  | [],targets ->
+  | (_ :: _ as abs), _ ->
+    raise_s [%sexp "[Rule.create] called with absolute targets",
+                              (abs : Path.Abs.t list)]
+  | [], targets ->
     Target (Target_rule.create ~targets action_depends)
 
 let simple ~targets ~deps ~action =

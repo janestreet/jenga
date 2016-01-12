@@ -70,6 +70,3 @@ let go config ~root_dir progress =
   if Config.no_server config (* jem will interpret port=0 to mean no server is running *)
   then Server_lock.lock_running_server ~root_dir ~port:0
   else really_go ~root_dir progress
-
-
-

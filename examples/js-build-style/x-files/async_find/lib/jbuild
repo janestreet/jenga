@@ -1,4 +1,0 @@
-(library
- ((name async_find)
-  (packed false)
-  (libraries (async))))

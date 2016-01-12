@@ -1,11 +1,11 @@
 
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 
 module T = struct
 
   type t = Literal of string | Glob of string | Regexp of string
-  with sexp, bin_io, compare
+  [@@deriving sexp, bin_io, compare]
 
   let hash = function
     | Literal s -> String.hash s

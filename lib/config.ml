@@ -1,6 +1,14 @@
 
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
+
+module Gc = struct
+  type t = {
+    minor_heap_size : int;
+    major_heap_increment : int;
+    space_overhead : int
+  }
+end
 
 type t = {
   j_number : int;
@@ -9,6 +17,7 @@ type t = {
   stop_on_first_error : bool;
   poll_forever : bool;
   verbose : bool;
+  show_memory_allocations : bool;
   show_actions_run : bool;
   show_actions_run_verbose : bool;
   show_checked : bool;
@@ -29,6 +38,9 @@ type t = {
   no_server : bool;
   demands : string list;
   no_notifiers : bool;
+  no_fs_triggers : bool;
   sandbox_actions : bool;
+  deprecated_camlp4 : bool;
   buildable_targets_fixpoint_max : int;
-} with fields
+  gc : Gc.t
+} [@@deriving fields]

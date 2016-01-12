@@ -1,4 +1,0 @@
-(library
- ((name ocaml_plugin)
-  (libraries (dynlink core async sexplib))
-  (c_names (ocaml_fake_archive))))

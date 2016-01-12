@@ -1,5 +1,5 @@
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 open Async.Std
 
 module Heart = Tenacious.Heart
@@ -122,18 +122,18 @@ end = struct
                   In_thread.run (fun () -> digest_fd fd))))
           |> Deferred.Or_error.map ~f:Caml.Digest.to_hex)))
 
-  TEST_UNIT =
+  let%test_unit _ =
     set 20;
     let open Core.Std in
     let cwd = Sys.getcwd () in
-    let file = Filename.concat cwd (Filename.basename _here_.pos_fname) in
+    let file = Filename.concat cwd (Filename.basename [%here].pos_fname) in
     let our_digest =
       Thread_safe.block_on_async_exn (fun () -> of_file (Path.absolute file) >>| ok_exn)
     in
     let actual_digest = Caml.Digest.to_hex (Caml.Digest.file file) in
-    <:test_result< string >> our_digest ~expect:actual_digest;
-    <:test_pred< string Or_error.t >> Result.is_error
-      (Thread_safe.block_on_async_exn (fun () -> of_file (Path.absolute cwd)));
+    [%test_result: string] our_digest ~expect:actual_digest;
+    [%test_pred: string Or_error.t] Result.is_error
+      (Thread_safe.block_on_async_exn (fun () -> of_file (Path.absolute cwd)))
   ;;
 
 end
@@ -349,9 +349,9 @@ end
 module Blind_watcher : sig
 
   type t
-  val create : unit -> t
+  val create : no_fs_triggers:bool -> unit -> t
 
-  val clear_watcher_cache : t -> Path.t -> unit
+  val clear_watcher_cache : t -> Path.t -> needed_for_correctness:bool -> unit
 
   val dont_watch_file_or_dir : t ->
     how:[`via_parent|`directly] ->
@@ -363,17 +363,20 @@ end = struct
   type t = {
     watching_via_parent : Glass.t Path.Table.t;
     watching_directly : Glass.t Path.Table.t;
+    no_fs_triggers : bool;
   }
 
-  let create () =
+  let create ~no_fs_triggers () =
     let watching_via_parent = Path.Table.create () in
     let watching_directly = Path.Table.create () in
-    let t = {watching_via_parent; watching_directly} in
+    let t = {watching_via_parent; watching_directly; no_fs_triggers} in
     t
 
-  let clear_watcher_cache t path =
-    break_cache_glass t.watching_via_parent path;
-    break_cache_glass t.watching_directly (Path.dirname path)
+  let clear_watcher_cache t path ~needed_for_correctness =
+    if needed_for_correctness || not (t.no_fs_triggers) then begin
+      break_cache_glass t.watching_via_parent path;
+      break_cache_glass t.watching_directly (Path.dirname path);
+    end
 
   let get_cache t ~how =
     match how with
@@ -404,6 +407,7 @@ module Watcher : sig
     nono: bool ->
     ignore:(Path.t -> bool) ->
     expect:(Path.t -> bool) ->
+    no_fs_triggers:bool ->
     t Deferred.t
 
   val watch_file_or_dir : t ->
@@ -411,7 +415,7 @@ module Watcher : sig
     Path.t ->
     Heart.t Or_error.t Deferred.t
 
-  val clear_watcher_cache : t -> Path.t -> unit
+  val clear_watcher_cache : t -> Path.t -> needed_for_correctness:bool -> unit
 
 end = struct
 
@@ -419,9 +423,11 @@ end = struct
   | Real of Real_watcher.t
   | Blind of Blind_watcher.t
 
-  let create ~nono ~ignore ~expect =
+  let create ~nono ~ignore ~expect ~no_fs_triggers =
     if nono
-    then return (Blind (Blind_watcher.create ()))
+    then return (Blind (Blind_watcher.create ~no_fs_triggers ()))
+    else if no_fs_triggers
+    then failwith "-no-fs-triggers in only valid with -no-notifiers"
     else Real_watcher.create ~ignore ~expect >>| fun w -> Real w
 
   let watch_file_or_dir t ~how path =
@@ -432,10 +438,10 @@ end = struct
   (* [clear_watcher_cache] - clears the cache to ensure the file will be stated
      again. Necessary when running without notifiers; sensible even with notifiers, to
      avoid relying on the delivery of inotify events. *)
-  let clear_watcher_cache t path =
+  let clear_watcher_cache t path ~needed_for_correctness =
     match t with
-    | Real w -> Real_watcher.clear_watcher_cache w path
-    | Blind w-> Blind_watcher.clear_watcher_cache w path
+    | Real w  -> Real_watcher.clear_watcher_cache w path
+    | Blind w -> Blind_watcher.clear_watcher_cache w path ~needed_for_correctness
 
 end
 
@@ -444,10 +450,10 @@ module Listing_result = struct
     | `does_not_exist
     | `not_a_dir
     | `listing of Listing.t
-  ] with compare, sexp
+  ] [@@deriving compare, sexp]
 
   include Comparable.Make(struct
-    type nonrec t = t with compare, sexp
+    type nonrec t = t [@@deriving compare, sexp]
   end)
 end
 
@@ -456,10 +462,10 @@ module Lstat_result = struct
   type t = [
   | `does_not_exist
   | `stats of Stats.t
-  ] with compare, sexp
+  ] [@@deriving compare, sexp]
 
   include Comparable.Make(struct
-    type nonrec t = t with compare, sexp
+    type nonrec t = t [@@deriving compare, sexp]
   end)
 end
 
@@ -473,10 +479,10 @@ module Inode_result = struct
   type t = [
   | `does_not_exist
   | `inode of (Kind.t * int * int)
-  ] with compare, sexp
+  ] [@@deriving compare, sexp]
 
   include Comparable.Make(struct
-    type nonrec t = t with compare, sexp
+    type nonrec t = t [@@deriving compare, sexp]
   end)
 end
 
@@ -502,7 +508,7 @@ end = struct
     { stat : Path.t -> Stat_result.t Or_error.t Tenacious.t
     ; list_dir : Path.t -> Listing_result.t Or_error.t Tenacious.t
     }
-  with fields
+  [@@deriving fields]
 
   let create watcher =
     let rec uncached_lstat path : Lstat_result.t Or_error.t Tenacious.t =
@@ -531,10 +537,10 @@ end = struct
                Deferred.return (Ok Heart.unbreakable))
             >>| function
             | Error err ->
-              unbreakable (Error (
+              Error (
                 Error.tag err
                   (sprintf "%S exists, but watcher set up failed"
-                     (Path.to_string path))))
+                     (Path.to_string path))), heart
             | Ok heart2 ->
               let heart = Heart.combine2 heart heart2 in
               (Ok res, heart))
@@ -796,7 +802,7 @@ module Glob = struct
         dir : Path.t;
         pat : Pattern.t;
         kinds : Kind.t list option;
-      } with sexp, bin_io, compare
+      } [@@deriving sexp, bin_io, compare]
       let hash = Hashtbl.hash
     end
     include T
@@ -975,7 +981,7 @@ module Fs : sig
   val watch_sync_file : t -> Path.t -> Heart.t Deferred.t
   val nono : t -> bool
 
-  val clear_watcher_cache : t -> Path.t -> unit
+  val clear_watcher_cache : t -> Path.t -> needed_for_correctness:bool -> unit
 
   val mtime_file : t -> file:Path.t -> Mtime.t option Tenacious.t
 
@@ -986,7 +992,7 @@ end = struct
     watcher : Watcher.t;
     memo : Memo.t;
     persist : Persist.t;
-  } with fields
+  } [@@deriving fields]
 
   let create config persist =
     let nono = not System.has_inotify || Config.no_notifiers config in
@@ -996,7 +1002,8 @@ end = struct
       | `relative rel -> Locking.is_action_running_for_path rel
       | `absolute abs -> String.is_prefix ~prefix:tmp_jenga (Path.Abs.to_string abs)
     in
-    Watcher.create ~nono ~ignore ~expect >>= fun watcher ->
+    Watcher.create ~nono ~ignore ~expect ~no_fs_triggers:config.no_fs_triggers
+    >>= fun watcher ->
     let memo = Memo.create watcher in
     let t = { nono; watcher; memo; persist; } in
     return t
@@ -1011,8 +1018,8 @@ end = struct
     Watcher.watch_file_or_dir t.watcher ~how:`via_parent path
     >>| ok_exn
 
-  let clear_watcher_cache t path =
-    Watcher.clear_watcher_cache t.watcher path
+  let clear_watcher_cache t path ~needed_for_correctness =
+    Watcher.clear_watcher_cache t.watcher path ~needed_for_correctness
 
   let mtime_file t ~file = Memo.mtime_file t.memo ~file
 
@@ -1026,10 +1033,38 @@ let ensure_directory (_:t) ~dir = (* why need t ? *)
     ensure_directory ~dir >>| unbreakable (* ?? *)
   )
 
-let mtime_file_right_now ~file =
-  stat ~follow_symlinks:true file >>| function
-  | `ok stats -> Some (Stats.mtime stats)
-  | `does_not_exist | `unknown_error _ -> None
+external caml_batched_mtimes : string list -> len:int -> float array = "caml_batched_mtimes"
+let caml_batched_mtimes l = caml_batched_mtimes l ~len:(List.length l)
+
+let%test_module _ = (module struct
+
+  let slow_caml_batched_mtimes_for_comparison l =
+    Array.of_list (List.map l ~f:(fun path -> (Core.Std.Unix.stat path).st_mtime))
+
+  let caml_batched_mtimes_with_same_error l =
+    try caml_batched_mtimes l
+    with Unix.Unix_error (a, b, c) ->
+      raise (Unix.Unix_error (a, b, sprintf "((filename %s))" c))
+
+  let compare l =
+    [%test_eq: float array Or_error.t]
+      (Or_error.try_with (fun () -> caml_batched_mtimes_with_same_error l))
+      (Or_error.try_with (fun () -> slow_caml_batched_mtimes_for_comparison l))
+
+  let%test_unit _ = compare ["fs.ml"; "build.ml"]
+  let%test_unit _ = compare ["fs.ml"; "not-a-file"]
+end)
+
+let mtime_files_right_now files =
+  let files_as_strings = List.map files ~f:Path.to_string in
+  In_thread.run (fun () ->
+    match caml_batched_mtimes files_as_strings with
+    | exception (Unix.Unix_error (_, _, file)) -> Error file
+    | mtimes -> Ok mtimes)
+  >>| Result.map ~f:(fun mtimes ->
+    List.mapi files ~f:(fun i file ->
+      Effort.incr lstat_counter;
+      file, Mtime.of_float mtimes.(i)))
 
 
 (*----------------------------------------------------------------------

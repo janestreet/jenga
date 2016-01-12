@@ -1,6 +1,14 @@
-# OASIS_START
-# OASIS_STOP
-<**/*.ml>: warn(-40)
+<**/*.ml{,i}>: warn(-40), no_alias_deps
+<**/*>: thread
+# This prevents the implicit addition of -ppx options by ocamlfind
+<**/*.ml{,i}>: predicate(ppx_driver)
+<lib/*.ml>: for-pack(Jenga_lib)
+<tenacious/lib/*.ml>: for-pack(Tenacious_lib)
+<bin/*.ml{,i}>: pp(ppx-jane -dump-ast)
+<lib/*.ml{,i}>: pp(ppx-jane -dump-ast -inline-test-lib jenga)
+<tenacious/lib/*.ml{,i}>: pp(ppx-jane -dump-ast -inline-test-lib jenga.tenacious)
 <**/*_standalone.native>: linkall
 <**/*.native> and (not <**/*_standalone.native>): link_fake_archive
 <lib/*>: ugly_hack_to_workaround_ocamlbuild_nightmare
+# OASIS_START
+# OASIS_STOP

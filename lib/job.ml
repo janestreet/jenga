@@ -1,6 +1,6 @@
 
 open Core.Std
-open! No_polymorphic_compare
+open! Int.Replace_polymorphic_compare
 open Async.Std
 
 include Db.Job
@@ -40,7 +40,11 @@ end
 exception Shutdown
 
 let run t ~config ~need ~putenv ~output =
-  let dir,prog,args = (dir t, prog t, args t) in
+  let dir = dir t
+  and prog = prog t
+  and args = args t
+  and ignore_stderr = ignore_stderr t
+  in
   let {Output.get_result;none=_} = output in
   let where = Path.to_string dir in
   let job_start =
@@ -60,7 +64,8 @@ let run t ~config ~need ~putenv ~output =
   | false ->
     let outcome =
       match outcome with
-      | `success when not (String.is_empty stderr) -> `error "has unexpected stderr"
+      | `success when not ignore_stderr && not (String.is_empty stderr) ->
+        `error "has unexpected stderr"
       | (`success | `error _) as outcome -> outcome
     in
     let duration = Time.diff (Time.now()) start_time in
@@ -80,3 +85,4 @@ let bracket t ~sh_prelude ~sh_postlude =
     ~dir:(Path.the_root)
     ~prog:"bash"
     ~args:[ "-c"; script ]
+    ~ignore_stderr:(ignore_stderr t)

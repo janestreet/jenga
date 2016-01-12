@@ -11,8 +11,8 @@ module Q : sig
   val shell_escape_list : string list -> string
 end
 
-module Job_start   : sig type t with bin_io end
-module Job_summary : sig type t with bin_io end
+module Job_start   : sig type t [@@deriving bin_io] end
+module Job_summary : sig type t [@@deriving bin_io] end
 
 val init_logging : Config.t -> log_filename:string -> unit
 
@@ -26,6 +26,11 @@ val unlogged : ('a, unit, string, unit) format4 -> 'a
 val transient : ('a, unit, string, unit) format4 -> 'a
 
 val clear_transient : unit -> unit
+
+(*_ used by jengraph *)
+val pretty_span       : Time.Span.t -> string
+val parse_pretty_span : string -> Time.Span.t
+val parse_build_measures_assoc_list : string -> (string * string) list option
 
 val job_started :
   need:string ->

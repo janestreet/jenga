@@ -9,8 +9,8 @@ exception Shutdown
    shell, such as "bash -c". *)
 
 type t = Db.Job.t
-with sexp_of, bin_io, compare
-val create : dir:Path.t -> prog:string -> args:string list -> t
+[@@deriving sexp_of, compare]
+val create : dir:Path.t -> prog:string -> args:string list -> ignore_stderr:bool -> t
 
 val bracket : t -> sh_prelude:string -> sh_postlude:string -> t
 

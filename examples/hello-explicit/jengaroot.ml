@@ -3,7 +3,7 @@ open Async.Std
 open Jenga_lib.Api
 
 let bash ~dir command =
-  Action.process ~dir ~prog:"bash" ~args:["-c"; command]
+  Action.process ~dir ~prog:"bash" ~args:["-c"; command] ()
 
 let scheme ~dir =
   Scheme.rules (

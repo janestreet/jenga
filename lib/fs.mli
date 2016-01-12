@@ -19,7 +19,7 @@ module Digest = Db.Digest
 module Kind = Db.Kind
 
 module Glob : sig (* glob specification *)
-  type t = Db.Glob.t with sexp, bin_io, compare
+  type t = Db.Glob.t [@@deriving sexp, compare]
   include Hashable with type t := t
   val dir : t -> Path.t
   val pattern : t -> Pattern.t
@@ -59,7 +59,7 @@ module Listing_result : sig
     | `does_not_exist
     | `not_a_dir
     | `listing of Listing.t
-  ] with compare, sexp
+  ] [@@deriving compare, sexp]
 end
 
 module Ensure_directory_result : sig
@@ -75,12 +75,13 @@ val ensure_directory : t -> dir:Path.t -> Ensure_directory_result.t Tenacious.t
 val lock_targets_and_mask_updates :
   t -> targets:Path.Rel.t list -> (unit -> 'a Deferred.t) -> 'a Deferred.t
 
-val clear_watcher_cache : t -> Path.t -> unit
+val clear_watcher_cache : t -> Path.t -> needed_for_correctness:bool -> unit
 
 module Mtime : sig
-  type t with compare
+  type t [@@deriving compare, sexp_of]
   val equal : t -> t -> bool
 end
 
 val mtime_file : t -> file:Path.t -> Mtime.t option Tenacious.t (* [None] - no file *)
-val mtime_file_right_now : file:Path.t -> Mtime.t option Deferred.t (* avoiding cache *)
+(* [mtime_files_right_now] avoids the cache. It batches stats for performance. *)
+val mtime_files_right_now : Path.t list -> ((Path.t * Mtime.t) list, string) Result.t Deferred.t

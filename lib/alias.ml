@@ -8,7 +8,7 @@ module T = struct
   type t = {
     dir : Path.Rel.t;
     name : string;
-  } with sexp, bin_io, compare
+  } [@@deriving sexp, bin_io, compare]
   let hash = Hashtbl.hash
 end
 

@@ -43,7 +43,7 @@ let cp_rule ~source ~target =
         ~args:[
           (Path.basename source);
           (Path.basename target);
-        ]
+        ] ()
     )
 
 (* N stages of compilation, from name.1 -> name.2 -> .. -> name.N
@@ -68,7 +68,7 @@ let link_files_by_concatenation ~sources ~target =
           sprintf "echo -n $(cat %s) > %s"
             (String.concat ~sep:" " (List.map sources ~f:Path.basename))
             (Path.basename target)
-        ]
+        ] ()
     )
 
 let name_of_path path =

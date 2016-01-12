@@ -24,6 +24,7 @@
 
 module Target_rule : sig
   type t
+  [@@deriving sexp_of]
   val create : targets:Path.Rel.t list -> Action.t Dep.t -> t
   val targets : t -> Path.Rel.t list
   val head_target : t -> Path.Rel.t
@@ -34,6 +35,7 @@ end
 type t =
 | Target of Target_rule.t
 | Alias of Alias.t * unit Dep.t
+[@@deriving sexp_of]
 
 val targets : t -> Path.Rel.t list
 

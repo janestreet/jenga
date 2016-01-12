@@ -1,3 +1,100 @@
+## 113.24.00
+
+- Restructure the code in a way that allows to build binaries that statically link jenga
+  with the rules.
+  This is useful because some debugging/profiling tools don't work in the presence of
+  dynamically loaded code very well.
+
+- Switch to PPX.
+
+- Change the gc info output by jenga so it shows heap size and top heap size, instead of
+  live and heap size. The live part is not super useful given how random it is. I have seen
+  cases where jenga was using 20GB during building and jenga reported a heap size of 13GB at
+  the end so the top heap size avoids being tricked.
+
+- First half of the fixes no packing: sharing the structures of dependencies, so they take
+  less space on disk (and in memory as well, when they are loaded from disk, but not really
+  when building from scratch given the way we will use them).
+
+  The sexp format also has sharing, because it would also blow up in size otherwise (this is
+  different from the interning of paths, where the interning saves a constant factor).  And
+  of course, it makes it possible to see the actual on-disk representation which is nice.
+
+  Also fix unhelpful error (contains no information) when the db can't be loaded.
+
+  Break the thing that avoids rerunning rules when the set of dependencies decreases. I
+  think it was never useful anyway.
+
+- Better error on duplicate targets in the same rule.
+
+- To prevent running more than one jenga in a repository, use a local
+  lock rather than an nfs one. We need a transition period though, so
+  for now we use both kinds of locks.
+  Building on nfs is slow, so I don't think there's any downside is not
+  supporting nfs this way. And maybe inotify doesn't work. The upside is
+  that we don't step into Lock.Nfs bugs where if a process is
+  interrupted at the wrong time (when the two lock files are empty) the
+  locks won't be cleaned up automatically, forcing someone to get rid of
+  the lock files manually.
+
+  Also rename `.jenga/.jenga.*` to `.jenga/*`, because all these prefixes
+  are annoying.
+
+- Added a couple of options to turn off some part of jenga, which I used
+  to check how they impacted performance, and could still be handy
+  later.
+
+- Optionally display additional information about much allocation was done, at the end of
+  builds. Used it to try to improve memory usage of full tree builds without actually
+  doing full tree builds.
+
+- Make stat'ing faster.
+  Hash cons some tenacious that build mtimes map to avoid a huge
+  increase of memory use.
+
+- Got rid of noise when stopping jenga.
+
+- Some changes to the implementation of Tenacious to improve memory efficiency.
+
+  Includes the following changes:
+
+  - Remove `strong_refs` field of `Heart.fragile` type and instead insert links from
+    the `clients` `Ring.t` to its parent using `Ring.keep_alive`.
+
+  - Replace the `Ring.t` in the `triggers` field of `Hearts.fragile` with an
+    `Ivar.t` since all uses of `triggers` were producing their own equivalent
+    `IVar.t`s. Remove the functions broken by this because they were unused.
+
+  - Make the `Tenacious.t` type a concrete datatype, and optimize pure
+    computations by partially evaluating this datatype directly in the pure case.
+
+  - Rather than building separate `Heart.t`s for cancellation and the result,
+    split the cancellation heart into two hearts `cancel` and `dep` and then use
+    `dep` as the result heart. This means that a tenacious is cancelled if either
+    `cancel` or `dep` is broken, and it must return a heart representing the
+    validity of its result combined with `dep`.
+
+  Cursory benchmarking indicates a 23% improvement in maximum resident set size and a 10% improvment in (user) execution
+  time when building the lib directory from scratch.
+
+- Adding some `sexp_of` functions, since they're always missing and
+  it's a pain when debugging.
+
+- Adding direct support for `Dep.map`.
+  Even now that `Tenacious` is smarter, this still creates less `bind`s. Doesn't seem to make
+  much of a difference (perhaps 3-5% less allocation, on a null build of lib), but if
+  nothing else, it's much less surprising to think that `Dep.Map` becomes `Tenacious.Map`.
+
+- Added Dep.List.concat.
+
+- Make it possible to turn off the behavior where jenga rejects commands that output on
+  stderr.
+
+  It increases slightly the footprint of the in memory db, but the difference is tiny
+  compared to the rest of the memory usage.
+
+- Added a few tests about `Jenga_lib.Api.Reflect`
+
 ## 113.00.00
 
 - Treat output to stderr by an action as a failure.

@@ -3,9 +3,9 @@ open Core.Std
 open Async.Std
 
 module Jr_spec : sig
-  type t
-  val in_root_dir : t
-  val path : Path.t -> t
+
+  type t = In_root_dir | Path of Path.t | Env of (unit -> Env.t)
+
 end
 
 val build_forever :

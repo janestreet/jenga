@@ -1,4 +1,0 @@
-(library
- ((name async_inotify)
-  (packed false)
-  (libraries (core async async_find inotify_lib))))

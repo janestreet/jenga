@@ -20,5 +20,5 @@ type t =
   | Multiple_rules_for_path           of Path.Rel.t
   | Rule_failed_to_generate_targets   of Path.Rel.t list
   | Usercode_raised                   of Sexp.t
+  | Jengaroot_load_failed             of Sexp.t
   | Mtimes_changed                    of Path.t list
-with bin_io

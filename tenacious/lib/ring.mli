@@ -1,5 +1,5 @@
 
-(* A [Ring] is a bag structure; similar to [Core.Std.Bag].
+(** A [Ring] is a bag structure; similar to [Core.Std.Bag].
 
    The differences being:
    - An [elem] can be [detach]ed without explicit reference to the [Ring].
@@ -8,23 +8,27 @@
 type 'a t
 type 'a elem
 
-(* [ring = create ()]
+(** [ring = create ()]
    Returns a new empty ring *)
 val create : unit -> 'a t
 
-(* [elem = add ring x]
+(** [keep_alive ring v] makes [ring] keep [v] alive in the gc sense. Only one value can
+    be kept alive per ring. *)
+val keep_alive : 'a t -> 'b -> unit
+
+(** [elem = add ring x]
 
    Adds a value [x] to an existing [ring], returning [elem], which is a handle by which
    the value [x] can be removed from the ring *)
 val add : 'a t -> 'a -> 'a elem
 
-(* [detach elem]
+(** [detach elem]
 
    Detaches [elem] from the [ring] to which it was [add]ed. It is allowed for [detach] to
    be called repeatedly on the same [elem]; subsequent calls have no effect. *)
 val detach : 'a elem -> unit
 
-(* [iter ring ~f]
+(** [iter ring ~f]
 
    [f] is called in turn on each value [x] which has been [add]ed to [ring] (in the order
    the [x] were added) for those [x] whose associated [elem] has not been [detach]ed.
@@ -34,7 +38,7 @@ val detach : 'a elem -> unit
    the value [x] which is preemptively detached. *)
 val iter : 'a t -> f:('a -> unit) -> unit
 
-(* [add_calling t x ~f]
+(** [add_calling t x ~f]
 
    Behaves like [add t x] except [f] is called part way through the operation.  This is
    not intended to be useful! The purpose is to allow tests which check the behaviour of

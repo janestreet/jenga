@@ -4,7 +4,7 @@ open Async.Std
 
 module Heart = Tenacious.Heart
 
-let equal_using_compare compare = fun x1 x2 -> Int.(=) 0 (compare x1 x2)
+let equal_using_compare compare = fun x1 x2 -> 0 = compare x1 x2
 
 let exit_code_upon_control_c = ref Exit_code.incomplete
 
@@ -28,88 +28,37 @@ end
 
 module Proxy_map_op : sig
 
-  type t = Db.Proxy_map.t with sexp_of, bin_io, compare
+  type t = Db.Proxy_map.t [@@deriving compare]
 
   val empty  : t
   val single : Pm_key.t -> Proxy.t -> t
 
   type inconsistency = (Pm_key.t * Proxy.t list) list
-  with sexp_of
+  [@@deriving sexp_of]
 
-  val create_by_path : PPs.t -> [`ok of t | `err of inconsistency]
-  val merge : t list -> [ `ok of t | `err of inconsistency]
+  val create_by_path : PPs.t -> (t, inconsistency) Result.t
+  val merge : t list -> (t, inconsistency) Result.t
 
   val equal : t -> t -> bool
   val diff : before:t -> after:t -> Pm_key.t list option
-
-  val path_keys : t -> Path.Set.t
 
 end = struct
 
   include Db.Proxy_map
 
-  type inconsistency = (Pm_key.t * Proxy.t list) list with sexp_of
+  type inconsistency = (Pm_key.t * Proxy.t list) list [@@deriving sexp_of]
 
-  let empty = Pm_key.Map.empty
-  let single key proxy = Pm_key.Map.of_alist_exn [(key,proxy)]
-
-  let create xs =
-    match (Pm_key.Map.of_alist xs) with
-    | `Duplicate_key key ->
-      let proxys = List.filter_map xs ~f:(fun (key',proxy) ->
-        if (Pm_key.equal key key') then Some proxy else None
-      )
-      in
-      (* just find/report one inconsistency *)
-      let inconsistency = [ (key,proxys) ] in
-      `err inconsistency
-    | `Ok map -> `ok map
+  let create = of_alist
 
   let create_by_path xs =
     create (List.map xs ~f:(fun (path,v) -> (Pm_key.of_path path,v)))
 
-  let merge =
-    let rec loop acc_t = function
-      | [] -> `ok acc_t
-      | (key,proxy)::xs ->
-        match (Map.find acc_t key) with
-        | Some proxy' ->
-          if Proxy.equal proxy proxy'
-          then loop acc_t xs
-          else
-            (* just find/report one inconsistency *)
-            let inconsistency = [ (key,[proxy;proxy']) ] in
-            `err inconsistency
-        | None ->
-          loop (Map.add acc_t ~key:key ~data:proxy) xs
-    in
-    fun ts ->
-      let xs = List.concat_map ts ~f:(fun t -> Map.to_alist t) in
-      loop empty xs
-
   let equal = equal_using_compare compare
 
   let diff ~before ~after =
-    if equal before after then None
-    else
-      match (
-        Sequence.filter_map
-          (Map.symmetric_diff before after ~data_equal:Proxy.equal)
-          ~f:(fun (k,comp) ->
-            match comp with
-            | `Left _ -> None
-            | `Right _ -> Some k (* additional *)
-            | `Unequal _ -> Some k (* changed *)
-          )
-        |> Sequence.to_list
-      ) with
-      | [] -> None (* deps only went away, which is not regarded as a difference *)
-      | _::_ as xs -> Some xs
-
-  let path_keys t =
-    Path.Set.of_list (
-      List.filter_map (Pm_key.Map.keys t) ~f:Pm_key.to_path_opt
-    )
+    match Db.Proxy_map.equal_or_witness before after with
+    | Ok () -> None
+    | Error l -> Some l
 
 end
 
@@ -243,6 +192,8 @@ module Builder : sig (* layer error monad within tenacious monad *)
 
   val uncancellable : 'a t -> 'a t
 
+  val bind_result : 'a t -> ('a -> ('b, Reason.t) Result.t) -> 'b t
+
 end = struct
 
   type 'a t = ('a, Problem.t) Tenacious.Result.t
@@ -326,12 +277,19 @@ end = struct
       | [`a a; `b b] -> (a,b)
       | _ -> assert false
 
+  let bind_result t f = Tenacious.map t ~f:(function
+    | Error _ as e -> e
+    | Ok v ->
+      match f v with
+      | Ok _ as ok -> ok
+      | Error reason -> Error (Problem.create reason))
+
 end
 let _ = Builder.(wrap,expose)
-
 let return   = Builder.return
 let ( *>>| ) = Builder.( *>>| )
 let ( *>>= ) = Builder.bind
+let ( *>>|= ) = Builder.bind_result
 let error    = Builder.error
 
 let build_all_in_sequence xs ~f = (* stopping on first error *)
@@ -363,7 +321,7 @@ module RR = struct
   | Deps_have_changed               of Pm_key.t list
   | Targets_missing                 of Path.Rel.t list
   | Targets_not_as_expected         of Path.Rel.t list
-  with sexp_of
+  [@@deriving sexp_of]
 
   (*let to_string t = Sexp.to_string (sexp_of_t t)*)
 
@@ -388,7 +346,7 @@ end
 module Fixpoint_iter = struct
   module T = struct
     type t = Iter of int | Star
-    with sexp,compare
+    [@@deriving sexp, compare]
     let hash = Hashtbl.hash
   end
   include T
@@ -407,7 +365,7 @@ module Dep_scheme_key = struct
     type t = {
       dep_u : int;
       fixpoint_iter : Fixpoint_iter.t;
-    } with sexp,compare
+    } [@@deriving sexp, compare]
     let hash = Hashtbl.hash
   end
   include T
@@ -451,9 +409,8 @@ end
 
 module Jr_spec = struct
 
-  type t = In_root_dir | Path of Path.t
-  let in_root_dir = In_root_dir
-  let path x = Path x
+  type t = In_root_dir | Path of Path.t | Env of (unit -> Env.t)
+
 end
 
 (*----------------------------------------------------------------------
@@ -481,7 +438,7 @@ type t = {
 
   fixpoint_iter : Fixpoint_iter.t
 
-} with fields
+} [@@deriving fields]
 
 let generated t = Db.generated (Persist.db t.persist)
 let ruled t = Db.ruled (Persist.db t.persist)
@@ -493,21 +450,22 @@ let memo_building t = t.memo.Memo.building
 let build_sub_goal : (t ->  Goal.t -> Proxy_map.t Builder.t) =
   fun t goal -> t.build_goal t goal
 
-let apply_user_function : ((unit -> 'a) -> 'a Builder.t) =
-  fun f ->
-    try return (f ()) with
-    | exn -> error (Reason.Usercode_raised (sexp_of_exn exn))
+let apply_user_function' f =
+  try Ok (f ()) with
+  | exn -> Error (Reason.Usercode_raised (sexp_of_exn exn))
+let apply_user_function f =
+  try return (f ()) with
+  | exn -> error (Reason.Usercode_raised (sexp_of_exn exn))
 
 let run_user_async_code : ((unit -> 'a Deferred.t) -> 'a Builder.t) =
   fun f ->
     Builder.of_deferred (fun () ->
-      Monitor.try_with (fun () ->
+      Monitor.try_with ~extract_exn:true (fun () ->
         f ()
       )
     ) *>>= function
     | Ok x -> return x
     | Error exn ->
-      let exn = Monitor.extract_exn exn in
       error (Reason.Usercode_raised (sexp_of_exn exn))
 
 (*----------------------------------------------------------------------
@@ -579,7 +537,7 @@ let remove_stale_artifact : (
         if Config.show_actions_run t.config then (
           Message.message "Removed stale build artifact: %s" path_string;
         );
-        Fs.clear_watcher_cache t.fs path;
+        Fs.clear_watcher_cache t.fs path ~needed_for_correctness:false;
         Deferred.return ()
       | Error _ ->
         Deferred.return ()
@@ -696,7 +654,7 @@ let buildable_targets_and_clean_when_fixed : (t -> dir:Path.t -> Path.Set.t Buil
 let glob_fs_or_buildable : (t -> Glob.t -> Path.Set.t Builder.t) =
   let module Key = struct
     module T = struct
-      type t = Glob.t * Fixpoint_iter.t with sexp, compare
+      type t = Glob.t * Fixpoint_iter.t [@@deriving sexp, compare]
       let hash = Hashtbl.hash
     end
     include Hashable.Make(T)
@@ -732,8 +690,8 @@ let glob_fs_or_buildable : (t -> Glob.t -> Path.Set.t Builder.t) =
 
 let run_action_with_message :
   (t -> Env.t -> Action.t -> message:(unit->unit) ->
-   deps:Proxy_map.t -> targets:Path.Rel.t list -> need:string ->
-   output:'a Job.Output.t -> 'a Builder.t) =
+   deps:Proxy_map.t -> targets:Path.Rel.t list ->
+   need:string -> output:'a Job.Output.t -> 'a Builder.t) =
   fun t env action ~message ~deps ~targets ~need ~output ->
     let action =
       Action_sandbox.maybe_sandbox ~sandbox:t.config.sandbox_actions
@@ -779,7 +737,8 @@ let run_action_with_message :
 let run_action_for_targets :
     (t -> RR.t -> Env.t -> Action.t ->
      deps:Proxy_map.t ->
-     targets:Path.Rel.t list -> need:string ->
+     targets:Path.Rel.t list ->
+     need:string ->
      unit Builder.t) =
   fun t rr env action ~deps ~targets ~need ->
     let message() =
@@ -833,12 +792,12 @@ let report_status t need ore =
   | Ok _ ->
     set_status t need (Some Progress.Status.Built)
   | Error problem -> (
-    let reasons = Problem.reasons_here problem in
+      let reasons = Problem.reasons_here problem in
     List.iter reasons ~f:(fun reason ->
       report_error_for_need t need reason
     );
     set_status t need (Some (Progress.Status.Error reasons))
-  )
+    )
 
 let build_considering_needed : (t -> Progress.Need.t -> 'a Builder.t -> 'a Builder.t) =
   (* Expose the builder's result/error for reporting *)
@@ -953,10 +912,10 @@ let read_then_convert_string_via_reader :
 
 
 module Jenga_conf_rep : sig
-  type t with of_sexp
+  type t [@@deriving of_sexp]
   val modules : t -> string list
 end = struct
-  type t = [`modules of string list] with sexp
+  type t = [`modules of string list] [@@deriving sexp]
   let modules (`modules xs) = xs
 end
 
@@ -1053,20 +1012,30 @@ let jenga_root_load_spec : (t -> root_ml:Path.t -> Load_root.Spec.t Builder.t) =
     | Some err -> errors_for_omake_server ~within:root_ml [err] "unreadable"
     | None -> return (Load_root.Spec.ml_file ~ml:root_ml)
 
-let jenga_load_spec : (t -> Jr_spec.t -> Load_root.Spec.t Builder.t) =
+let jenga_load_spec : (t -> Jr_spec.t -> Env.t Builder.t) =
   fun t jr_spec ->
+    let env_of_load_root_spec spec =
+      Builder.of_deferred (fun () -> Load_root.get_env t.config spec) *>>= function
+      | Error e ->
+        error (Reason.Jengaroot_load_failed (Error.sexp_of_t e))
+      | Ok env ->
+        return env
+    in
     match jr_spec with
+    | Env env ->
+      return (env ())
     | Jr_spec.Path path ->
       let is_ml =
         match String.lsplit2 ~on:'.' (Path.basename path) with
         | Some (_,"ml") -> true
         | Some _ | None -> false
       in
-      if is_ml
+      (if is_ml
       then jenga_root_load_spec t ~root_ml:path
-      else jenga_conf_load_spec t ~conf:path
+      else jenga_conf_load_spec t ~conf:path)
+      *>>= env_of_load_root_spec
     | Jr_spec.In_root_dir ->
-      let conf = Path.of_relative (Special_paths.jenga_conf) in
+      (let conf = Path.of_relative (Special_paths.jenga_conf) in
       let root_ml = Path.of_relative (Special_paths.jenga_root) in
       let what_kind_of_jenga_setup =
         Builder.both (path_exists t conf) (path_exists t root_ml)
@@ -1079,9 +1048,12 @@ let jenga_load_spec : (t -> Jr_spec.t -> Load_root.Spec.t Builder.t) =
       what_kind_of_jenga_setup *>>= function
       | `no_conf_or_root ->
         one_error_for_omake_server ~within:conf "jenga.conf missing"
-      | `just_old_style_root -> jenga_root_load_spec t ~root_ml
+      | `just_old_style_root ->
+        jenga_root_load_spec t ~root_ml
       | `just_new_style_conf
-      | `both_conf_and_root -> jenga_conf_load_spec t ~conf
+      | `both_conf_and_root ->
+        jenga_conf_load_spec t ~conf)
+        *>>= env_of_load_root_spec
 
 (*----------------------------------------------------------------------
   jenga_root
@@ -1091,14 +1063,9 @@ let jenga_root : (t -> (Env.t * Scheme_memo.t) Builder.t) =
   (* wrap up the call to [Load_root.get_env] into a tenacious builder,
      which will reload any time the jengaroot is modified *)
   fun t ->
-    jenga_load_spec t t.jr_spec *>>= fun load_spec ->
-    Builder.of_deferred (fun () -> Load_root.get_env load_spec) *>>= function
-    | Error e ->
-      let exn = Monitor.extract_exn (Error.to_exn e) in
-      error (Reason.Usercode_raised (sexp_of_exn exn))
-    | Ok env ->
-      let bds_memo = Dep_scheme_key.Table.create() in
-      return (env,bds_memo)
+    jenga_load_spec t t.jr_spec *>>| fun env ->
+    let bds_memo = Dep_scheme_key.Table.create() in
+    (env,bds_memo)
 
 let jenga_root : (t -> (Env.t * Scheme_memo.t) Builder.t) =
   fun t ->
@@ -1124,74 +1091,92 @@ module Mtimes : sig
 
   type t
   val create : (Path.t * Fs.Mtime.t) list -> t
-  val keys : t -> Path.Set.t
+  val keys : t -> Path.t list
   val diff : before:t -> after:t -> Path.t list option
 
 end = struct
 
-  type t = Fs.Mtime.t Path.Map.t with compare
+  type t = (Path.t * Fs.Mtime.t) list [@@deriving compare]
+  let create t = t
 
-  let create xs = Path.Map.of_alist_exn xs
-
-  let keys t = Path.Set.of_list (Path.Map.keys t)
+  let keys t = List.map t ~f:fst
 
   let equal = equal_using_compare compare
 
   let diff ~before ~after =
     (* expect to only be called on [Mtimes.t] values with the same path-keys *)
     if equal before after then None
-    else
-      match (
-        Sequence.filter_map
-          (Map.symmetric_diff before after ~data_equal:Fs.Mtime.equal)
-          ~f:(fun (k,comp) ->
-            match comp with
-            | `Left _ -> Some k (* lost path-key.. unexpected *)
-            | `Right _ -> Some k (* additional path-key.. unexpected *)
-            | `Unequal _ -> Some k (* changed mtime *)
-          )
-        |> Sequence.to_list
-      ) with
-      | [] -> assert false
-      | _::_ as xs -> Some xs
+    else begin
+      let r = ref [] in
+      List.iter2_exn before after ~f:(fun (path1, mtime1) (path2, mtime2) ->
+        assert (Path.equal path1 path2);
+        if not (Fs.Mtime.equal mtime1 mtime2)
+        then r := path1 :: !r);
+      Some !r
+    end
 
 end
 
-let mtime_file : (
-  [`as_cached of t | `right_now] -> Path.t -> (Path.t * Fs.Mtime.t) Builder.t
-) =
-  fun how path ->
-    begin
-      match how with
-      | `as_cached t -> Builder.of_tenacious (Fs.mtime_file t.fs ~file:path)
-      | `right_now -> Builder.of_deferred (fun () -> Fs.mtime_file_right_now ~file:path)
-    end *>>= function
-    | Some mtime -> return (path,mtime)
-    | None -> error (Reason.Misc (sprintf "file disappeared for mtime: %s"
-                                    (Path.to_string path)))
+let mtime_file_cached t path =
+  Builder.wrap (
+    Tenacious.map (Fs.mtime_file t.fs ~file:path)
+      ~f:(function
+        | Some mtime -> Ok (path, mtime)
+        | None ->
+          let msg = sprintf !"file disappeared for mtime: %{Path}" path in
+          Error (Problem.create (Reason.Misc msg))))
+;;
 
-let mtimes_of_proxy_map : (t -> Proxy_map.t -> Mtimes.t Builder.t) =
-  fun t pm ->
-    let paths = Proxy_map_op.path_keys pm in
-    Builder.all (
-      List.map (Set.to_list paths) ~f:(fun path -> mtime_file (`as_cached t) path)
-    )*>>| Mtimes.create
+let mtimes_of_proxy_map =
+  let type_id : (Path.t * Fs.Mtime.t) list Builder.t Type_equal.Id.t =
+    Type_equal.Id.create ~name:"" [%sexp_of: _]
+  in
+  let compute_without_reify t paths =
+    Builder.all (List.map paths ~f:(mtime_file_cached t))
+  in
+  let compute_with_reify t paths =
+    Builder.reify (compute_without_reify t paths)
+  in
+  fun t proxy_map ->
+    if Jenga_options.t.turn_off_mtimes_check
+    then return (Mtimes.create [])
+    else
+      let paths, groups = Db.Proxy_map.to_paths_for_mtimes_check proxy_map in
+      let all =
+        compute_without_reify t paths ::
+        List.map groups ~f:(fun group ->
+          Db.Proxy_map.Group.find_or_add group
+            ~unique_id_across_jenga:type_id
+            (* Here we can have different [t]. However the function only cares about
+               t.fs, and there is only one of those. *)
+            ~unique_f_across_jenga:(compute_with_reify t))
+      in
+      Builder.all all
+      *>>| fun l ->
+      Mtimes.create (List.concat l)
+;;
+
+let mtimes_of_paths_right_now paths =
+  Builder.of_deferred (fun () -> Fs.mtime_files_right_now paths)
+  *>>= function
+  | Ok mtimes -> return (Mtimes.create mtimes)
+  | Error file -> error (Reason.Misc ("file disappeared for mtime: " ^ file))
+;;
 
 let check_mtimes_unchanged : (t -> Mtimes.t -> unit Builder.t) =
   fun t mtimes_before ->
-    let paths = Mtimes.keys mtimes_before in
-    begin
-      Builder.all (
-        List.map (Set.to_list paths) ~f:(fun path -> mtime_file `right_now path)
-      )*>>| Mtimes.create
-    end *>>= fun mtimes_now ->
-    match Mtimes.diff ~before:mtimes_before ~after:mtimes_now with
-    | None -> return ()
-    | Some paths ->
-      (* clearing the watcher cache allows the build to retrigger if running
-         without notifiers, or we lost an inotify event *)
-      let () = List.iter paths ~f:(Fs.clear_watcher_cache t.fs) in
-      error (Reason.Mtimes_changed paths)
+    match Mtimes.keys mtimes_before with
+    | [] -> return ()
+    | _ :: _ as paths ->
+      mtimes_of_paths_right_now paths
+      *>>|= fun mtimes_now ->
+      match Mtimes.diff ~before:mtimes_before ~after:mtimes_now with
+      | None -> Ok ()
+      | Some paths ->
+        (* clearing the watcher cache allows the build to retrigger if running
+           without notifiers, or we lost an inotify event *)
+        List.iter paths ~f:(Fs.clear_watcher_cache t.fs ~needed_for_correctness:false);
+        Error (Reason.Mtimes_changed paths)
 
 (*----------------------------------------------------------------------
  things we can depend upon
@@ -1201,9 +1186,9 @@ let run_action_for_stdout_if_necessary
     : (t -> deps:Proxy_map.t -> Action.t -> string Builder.t) =
   fun t ~deps action ->
     jenga_root t *>>= fun (env,_) ->
-    mtimes_of_proxy_map t deps *>>= fun mtimes ->
     let job = Action.job action in
     let run_and_cache rr =
+      mtimes_of_proxy_map t deps *>>= fun mtimes ->
       Builder.uncancellable (
         run_action_for_stdout t rr env action ~deps *>>= fun stdout ->
         check_mtimes_unchanged t mtimes *>>= fun () ->
@@ -1215,11 +1200,11 @@ let run_action_for_stdout_if_necessary
     match (Hashtbl.find (actioned t) job) with
     | None -> run_and_cache RR.No_record_of_being_run_before
     | Some prev ->
-        match (Proxy_map_op.diff ~before:prev.Output_proxy.deps ~after:deps) with
-        | Some keys -> run_and_cache (RR.Deps_have_changed keys)
-        | None ->
-          (* Nothing has changed, use cached stdout *)
-          return prev.Output_proxy.stdout
+      match (Proxy_map_op.diff ~before:prev.Output_proxy.deps ~after:deps) with
+      | Some keys -> run_and_cache (RR.Deps_have_changed keys)
+      | None ->
+        (* Nothing has changed, use cached stdout *)
+        return prev.Output_proxy.stdout
 
 
 let need_abs_path : (t -> Path.Abs.t -> Proxy_map.t Builder.t) =
@@ -1247,8 +1232,8 @@ let need_path : (t -> Path.t -> Proxy_map.t Builder.t) =
 let build_merged_proxy_maps : (Proxy_map.t list -> Proxy_map.t Builder.t) =
   fun pms ->
     match (Proxy_map_op.merge pms) with
-    | `err _inconsistency -> error Reason.Inconsistent_proxies
-    | `ok pm -> return pm
+    | Error _inconsistency -> error Reason.Inconsistent_proxies
+    | Ok pm -> return pm
 
 (*----------------------------------------------------------------------
  source_files
@@ -1278,6 +1263,10 @@ let build_depends : (t -> 'a Dep.t -> ('a * Proxy_map.t) Builder.t) =
 
       | Dep.Return x ->
         return (x, Proxy_map_op.empty)
+
+      | Dep.Map (x, f) ->
+        exec x *>>|= fun (v1, pm) ->
+        apply_user_function' (fun () -> (f v1, pm))
 
       | Dep.Bind (left,f_right) ->
         exec left *>>= fun (v1,pm1) ->
@@ -1381,6 +1370,10 @@ let build_depends : (t -> 'a Dep.t -> ('a * Proxy_map.t) Builder.t) =
         let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing ~dir paths) in
         ((), pm)
 
+      | Dep.Group_dependencies dep ->
+        exec dep *>>| fun (v, pm) ->
+        v, Db.Proxy_map.group pm
+
     in
     exec depends
 
@@ -1394,6 +1387,10 @@ let reflect_depends : (t -> 'a Dep.t -> ('a * Path.Set.t) Builder.t) =
 
       | Dep.Return x ->
         return (x, Path.Set.empty)
+
+      | Dep.Map (x, f) ->
+        exec x *>>|= fun (v1, set) ->
+        apply_user_function' (fun () -> (f v1, set))
 
       | Dep.Bind (left,f_right) ->
         exec left *>>= fun (v1,set1) ->
@@ -1488,6 +1485,10 @@ let reflect_depends : (t -> 'a Dep.t -> ('a * Path.Set.t) Builder.t) =
       | Dep.Glob_change _ ->
         return ((), Path.Set.empty)
 
+      | Dep.Group_dependencies dep ->
+        (* We should probably do something smarter here, but reflection doesn't matter as
+           much, since it's not usually done on whole trees. *)
+        exec dep
     in
     exec depends
 
@@ -1628,28 +1629,26 @@ let build_target_rule :
     (* Any glob reference within rules has fixpoint semantics *)
     let t = {t with fixpoint_iter = Fixpoint_iter.Star} in
     build_depends t (Target_rule.action_depends tr) *>>= fun (action,deps_proxy_map) ->
-    mtimes_of_proxy_map t deps_proxy_map *>>= fun mtimes ->
     (* The persistent caching is keyed of the [head_target] *)
     let head_target,other_targets = Target_rule.head_target_and_rest tr in
     jenga_root t *>>= fun (env,_) ->
     let job = Action.job action in
     let run_and_cache rr =
+      mtimes_of_proxy_map t deps_proxy_map *>>= fun mtimes ->
       Builder.uncancellable (
         run_action_for_targets t rr env action ~deps:deps_proxy_map ~targets ~need *>>= fun () ->
         (* The cache is cleared AFTER the action has been run, and BEFORE we check the
            targets created by the action. Clearing the cache forces the files to be
            re-stated, without relying on any events from inotify to make this happen *)
-        let () =
-          List.iter targets ~f:(fun rel ->
-            Fs.clear_watcher_cache t.fs (Path.of_relative rel)
-          )
-        in
+        List.iter targets ~f:(fun rel ->
+          Fs.clear_watcher_cache t.fs (Path.of_relative rel) ~needed_for_correctness:true
+        );
         check_targets t targets *>>= function
         | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
         | `ok path_tagged_proxys ->
           match (Proxy_map_op.create_by_path path_tagged_proxys) with
-          | `err _inconsistency -> error Reason.Inconsistent_proxies
-          | `ok targets_proxy_map ->
+          | Error _inconsistency -> error Reason.Inconsistent_proxies
+          | Ok targets_proxy_map ->
             check_mtimes_unchanged t mtimes *>>= fun () ->
             let rule_proxy = {
               Rule_proxy.
@@ -1682,8 +1681,8 @@ let build_target_rule :
           | `missing paths -> run_and_cache (RR.Targets_missing paths)
           | `ok path_tagged_proxys ->
             match (Proxy_map_op.create_by_path path_tagged_proxys) with
-            | `err _inconsistency -> error Reason.Inconsistent_proxies
-            | `ok targets_proxy_map ->
+            | Error _inconsistency -> error Reason.Inconsistent_proxies
+            | Ok targets_proxy_map ->
               match (Proxy_map_op.diff ~before:prev.Rule_proxy.targets ~after:targets_proxy_map) with
               | Some keys ->
                 let paths = List.map keys ~f:Pm_key.to_path_exn in
@@ -1830,7 +1829,7 @@ let fixpoint : (
 ) =
   fun ~equal ~check_another_allowed ~f ->
     let rec iterate i ~last =
-      assert (Int.(i>=1));
+      assert (i >= 1);
       f i *>>= fun curr ->
       if equal last curr
       then
@@ -1848,12 +1847,12 @@ let fixpoint : (
 ----------------------------------------------------------------------*)
 
 let pluralize_count n word =
-  sprintf "%d %s%s" n word (if Int.(n<>1) then "s" else "")
+  sprintf "%d %s%s" n word (if n <> 1 then "s" else "")
 
 let check_next_iteration_allowed t ~dir i ~last ~curr =
   let n = Config.buildable_targets_fixpoint_max t.config in
-  if Int.(n = 0) then return () (* no limit *)
-  else if Int.(i > n)
+  if n = 0 then return () (* no limit *)
+  else if i > n
   then
     let added_in_last_iteration = Path.Set.diff curr last in
     error (Reason.Misc (
@@ -1881,17 +1880,17 @@ let fixpoint_buildable_targets : (t -> dir:Path.t -> Path.Set.t Builder.t) =
         )
     end
     *>>= fun (targets,iter_count) ->
-    assert (Int.(iter_count>=1));
+    assert (iter_count >= 1);
     (* The [iter_count] is always at least 1; and normally at least 2 *)
     (* A count of 1 will only occur is there is nothing buildable *)
-    if Int.(iter_count=1) then assert (Path.Set.is_empty targets);
+    if iter_count = 1 then assert (Path.Set.is_empty targets);
     if Config.show_buildable_discovery t.config then (
       if Path.Set.is_empty targets then (
         Message.message "No buildable targets in: %s" (Path.to_string dir);
       ) else (
         (* subtract 1 from [iter_count] when reporting #steps for user *)
         let steps = iter_count-1 in
-        assert (Int.(steps>=1));
+        assert (steps >= 1);
         Message.message "Discovered buildable targets in: %s [fixpoint after %s]"
           (Path.to_string dir)
           (pluralize_count steps "step")
@@ -1905,7 +1904,7 @@ module Buildable_targets_key = struct
     type t = {
       dir : Path.t;
       fixpoint_iter : Fixpoint_iter.t;
-    } with sexp,compare
+    } [@@deriving sexp, compare]
     let hash = Hashtbl.hash
   end
   include T
@@ -1923,8 +1922,8 @@ let buildable_targets : (t -> dir:Path.t -> Path.Set.t Builder.t) =
     match t.fixpoint_iter with
     | Star -> fixpoint_buildable_targets t ~dir
     | Iter i ->
-      assert (Int.(i>=0));
-      if Int.(i = 0)
+      assert (i >= 0);
+      if i = 0
       then return Path.Set.empty
       else
         let t = {t with fixpoint_iter = Iter (i-1)} in
@@ -2222,15 +2221,6 @@ let _live_kb_delta =
     last := current;
     delta
 
-let gc_full_major_and_show_stats =
-  fun () ->
-    Gc.full_major(); (* might run finalizers, so.. *)
-    Gc.full_major(); (* GC again *)
-    (*Message.message "Live(Kb-delta) %d #HeartWatching %d"
-      (live_kb_delta ())
-      (Tenacious.Heart.Watching.count())*)
-    ()
-
 (*----------------------------------------------------------------------
   build_once
 ----------------------------------------------------------------------*)
@@ -2243,7 +2233,6 @@ let compact_zero_overhead () =
 
 let build_once :
     (Config.t -> DG.t -> Progress.t -> unit Builder.t ->
-     save_db_now:(unit -> unit Deferred.t) ->
      (Heart.t * int) Deferred.t) =
   (* Make a single build using the top level tenacious builder
      Where a single build means we've done all we can
@@ -2252,13 +2241,13 @@ let build_once :
      And now we are just polling of file-system changes.
   *)
   let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-  fun config __dg progress top_builder ~save_db_now ->
+  fun config __dg progress top_builder ->
     let u = genU() in (* count of the times we reach polling *)
     let start_time = Time.now() in
 
     let top_tenacious = Builder.expose top_builder in
 
-    Tenacious.exec top_tenacious >>= fun (ore,heart) ->
+    Tenacious.exec top_tenacious >>| fun (ore,heart) ->
 
     (* to avoid reporting of stale errors etc... *)
     (*Progress.mask_unreachable progress dg;*)
@@ -2274,26 +2263,7 @@ let build_once :
 
     let duration = Time.diff (Time.now()) start_time in
 
-    save_db_now() >>| fun () ->
-
     let snap = Progress.snap progress in
-
-    let () =
-      (* NO point doing the GC unless we are in polling mode *)
-      if Config.poll_forever config then (
-        gc_full_major_and_show_stats();
-        let percentage_live =
-          let stat = Gc.stat () in
-          let live = stat.Gc.Stat.live_words in
-          let heap = stat.Gc.Stat.heap_words in
-          Float.to_int (100. *. float live /. float heap)
-        in
-        if Int.(percentage_live < 80) then (
-          Message.message "GC.compacting...";
-          compact_zero_overhead();
-        )
-      )
-    in
 
     let effort_string = Progress.Snap.to_effort_string snap in
 
@@ -2332,12 +2302,11 @@ let run_user_function_from_env_opt env_opt tag ~f =
   match env_opt with
   | None -> Deferred.unit
   | Some env ->
-    Monitor.try_with (fun () ->
+    Monitor.try_with ~extract_exn:true (fun () ->
       f env ()
     ) >>= function
     | Ok () -> Deferred.unit
     | Error exn ->
-      let exn = Monitor.extract_exn exn in
       Message.error "%s: threw exception:\n%s" tag (Exn.to_string exn);
       Deferred.unit
 
@@ -2354,13 +2323,11 @@ let build_forever =
     let dg_root = DG.create_root discovered_graph in
 
     let deadlock_found = Ivar.create () in
-    let () =
-      don't_wait_for (
-        Ivar.read deadlock_found >>= fun () ->
-        Quit.quit Exit_code.cycle_abort;
-        Deferred.never()
-      )
-    in
+    don't_wait_for (
+      Ivar.read deadlock_found >>= fun () ->
+      Quit.quit Exit_code.cycle_abort;
+      Deferred.never()
+    );
 
     let get_env_opt =
       get_env_option
@@ -2400,7 +2367,7 @@ let build_forever =
       run_user_function_from_env_opt env_opt "build_begin" ~f:Env.build_begin >>= fun () ->
 
       (* do the build once *)
-      build_once config discovered_graph progress top_builder ~save_db_now >>= fun (heart,exit_code) ->
+      build_once config discovered_graph progress top_builder >>= fun (heart,exit_code) ->
 
       (* call user build_end function *)
       run_user_function_from_env_opt env_opt "build_end" ~f:Env.build_end >>= fun () ->
@@ -2409,6 +2376,8 @@ let build_forever =
 
       match Config.poll_forever config with
       | false ->
+        save_db_now ()
+        >>= fun () ->
         Message.message "build finished; not in polling mode so quitting";
         Quit.quit exit_code;
         Deferred.never()
@@ -2418,6 +2387,38 @@ let build_forever =
         (* wait here until something changes on the file-system *)
         let wait = Heart.when_broken heart in
         exit_code_upon_control_c := exit_code;
+
+        begin
+          (* Let's wait until it looks like we don't need to build anything, and then we
+             can compact if needed. This way we don't get in the way of the user. *)
+          Quit.with_prevent_quitting (fun quitting ->
+            Clock.with_timeout (Time.Span.of_sec 60.)
+              (Deferred.choose
+                 [ Deferred.choice wait (fun () -> `Done_waiting)
+                 ; Deferred.choice quitting (fun () -> `Quitting)
+                 ])
+            >>= function
+            | `Result `Done_waiting -> Deferred.return ()
+            | `Result `Quitting -> save_db_now ()
+            | `Timeout ->
+              save_db_now ()
+              >>| fun () ->
+              if not (Quit.is_quitting ()) then begin
+                let percentage_live =
+                  Gc.full_major (); (* might run finalizers, so.. *)
+                  Gc.full_major (); (* GC again *)
+                  let stat = Gc.stat () in
+                  let live = stat.live_words in
+                  let heap = stat.heap_words in
+                  Float.to_int (100. *. float live /. float heap)
+                in
+                if percentage_live < 80 then (
+                  Message.message "GC.compacting...";
+                  compact_zero_overhead();
+                )
+              end
+          )
+        end >>= fun () ->
         wait >>= fun () ->
         exit_code_upon_control_c := Exit_code.incomplete;
         Message.rebuilding ();

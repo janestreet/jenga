@@ -5,7 +5,7 @@ open Async.Std
 type t =
 | Process of Job.t
 | Save of Save_description.t
-with sexp_of
+[@@deriving sexp_of]
 
 let job = function
   | Process pd -> pd
@@ -46,8 +46,8 @@ let run t ~message ~output ~putenv ~progress ~config ~need =
 
 let of_job job = Process job
 
-let process ~dir ~prog ~args =
-  Process (Job.create ~dir ~prog ~args)
+let process ~dir ~prog ~args ~ignore_stderr =
+  Process (Job.create ~dir ~prog ~args ~ignore_stderr)
 
 let save1 ~contents ~target ~chmod_x =
   Save (Save_description.create ~contents ~target ~chmod_x)

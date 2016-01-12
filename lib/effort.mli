@@ -21,7 +21,7 @@ val create : Counter.t list -> t
 val reset_to_zero : t -> unit
 
 module Counts : sig
-  type t with bin_io
+  type t [@@deriving bin_io]
   val to_string :  ?limit:counter_set -> t -> string
 end
 
