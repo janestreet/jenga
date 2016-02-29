@@ -126,7 +126,7 @@ module Config = struct
     exe_name : string;
     (* depend on configuration for link order - but this could be calculated! *)
     link_order : string list;
-  } with sexp, fields
+  } [@@deriving sexp, fields]
 
   let read x = read_sexp ~t_of_sexp x
 

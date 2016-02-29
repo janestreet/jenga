@@ -211,13 +211,13 @@ module Ordered_set_lang : sig
 
   (* This is a representation for an ordered list of strings, plus some set like
      operations. *)
-  type t with of_sexp
+  type t [@@deriving of_sexp]
 
   val eval_with_standard : t option -> standard:string list -> string list
 
 end = struct
 
-  type t = Sexp.t with of_sexp
+  type t = Sexp.t [@@deriving of_sexp]
 
   let eval t ~special_values =
     let rec of_sexp = function
@@ -524,7 +524,7 @@ let write_names_rule names ~target =
 
 module Centos = struct
 
-  type t = Release_5 | Release_6 with sexp
+  type t = Release_5 | Release_6 [@@deriving sexp]
 
   let __parse_redhat_release_file_contents string =
     if String.is_prefix string ~prefix:"CentOS release 5" then Release_5 else
@@ -1155,7 +1155,7 @@ end = struct
   type import = crc * name
   type t = {
     interfaces : import list;
-  } with fields
+  } [@@deriving fields]
 
   let interface_names t = List.map t.interfaces ~f:snd
 
@@ -1297,17 +1297,17 @@ module Names_spec = struct
   type t =
   | List of string list
   | All
-  with sexp
+  [@@deriving sexp]
 end
 
 module Preprocess_kind = struct
   type t = [ `command of string | `pps of string list ]
-  with of_sexp
+  [@@deriving of_sexp]
 end
 
 module Preprocess_spec = struct
   type t = Preprocess_kind.t * Names_spec.t
-  with of_sexp
+  [@@deriving of_sexp]
 end
 
 let preprocess_default = [
@@ -1318,8 +1318,8 @@ module Preprocessor_conf = struct
   type t = {
     name : string;
     libraries : string sexp_list;
-    preprocess : Preprocess_spec.t list with default(preprocess_default);
-  } with of_sexp, fields
+    preprocess : Preprocess_spec.t list [@default preprocess_default];
+  } [@@deriving of_sexp, fields]
 end
 
 module Dep_conf = struct
@@ -1327,7 +1327,7 @@ module Dep_conf = struct
   type t =
     | File of string
     | Files_recursively_in of string
-  with of_sexp
+  [@@deriving of_sexp]
 
   let t_of_sexp = function
     | Sexp.Atom s -> File s
@@ -1359,7 +1359,7 @@ module StubsX_conf = struct
   type t = {
     deps : Dep_conf.t list;
     action : string;
-  } with of_sexp,fields
+  } [@@deriving of_sexp, fields]
 end
 
 module Rule_conf = struct
@@ -1368,7 +1368,7 @@ module Rule_conf = struct
     targets : string list;
     deps : Dep_conf.t list;
     action : string;
-  } with of_sexp,fields
+  } [@@deriving of_sexp, fields]
 
 end
 
@@ -1378,7 +1378,7 @@ module Alias_conf = struct
     name : string;
     deps : Dep_conf.t list;
     action : string sexp_option;
-  } with of_sexp,fields
+  } [@@deriving of_sexp, fields]
 
 end
 
@@ -1388,7 +1388,7 @@ module Compile_c_conf = struct
     names : string list;
     extra_cflags : string sexp_list;
     replace_cflags : string sexp_list;
-  } with of_sexp
+  } [@@deriving of_sexp]
 
 end
 
@@ -1399,7 +1399,7 @@ module LibraryX_conf = struct (* external library setup *)
     targets : string list; (* with default([]);*)
     deps : Dep_conf.t list; (* with default([]); *)
     action : string;
-  } with of_sexp, fields
+  } [@@deriving of_sexp, fields]
 
 end
 
@@ -1409,7 +1409,7 @@ module Embed_conf = struct
     libraries : string sexp_list;
     cmis : string sexp_list;
     pps : string sexp_list;
-  } with sexp
+  } [@@deriving sexp]
 end
 
 (*----------------------------------------------------------------------
@@ -2746,13 +2746,13 @@ module Library_conf = struct
     avoid_cxxflags : string sexp_list;
     includes : string sexp_list;
     library_flags : string sexp_list;
-    modules : Names_spec.t with default(Names_spec.All);
+    modules : Names_spec.t [@default Names_spec.All];
     c_names : string sexp_list;
     cxx_names : string sexp_list;
     o_names : string sexp_list;
-    cxx_suf : string option with default(None);
-    stubs_conf : StubsX_conf.t option with default(None);
-    packed : bool with default(true);
+    cxx_suf : string option [@default None];
+    stubs_conf : StubsX_conf.t option [@default None];
+    packed : bool [@default true];
       (* The interpretation of the "packed" flag (which still defaults to true)
          is now determined by Wrap_style.select / Wrap_style.packing
 
@@ -2765,14 +2765,14 @@ module Library_conf = struct
              Use combination of -open and (newly fixed) -o arg of 4.02 compiler
       *)
 
-    preprocess : Preprocess_spec.t list with default(preprocess_default);
+    preprocess : Preprocess_spec.t list [@default preprocess_default];
     preprocessor_deps : string sexp_list;
     inline_tests_deps : string sexp_list;
     ocamllex : string sexp_list;
     ocamlyacc : string sexp_list;
     cclibs : string sexp_list;
-    skip_from_default : bool with default(false);
-  } with of_sexp, fields
+    skip_from_default : bool [@default false];
+  } [@@deriving of_sexp, fields]
 
   let disabled_warnings t =
     Ocaml_version.disabled_warnings @ t.extra_disabled_warnings
@@ -3140,11 +3140,11 @@ module Executables_conf = struct
     libraries : string sexp_list;
     ocamllex : string sexp_list;
     ocamlyacc : string sexp_list;
-    preprocess : Preprocess_spec.t list with default(preprocess_default);
+    preprocess : Preprocess_spec.t list [@default preprocess_default];
     preprocessor_deps : string sexp_list;
     link_flags : string sexp_list;
-    modules : Names_spec.t with default(Names_spec.All);
-  } with of_sexp
+    modules : Names_spec.t [@default Names_spec.All];
+  } [@@deriving of_sexp]
 
   let disabled_warnings t =
     Ocaml_version.disabled_warnings @ t.extra_disabled_warnings
@@ -3571,7 +3571,7 @@ module Jbuild : sig
   | `no_utop
   | `Synced_with_omakefile_with_digest of string
   ]
-  with of_sexp
+  [@@deriving of_sexp]
   type t
   val rep : t -> rep
   val load : Path.t -> t list Dep.t
@@ -3591,8 +3591,8 @@ end = struct
   | `no_utop
   | `Synced_with_omakefile_with_digest of string
   ]
-  with of_sexp
-  type t = rep with of_sexp
+  [@@deriving of_sexp]
+  type t = rep [@@deriving of_sexp]
   let rep t = t
 
   let load path =
@@ -3810,7 +3810,7 @@ module Libmap_sexp : sig
 end = struct
 
   type t = (string * Path.t) list
-  with sexp
+  [@@deriving sexp]
 
   let libmap_sexp_path = root_relative "libmap.sexp"
 
@@ -3927,10 +3927,10 @@ let create_directory_context ~dir jbuilds =
     )
   in
   let no_mycaml_alias =
-    List.exists jbuilds ~f:fun j -> match Jbuild.rep j with | `no_mycaml -> true | _ -> false
+    List.exists jbuilds ~f:(fun j -> match Jbuild.rep j with | `no_mycaml -> true | _ -> false)
   in
   let no_utop_alias =
-    List.exists jbuilds ~f:fun j -> match Jbuild.rep j with | `no_utop -> true | _ -> false
+    List.exists jbuilds ~f:(fun j -> match Jbuild.rep j with | `no_utop -> true | _ -> false)
   in
   let autogen_raw = infer_autogen jbuilds in
   let generated_modules =

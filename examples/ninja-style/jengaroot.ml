@@ -47,7 +47,7 @@ end = struct
 
   module Pos : sig (* line/column number positions, for accurate error messages *)
 
-    type t with sexp
+    type t [@@deriving sexp]
     val start : t
     val next : char -> t -> t
     val column : t -> int
@@ -58,7 +58,7 @@ end = struct
     type t = {
       line : int;
       col : int;
-    } with sexp
+    } [@@deriving sexp]
 
     let column t = t.col
 
@@ -85,22 +85,22 @@ end = struct
   (* abstract-syntax tree of Ninja. Build by parser, consumed by evaluator *)
   module N = struct
 
-    type var_name = string with sexp
-    type rule_name = string with sexp
+    type var_name = string [@@deriving sexp]
+    type rule_name = string [@@deriving sexp]
 
     type chunk =
     | Literal of string
     | Dollar_ref of Pos.t * var_name
-    with sexp
+    [@@deriving sexp]
 
-    type text = { chunks : chunk list } with sexp
+    type text = { chunks : chunk list } [@@deriving sexp]
 
     module Bind = struct
       type t = {
         var_name: var_name;
         rhs: text;
       }
-      with sexp
+      [@@deriving sexp]
     end
 
     module Build_edge = struct
@@ -112,7 +112,7 @@ end = struct
         implicit_deps : text list;
         order_only : text list;
         binds : Bind.t list;
-      } with sexp
+      } [@@deriving sexp]
     end
 
     type dec_form =
@@ -120,10 +120,10 @@ end = struct
     | Build_edge of Build_edge.t
     | Var_dec of Bind.t
     | Default of text list
-    with sexp
+    [@@deriving sexp]
 
-    type dec = Pos.t * dec_form with sexp
-    type decs = dec list with sexp
+    type dec = Pos.t * dec_form [@@deriving sexp]
+    type decs = dec list [@@deriving sexp]
 
   end
 

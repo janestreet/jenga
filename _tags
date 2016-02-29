@@ -8,7 +8,6 @@
 <lib/*.ml{,i}>: pp(ppx-jane -dump-ast -inline-test-lib jenga)
 <tenacious/lib/*.ml{,i}>: pp(ppx-jane -dump-ast -inline-test-lib jenga.tenacious)
 <**/*_standalone.native>: linkall
-<**/*.native> and (not <**/*_standalone.native>): link_fake_archive
 <lib/*>: ugly_hack_to_workaround_ocamlbuild_nightmare
 # OASIS_START
 # OASIS_STOP

@@ -1,3 +1,7 @@
+## 113.24.02
+
+- Fix the build of jenga and updated the examples
+
 ## 113.24.00
 
 - Restructure the code in a way that allows to build binaries that statically link jenga
