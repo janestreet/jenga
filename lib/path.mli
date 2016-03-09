@@ -1,6 +1,5 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
 
 (* [Path.Rel.t]
    Type for repo root-relative paths. Used throughout jenga.

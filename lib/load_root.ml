@@ -72,6 +72,7 @@ let get_env config spec =
   (*Ocaml_plugin.Shell.set_defaults ~echo:true ~verbose:true ();*)
   let code_style = if config.Config.deprecated_camlp4 then Some `Camlp4_style else None in
   track_loading (fun () ->
+    Var.clear_all_registrations ();
     Plugin.load_ocaml_src_files
       ?code_style
       ~persistent_archive_dirpath:plugin_cache_dir

@@ -1,5 +1,5 @@
 
-open Core.Std
+open! Core.Std
 
 (* [Db] contains types which will be stored persistently. *)
 

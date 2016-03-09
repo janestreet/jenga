@@ -1,6 +1,6 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
+open! Async.Std
 
 module Jr_spec : sig
 

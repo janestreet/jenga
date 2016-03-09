@@ -1,6 +1,6 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
+open! Async.Std
 
 val is_loading : unit -> bool
 

@@ -15,6 +15,8 @@ let quit exit_code =
     Shutdown.shutdown exit_code;
   )
 
+let exit exit_code = quit exit_code; Deferred.never ()
+
 let ignore_exn_while_quitting f =
   try_with f >>= function
   | Ok x -> return x

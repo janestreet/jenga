@@ -3,7 +3,7 @@
     can only access specified dependencies (to find missing dependencies). Files that
     are specified to be targets but are not created will be found as well. *)
 
-open Core.Std
+open! Core.Std
 
 val maybe_sandbox
   :  sandbox:bool

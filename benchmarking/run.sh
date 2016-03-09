@@ -23,7 +23,7 @@ build_jenga () {
   echo "$FEATURE rev.: $REV" >&2
   diff <(cat <<< "$REV") <(hg log -r . --template '{node}\n') || (echo "unpushed changes in $FEATURE?"; exit 1)
   REV_SHORT=$(cut --bytes 1-12 <<< "$REV")
-  VERSION_UTIL_SUPPORT=true X_LIBRARY_INLINING=true jenga app/jenga/bin/jenga.exe
+  VERSION_UTIL_SUPPORT=true X_LIBRARY_INLINING=true jenga app/jenga/bin/jenga.exe -show-mem
   BIN="$(fe workspace dir "$FEATURE")"/app/jenga/bin/jenga.exe
   diff <("$BIN" version | tail -n 1 | sed -r 's#^.*_(.*)$#\1#') <(cat <<< "$REV_SHORT")
 }

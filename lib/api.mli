@@ -4,8 +4,8 @@
    describes the build rules etc for a specific instatnce of jenga,
    and the core jenga build system. *)
 
-open Core.Std
-open Async.Std
+open! Core.Std
+open! Async.Std
 
 module Path : sig
 
@@ -142,6 +142,35 @@ module Shell : sig
 
 end
 
+module Var : sig
+
+  (** [Var.t] is a registered environment variable. It's value value may be queried and
+      modified via the jenga RPC or command line. *)
+  type 'a t
+
+  (** [register name ?choices] registers [name].  If [choices] is provided, this is
+      attached as meta information, available when querying.
+
+      [register_with_default ?default name ?choices] is like [register] except [default]
+      is used when the variable is unset, and is also attached as meta information.
+
+      Except for the registration of [default] as meta-info, [register_with_default]
+      behaves as: [register ?choices name |> map ~f:(Option.value ~default)]
+
+      An exception is raised if the same name is registered more than once in a reload of
+      the jengaroot.
+  *)
+  val register              : ?choices:string list -> string                   -> string option t
+  val register_with_default : ?choices:string list -> string -> default:string -> string t
+
+  (** [peek t] causes modification to [t] (via RPC or command-line) to trigger a reload of
+      the jengaroot. To avoid this use [Dep.getenv] instead. *)
+   val peek : ?dont_trigger:unit -> 'a t -> 'a
+
+  val map  : 'a t -> f:('a -> 'b) -> 'b t
+
+end
+
 module Dep : sig (* The jenga monad *)
 
   type 'a t [@@deriving sexp_of]
@@ -158,6 +187,10 @@ module Dep : sig (* The jenga monad *)
   val action_stdout : Action.t t -> string t
   val alias : Alias.t -> unit t
   val path : Path.t -> unit t
+
+  (** [getenv v] provides access to a registered environment variable, responding to
+      changes notified to jenga via the [setenv] RPC/command-line. *)
+  val getenv : 'a Var.t -> 'a t
 
   (** [group_dependencies t] is equivalent to [t], however jenga will be careful to avoid
       duplicating the set of dependencies that have been declared. This is best used under
@@ -232,7 +265,7 @@ module Reflect : sig
     Path.t list ->
     Reflected.Trip.t list Dep.t
 
-  val putenv : (string * string) list Dep.t
+  val putenv : (string * string option) list Dep.t
 
 end
 
@@ -258,7 +291,7 @@ end
 module Env : sig
   type t = Env.t
   val create :
-    ?putenv:(string * string) list ->
+    ?putenv:(string * string option) list ->
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?build_begin : (unit -> unit Deferred.t) ->
     ?build_end : (unit -> unit Deferred.t) ->
@@ -270,7 +303,7 @@ module Env : sig
        stale-artifacts, if there is no build rule.
 
        If [artifacts] is not provided, jenga will determine artifacts using it's own
-       knowledge of what was previously built, as recorded in .jenga.db. *)
+       knowledge of what was previously built, as recorded in .jenga/db. *)
     ?artifacts: (dir:Path.t -> Path.t list Dep.t) ->
 
     (* [create f] - Mandatory argument [f] specifies, per-directory, the rule-scheme. *)
@@ -279,7 +312,22 @@ module Env : sig
 
 end
 
-val verbose : unit -> bool
+(* The jenga API intentionally shadows printf, so that if opened in jenga/root.ml the
+   default behaviour is for [printf] to print via jenga's message system, and not
+   directly to stdout. Sending to stdout makes no sense for a dameonized jenga server.
+
+   [printf] sends messages via jenga's own message system, (i.e. not directly to stdout).
+   Messages are logged, transmitted to jenga [trace] clients, and displayed to stdout if
+   the jenga server is not running as a daemon.
+
+   [printf_verbose] is like [printf], except the message are tagged as `verbose', so
+   allowing non-verbose clients to mask the message
+
+   There is no need to append a \n to the string passed to [printf] or [printf_verbose].
+*)
+
+val printf : ('a, unit, string, unit) format4 -> 'a
+val printf_verbose : ('a, unit, string, unit) format4 -> 'a
 
 val run_action_now : Action.t -> unit Deferred.t
 val run_action_now_stdout : Action.t -> string Deferred.t

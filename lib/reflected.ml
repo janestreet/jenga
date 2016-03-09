@@ -17,7 +17,7 @@ module Action = struct
         | '\\' -> "\\\\"
         | c -> String.make 1 c)
       in
-      sprintf "bash -c \"$(echo -e %s)\"" (Message.Q.shell_escape s)
+      sprintf "bash -c \"$(echo -e %s)\"" (Job_summary.Q.shell_escape s)
 
   let escape_dollars_for_make s =
     if not (String.contains s '$') then s else

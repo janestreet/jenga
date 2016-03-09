@@ -12,7 +12,7 @@ let to_sexp =
          relying on the sexp tool, whose output could change over time. *)
       +> flag "-path" ~doc:" which subsexp to print" (optional string)
     )
-    ~summary:"cat .jenga.db in sexp format (big!)"
+    ~summary:"cat .jenga/db in sexp format (big!)"
     (fun path () ->
        Writer.behave_nicely_in_pipeline ();
        match Special_paths.discover_and_set_root () with

@@ -1,6 +1,6 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
+open! Async.Std
 
 exception Shutdown
 
@@ -37,13 +37,12 @@ end
 
 val run :
   t ->
-  config:Config.t ->
   need:string ->
-  putenv : (string * string) list ->
+  putenv : (string * string option) list ->
   output : 'a Output.t ->
   ('a,
    [
-   | `command_failed of Message.Job_summary.t
+   | `command_failed of Job_summary.t
    | `other_error of exn
    ]
   ) Result.t Deferred.t

@@ -25,6 +25,7 @@ let to_string t =
   else sprintf "%s/.%s" (Path.Rel.to_string t.dir) t.name
 
 let directory t = t.dir
+let basename t = "." ^ t.name
 
 let create ~dir name =
   match (Path.case dir) with

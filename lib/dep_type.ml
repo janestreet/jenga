@@ -19,7 +19,7 @@ type _ t =
 | Contents : Path.t -> string t
 | Reflect_path : Path.t -> Reflected.Trip.t option t
 | Reflect_alias : Alias.t -> Path.Set.t t
-| Reflect_putenv : (string * string) list t
+| Reflect_putenv : (string * string option) list t
 | On_filesystem : Path.t -> Path.Set.t t
 | Buildable_targets : Path.t -> Path.Set.t t
 | Source_files : Path.t -> Path.Set.t t
@@ -27,4 +27,5 @@ type _ t =
 | Glob_listing : Fs.Glob.t -> Path.Set.t t (* FS or buildable *)
 | Glob_change_OLD : Fs.Glob.t -> unit t
 | Glob_change : Fs.Glob.t -> unit t (* FS or buildable *)
+| Var : 'a Var.t -> 'a t
 [@@deriving sexp_of] (* sexp_of_t is only usable for debugging *)

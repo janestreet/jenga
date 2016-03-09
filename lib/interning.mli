@@ -1,5 +1,5 @@
 
-open Core.Std
+open! Core.Std
 
 module String : functor (X : sig val who : string end) -> sig
 

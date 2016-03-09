@@ -1,6 +1,6 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
+open! Async.Std
 
 module Ocaml_digest : sig
   val init : Config.t -> unit (* just once *)
@@ -9,11 +9,6 @@ end
 (* Module supporting interface to file-system -- stat, digest, glob.
    Services: Digest caching & inotify wrapping (as hearts).
 *)
-
-val lstat_counter : Effort.Counter.t
-val digest_counter : Effort.Counter.t
-val ls_counter : Effort.Counter.t
-val mkdir_counter : Effort.Counter.t
 
 module Digest = Db.Digest
 module Kind = Db.Kind

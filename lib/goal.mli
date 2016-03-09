@@ -1,14 +1,20 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
+open! Async.Std
 
 (* [Goal.t] is a build goal, as demanded on the command line or requested by rules.
 
+   [Jengaroot] demands only that the jengaroot configuration is read
    [Path path] demands the target at [path];
    [Alias] demands the particular alias t;
 *)
-type t = Path of Path.Rel.t | Alias of Alias.t [@@deriving sexp, bin_io]
-include Hashable with type t := t
+type t =
+  | Jengaroot
+  | Path of Path.Rel.t
+  | Alias of Alias.t
+[@@deriving sexp, bin_io]
+include Hashable_binable with type t := t
+include Comparable_binable with type t := t
 
 val to_string : t -> string
 val directory : t -> Path.Rel.t

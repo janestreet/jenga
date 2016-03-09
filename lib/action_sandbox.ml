@@ -2,8 +2,8 @@ open! Core.Std
 open! Async.Std
 
 (* aliases for custom printf *)
-let escaped = Message.Q.shell_escape
-let escaped_list = Message.Q.shell_escape_list
+let escaped = Job_summary.Q.shell_escape
+let escaped_list = Job_summary.Q.shell_escape_list
 
 let maybe_sandbox =
   let module M = Unique_id.Int() in

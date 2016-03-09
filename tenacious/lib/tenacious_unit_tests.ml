@@ -1,4 +1,3 @@
-
 open Core.Std
 open Async.Std
 
@@ -25,6 +24,8 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
         if (!sample_count > 1000) then failwith "lift: too many steps";
         f ()
       )
+
+    let reify = reify ~name:(lazy "test-reify")
   end
 
   module Heart = Tenacious.Heart
@@ -71,7 +72,7 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
     let r = ref None in
     begin
       Monitor.try_with (fun () ->
-        improve Tenacious.exec tenacious
+        improve (Tenacious.exec ~name:(lazy "run")) tenacious
       ) >>> fun res -> (r := Some res)
     end;
     stabilize();
@@ -213,7 +214,7 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
     let bind = Tenacious.bind lhs (fun _ -> rhs) in
     let _v, heart =
       Thread_safe.block_on_async_exn (fun () ->
-        Tenacious.exec bind)
+        Tenacious.exec ~name:(lazy "check") bind)
     in
     assert (not (Heart.is_broken heart));
     break_lhs ();

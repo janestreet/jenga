@@ -22,7 +22,7 @@ let enqueue_external_job progress f =
     )
   )
 
-let run t ~message ~output ~putenv ~progress ~config ~need =
+let run t ~message ~output ~putenv ~progress ~need =
   match t with
   | Save save_description ->
     begin
@@ -40,7 +40,7 @@ let run t ~message ~output ~putenv ~progress ~config ~need =
     enqueue_external_job progress (fun () ->
       message();
       Effort.track Progress.actions_run (fun () ->
-        Job.run job ~config ~need ~putenv ~output
+        Job.run job ~need ~putenv ~output
       )
     )
 

@@ -43,7 +43,7 @@ any files which should cause rebuilding.
 
 When jenga is not running in polling mode, but is restarted after a
 previous run, changes to files are detected via a persistent file
-".jenga.db" stored in the root of the jenga-tree. This file records
+".jenga/db" stored in the root of the jenga-tree. This file records
 what commands were run to create which targets, together with the
 (digest) state of those targets & dependencies.
 

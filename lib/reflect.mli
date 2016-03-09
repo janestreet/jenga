@@ -8,4 +8,4 @@ val reachable :
   Path.t list ->
   Reflected.Trip.t list Dep.t
 
-val putenv : (string * string) list Dep.t
+val putenv : (string * string option) list Dep.t

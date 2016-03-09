@@ -8,6 +8,9 @@ type t =
      If you are not sure, use it in combination with [turn_off_db_saves] to to avoid
      breaking the future jenga runs. *)
   ; turn_off_db_saves            : bool [@default false]
+  ; cycle_checking_interval :
+      Time.Span.t option [@default (Some (Time.Span.of_sec 10.))]
+  ; fd_close_timeout             : Time.Span.t [@default Time.Span.of_min 1.]
   }
 [@@deriving sexp]
 

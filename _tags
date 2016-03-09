@@ -4,9 +4,9 @@
 <**/*.ml{,i}>: predicate(ppx_driver)
 <lib/*.ml>: for-pack(Jenga_lib)
 <tenacious/lib/*.ml>: for-pack(Tenacious_lib)
-<bin/*.ml{,i}>: pp(ppx-jane -dump-ast)
-<lib/*.ml{,i}>: pp(ppx-jane -dump-ast -inline-test-lib jenga)
-<tenacious/lib/*.ml{,i}>: pp(ppx-jane -dump-ast -inline-test-lib jenga.tenacious)
+<bin/*.ml{,i}>: pp(ppx-jane -dump-ast -inline-test-drop -bench-drop -inline-test-lib fake_for_drop)
+<lib/*.ml{,i}>: pp(ppx-jane -dump-ast -inline-test-drop -bench-drop -inline-test-lib fake_for_drop)
+<tenacious/lib/*.ml{,i}>: pp(ppx-jane -dump-ast -inline-test-drop -bench-drop -inline-test-lib fake_for_drop)
 <**/*_standalone.native>: linkall
 <lib/*>: ugly_hack_to_workaround_ocamlbuild_nightmare
 # OASIS_START

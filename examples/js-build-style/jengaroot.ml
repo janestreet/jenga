@@ -17,8 +17,9 @@ module List = struct
     List.map (List.cartesian_product l1 l2) ~f:(fun (x, y) -> x ^ y)
 end
 
-let put fmt = ksprintf (fun s -> Core.Std.Printf.printf "%s\n%!" s) fmt
-let message fmt = ksprintf (fun s -> Core.Std.Printf.printf "!!JengaRoot.ml : %s\n%!" s) fmt
+let put = printf (* [printf] from [Jenga_lib.Api] *)
+let message fmt = ksprintf (fun s -> printf "!!JengaRoot.ml : %s" s) fmt
+let message_verbose fmt = ksprintf (fun s -> printf_verbose "!!JengaRoot.ml : %s" s) fmt
 
 let return = Dep.return
 let ( *>>= ) = Dep.bind
@@ -150,9 +151,7 @@ let getenv ~of_string ~to_string varname ~default =
     | None -> default
     | Some s -> of_string s
   in
-  if verbose() then (
-    message "%s = %s" varname (to_string value);
-  );
+  message_verbose "%s = %s" varname (to_string value);
   value
 
 let getenv_bool = getenv
@@ -171,9 +170,7 @@ let __getenv_enumeration varname ~choices ~default ~to_string =
     | Some s -> s
   in
   let choices_string = String.concat ~sep:" " (List.map choices ~f:to_string) in
-  if verbose() then (
-    message "%s = %s # choices: %s" varname override choices_string
-  );
+  message_verbose "%s = %s # choices: %s" varname override choices_string;
   let of_string_opt =
     let h = Hashtbl.Poly.create () in
     List.iter choices ~f:(fun choice ->
@@ -2241,10 +2238,10 @@ module Ordering = struct
           let base = Filename.basename target in
           let cycle = find_shortest_cycle_using_floyd_warshal ~dir alist in
           (* putting the output if whatever format will please the omake-mode *)
-          Print.printf "\n- build %s %s\n" dir base;
-          Print.printf "File \"OMakefile\", line 1, characters 1-1:\n";
-          Print.printf "Error: dependency cycle: %s\n" (String.concat ~sep:" " cycle);
-          Print.printf "- exit %s %s\n%!" dir base;
+          printf "\n- build %s %s\n" dir base;
+          printf "File \"OMakefile\", line 1, characters 1-1:\n";
+          printf "Error: dependency cycle: %s\n" (String.concat ~sep:" " cycle);
+          printf "- exit %s %s\n%!" dir base;
           raise Exit
         | Some mod_ ->
           let alist = List.filter alist ~f:(fun (mod', _) -> String.(<>) mod_ mod') in
@@ -3999,7 +3996,7 @@ let setup_main ~dir =
 let putenv = (* setup external actions *)
   [
     ("CAML_LD_LIBRARY_PATH",
-     Path.to_absolute_string (relative ~dir:the_root_lib_dir "typehash"));
+     Some (Path.to_absolute_string (relative ~dir:the_root_lib_dir "typehash")));
   ]
 
 let command_lookup_path =

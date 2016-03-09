@@ -22,10 +22,10 @@ let bashf ~dir ~ignore_stderr fmt =
 let job {contents;target;chmod_x} =
     (* By escaping newlines & using "echo -e", we avoid embedded newlines which are tricky
        to escape if we later extract a Makefile *)
-  let base = Message.Q.shell_escape (Path.basename target) in
+  let base = Job_summary.Q.shell_escape (Path.basename target) in
   bashf ~dir:(Path.dirname target) ~ignore_stderr:false
     "echo -n -e %s > %s%s"
-    (Message.Q.shell_escape (escape_backslashes_and_newlines contents))
+    (Job_summary.Q.shell_escape (escape_backslashes_and_newlines contents))
     base
     (if chmod_x then sprintf "; chmod +x %s" base else "")
 

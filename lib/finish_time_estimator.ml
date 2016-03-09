@@ -21,9 +21,15 @@ let calc_new_rate t ~now ~todo =
   let seconds = Time.Span.to_sec duration in
   assert (Float.(seconds >= 0.0));
   let progress = t.last_todo - todo in (* might be negative *)
-  let current_rate = float progress /. seconds in
-  let decay = t.decay_factor_per_second ** seconds in
-  (decay *. t.rate) +. ((1.0 -. decay) *. current_rate)
+  if Float.(seconds <= 0.0)
+  then
+    (* This formula is the limit of the [else] branch as [seconds] approaches zero.
+       It serves to avoid [nan] rate for 0.0 [seconds]. *)
+    t.rate -. float progress *. log (t.decay_factor_per_second)
+  else
+    let current_rate = float progress /. seconds in
+    let decay = t.decay_factor_per_second ** seconds in
+    (decay *. t.rate) +. ((1.0 -. decay) *. current_rate)
 
 let push_todo t todo =
   let now = Time.now () in

@@ -17,6 +17,7 @@ let deferred t = Deferred t
 let action_stdout t = Action_stdout t
 let alias x = Alias x
 let path p = Path p
+let getenv v = Var v
 let source_if_it_exists p = Source_if_it_exists p
 let contents p = Contents p
 let group_dependencies t = Group_dependencies t

@@ -6,14 +6,14 @@ open Async.Std
 include Db.Job
 
 let to_sh_ignoring_dir t =
-  Message.Q.shell_escape_list (prog t :: args t)
+  Job_summary.Q.shell_escape_list (prog t :: args t)
 
 (* returns a bash script that expects to be run from the repo root *)
 let to_sh_root_relative t =
   if Path.(=) (dir t) Path.the_root
   then to_sh_ignoring_dir t
   else sprintf "cd %s && %s"
-         (Message.Q.shell_escape (Path.reach_from ~dir:Path.the_root (dir t)))
+         (Job_summary.Q.shell_escape (Path.reach_from ~dir:Path.the_root (dir t)))
          (to_sh_ignoring_dir t)
 
 module Output = struct
@@ -39,7 +39,7 @@ end
 
 exception Shutdown
 
-let run t ~config ~need ~putenv ~output =
+let run t ~need ~putenv ~output =
   let dir = dir t
   and prog = prog t
   and args = args t
@@ -51,11 +51,6 @@ let run t ~config ~need ~putenv ~output =
     Message.job_started ~need ~where ~prog ~args
   in
   let start_time = Time.now() in
-  begin
-    match Config.delay_for_dev config with
-    | None -> return ()
-    | Some seconds -> Clock.after seconds
-  end >>= fun () ->
   let request = Forker.Request.create ~putenv ~dir ~prog ~args in
   Forker.run request >>= fun {Forker.Reply. stdout;stderr;outcome} ->
   match Quit.is_quitting() with

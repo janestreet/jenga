@@ -2,6 +2,12 @@ open Core.Std
 open Async.Std
 open! Int.Replace_polymorphic_compare
 
+let lstat_counter = Effort.Counter.create "stat"
+let digest_counter = Effort.Counter.create "digest"
+let ls_counter = Effort.Counter.create "ls"
+let mkdir_counter = Effort.Counter.create "mkdir"
+let saves_done = Effort.Counter.create "db-save"
+
 let actions_run = Effort.Counter.create "act" (* for use in action.ml *)
 let saves_run = Effort.Counter.create "save" (* for use in save_description.ml *)
 let considerations_run = Effort.Counter.create "con" (* for use in build.ml *)
@@ -13,29 +19,9 @@ module Status = struct
   | Error of Reason.t list (* empty list means failure in deps *)
 end
 
-module Need = struct
-
-  module T = struct
-    type t = Jengaroot | Goal of Goal.t
-    [@@deriving sexp, bin_io, compare]
-    let hash = Hashtbl.hash
-  end
-  include T
-  include Hashable.Make_binable(T)
-  include Comparable.Make_binable(T)
-
-  let goal x = Goal x
-  let jengaroot = Jengaroot
-
-  let to_string = function
-    | Jengaroot -> "<jenga.conf>"
-    | Goal x -> Goal.to_string x
-
-end
-
 type t = {
-  status : Status.t Need.Table.t;
-  mutable is_reachable_error : (Need.t -> bool);
+  status : Status.t Goal.Table.t;
+  mutable is_reachable_error : (Goal.t -> bool);
   job_throttle : unit Throttle.t
 }
 
@@ -45,7 +31,7 @@ let enqueue_job t f =
 let all_reachable _ = true
 
 let create config = {
-  status = Need.Table.create();
+  status = Goal.Table.create();
   is_reachable_error = all_reachable;
   job_throttle =
     let max_concurrent_jobs = Config.j_number config in
@@ -166,12 +152,12 @@ end
 
 let all_effort =
   Effort.create [
-    Fs.lstat_counter;
-    Fs.digest_counter;
+    lstat_counter;
+    digest_counter;
     (*Fs.mkdir_counter;*)
-    Fs.ls_counter;
+    ls_counter;
     (*Job.external_jobs_run;*)
-    Persist.saves_done;
+    saves_done;
   ]
 
 let act_effort =
@@ -219,42 +205,3 @@ build is still proceeding, or an indication that jenga is finished and
 polling for file-system changes. Note: \"finished\" does not necessary
 mean that the build was successful. Trailing \"?\"s indicate jem has not
 heard from jenga for more than half a second."
-
-module Update = struct
-  (* An [Update.t] expresses the change in status for some [Need.t], or the removal of any
-     status information for a [Need.t]. *)
-  type t =
-    | Set of Need.t * [`todo | `built | `error]
-    | Remove of Need.t
-  [@@deriving bin_io]
-
-  module State = struct
-    (* An [Update.State.t] records the state-information, as sent to a given RPC
-       client. *)
-    type t = Status.t Need.Table.t
-    let create () = Need.Table.create ()
-  end
-end
-
-let updates t state =
-  (* [update t state] computes a list of [Update.t] values (to be sent to an RPC client)
-     by comparing the current state: [t.status], with the state known by the client:
-     [state].  The client [state] is updated to reflect that it is now `up to date', for
-     next time. *)
-  let updates = Queue.create () in
-  let make_status_binable = function
-    | Status.Todo -> `todo
-    | Built -> `built
-    | Error _ -> `error
-  in
-  Hashtbl.merge_into ~src:t.status ~dst:state ~f:(fun ~key src dst ->
-    if match dst with None -> true | Some dst -> not (phys_equal src dst) then
-      Queue.enqueue updates (Update.Set (key, make_status_binable src));
-    Some src);
-  Hashtbl.iteri state ~f:(fun ~key:dst ~data:_ ->
-    if not (Hashtbl.mem t.status dst) then
-      (Hashtbl.remove state dst;
-       Queue.enqueue updates (Remove dst)));
-  Queue.to_list updates
-
-module Updates = struct type t = Update.t list [@@deriving bin_io] end

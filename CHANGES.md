@@ -1,3 +1,201 @@
+## 113.33.00
+
+- Jenga's `Api` is extended with `printf` and `printf_verbose`, and `verbose` is removed.
+  These changes are in preparation for jenga/server.
+
+
+  In jenga/server, builds will run on a daemonized server; the build trace is displayed on
+  any clients which are `watch`ing. `Api.printf` and `Api.printf_verbose` allow messages
+  from the `jenga/root.ml`.
+
+  The command line flag `-verbose` will be a client flag, not a server flag, allowing the
+  choice of verbosity to be selected per-client. It therefore won't make sense to allow
+  `jenga/root.ml` to ask if `verbose` is true, so we remove `verbose` from the jenga `Api`.
+
+  Instead `jenga/root/ml` can use `printf_verbose` for messages which are to be displayed
+  only by a client that is watching with `-verbose`.
+
+
+- Make benchmark analysis script compute heap stats in addition to time.
+
+- Give more information about why we build `Dep.action` and `Dep.action_stdout`, because right
+  now, the output of jenga sometimes doesn't contain the information (the summary line
+  contains it, but it's not always printed, at least when using `-stop-on-error`). For
+  instance:
+
+  Old jenga:
+
+      *** jenga: ERROR: (summary) a/.DEFAULT: External command failed
+            - build a stdout
+            + bash -e -u -o pipefail -c false
+            - exit a stdout, 3ms, exited with code 1
+      *** jenga: ERROR: (summary) a/foo.ml.d: External command failed
+            - build a stdout
+            + .../ocamldep.opt -modules -impl foo.ml
+            foo.ml:
+            File "foo.ml", line 2, characters 0-0:
+            Error: Syntax error
+            - exit a stdout, 4ms, exited with code 2
+
+
+  New jenga:
+
+      *** jenga: ERROR: (summary) a/.DEFAULT: External command failed
+            - build a .DEFAULT
+            + bash -e -u -o pipefail -c false
+            - exit a .DEFAULT, 5ms, exited with code 1
+      *** jenga: ERROR: (summary) a/foo.ml.d: External command failed
+            - build a rule of foo.ml.d
+            + .../ocamldep.opt -modules -impl foo.ml
+            foo.ml:
+            File "foo.ml", line 2, characters 0-0:
+            Error: Syntax error
+            - exit a rule of foo.ml.d, 6ms, exited with code 2
+
+- When
+
+  - a command run by jenga forks
+  - and that fork inherits the stdout/stderr pipes to jenga
+  - and the fork doesn't terminate
+  - but the initial process does terminate
+
+  we are in a situation where, jenga before this feature would consider the command is still
+  running. This makes for some annoying debug, because which command started the stray
+  process is hard to tell, the stdout and stderr of the initial process are not visible
+  anywhere (they are in jenga's memory), etc.
+  Also jenga appears stuck.
+
+  So instead, we expect the stdout/stderr to close shortly after the initial process dies,
+  and if not, we close stdout/stderr ourselves and consider that the command failed.
+
+
+  To test, I put this in a jbuild:
+      (alias
+       ((name DEFAULT)
+        (deps ())
+        (action "(echo false >&2; sleep 4) & ")))
+
+  and `JENGA_OPTIONS='((fd_close_timeout 2s))' jenga -P` complained:
+
+      *** jenga: ERROR: (summary) lib/sexplib/src/.DEFAULT: External command failed
+            - build lib/sexplib/src stdout
+            + bash -e -u -o pipefail -c '(echo false >&2; sleep 4) & '
+            false
+            - exit lib/sexplib/src stdout, 2.004s, stdout or stderr wasn't closed 2s after process exited (due to a stray process perhaps?)
+
+  Also I had hydra do a full tree build (both in jane-continuous-release and jane-release)
+  and they both succeeded.
+
+- Remove jenga command line flag which was `-delay N`
+
+  This controlled `Config.delay_for_dev` which inserted a delay of N seconds before running
+  any job in `Job.run`. I have heard this described as the most pointless command line flag
+  of all time!
+
+  Reason to fix now: Another feature `jane/jenga/api.printf` removes `Api.verbose` which
+  exposes `Config.verbose` to jenga/root.ml. Following both features, we can remove the
+  `Run.For_user` hackery.
+
+- Avoid `nan` from divide-by-0 in jenga monitor's `finish_time_estimator`.
+
+  Without this fix, we may get `nan` as the value of a `Time.t` which breaks an invariant of
+  the `Time` module. This may result in a crash in `Time.to_ofday`.
+
+      ("unhandled exception"
+       ((monitor.ml.Error_
+         ((exn "Option.value_exn None")
+          (backtrace
+           ("Raised by primitive operation at file \"option.ml\", line 59, characters 4-21"
+            "Called from file \"zone.ml\", line 751, characters 8-104"
+            "Called from file \"zone.ml\", line 761, characters 10-48"
+            "Called from file \"time0.ml\", line 275, characters 31-54"
+            "Called from file \"finish_time_estimator.ml\", line 38, characters 14-54"
+            "Called from file \"message.ml\", line 384, characters 30-66"
+            "Called from file \"list.ml\", line 73, characters 12-15"
+            "Called from file \"list.ml\", line 73, characters 12-15"
+            "Called from file \"message.ml\", line 158, characters 2-42"
+            "Called from file \"deferred0.ml\", line 65, characters 64-69"
+            "Called from file \"job_queue.ml\", line 160, characters 6-47" ""))
+          (monitor
+           (((name try_with) (here ()) (id 4) (has_seen_error true)
+             (is_detached true))))))
+        ((pid 17688) (thread_id 4
+
+- Code refactoring to avoid circular module dependencies in `jenga/server` feature.
+
+  There changes have no semantic effects; it's just code movement.
+
+  1. Extract `Message.Job_summary` as a top level module.
+  2. Extract `Build.Run_reason` as a top level module.
+  3. Create all `Effort.Counter` instances in `Progress`.
+
+- The current cycle detection in build.ml is very hard to use correctly.
+  Implement a robust cycle detection in Tenacious.
+
+  Additionally, this feature lets the user see what jenga is currently working on by doing `jenga diagnostics dump-tenacious-graph`.
+
+  Along the way, fixed `jenga monitor` to exit non-zero when it can't discover jengaroot.
+
+- Change `jenga -time` to prefix lines with absolute times. More standard & helpful.
+
+- Extend jenga Api with support for registering environment variables.
+  These can be accessed and manipulated via RPC to the running jenga.
+
+  This feature is necessary to support env-var discovery in build-manager via RPC, rather
+  than the current hack of parsing the output from jenga.
+
+  Environment variable manipulation is exposed on the command line with:
+
+      jenga env get NAME
+      jenga env set NAME VALUE
+      jenga env unset NAME
+      jenga env print
+
+  The Api supports access to either the current value of a variable, or to a dependency
+  which responds dynamically to changes made by `setenv`.
+
+      Var.peek   : 'a Var.t -> 'a
+      Dep.getenv : 'a Var.t -> 'a Dep.t
+
+- Removed `update-stream` RPC. Was never used by anything.
+  It wouldn't have worked anyway because it contained interned paths.
+
+  Removed `app/jenga/lib/rpc_intf.mli` - just unhelpful code duplication of the
+  descriptions in `rpc_intf.ml`.
+
+- Error message when running on nfs was super-confusing.
+
+- Avoid double-reporting build errors originating from the action of a multi-target rule.
+  (And in future avoid double-reporting the error to the `error-pipe' of jenga/server.)
+
+  1. Attribute an error to the head target ONLY.
+
+  2. Additional targets are treated as dependants of the `head_target`, and so (if
+  demanded) are regarded as having `failure' not `error' status.
+
+  3. Always use `head-target` in the "-build" line message, instead of whatever target
+  happens (non deterministically) to get `demanded` first.
+
+  4. Allow user control over the which target is regarded as the `head_target`, by taking
+  the first target listed as the `head_target`.
+
+
+- Couple of extra messages bracketing when GC is performed & finished.
+
+- Stop taking nfs locks, just rely on local locks, so we're finally
+  free from the bug of Nfs_lock where it can't remove a half created
+  lock.
+  Also clean things up while I'm here, no change intended in
+  special_paths.ml.
+
+- Refactor code to remove distinction between types `Progess.Need.t` and `Goal.t`; removing
+  the `Progess.Need.t` type by supporting the one additional case of `Need.jengaroot` as a
+  `Goal.t`.
+
+  Allow the user to demand a `build' of (just) the jengaroot.
+
+- Add support for unsetting environment variables prior to running actions
+
 ## 113.24.02
 
 - Fix the build of jenga and updated the examples

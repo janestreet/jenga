@@ -2,31 +2,20 @@ open Core.Std
 
 module Rel = Path.Rel
 
-let dot_jenga = ".jenga"
-
-let lock = Rel.create (dot_jenga ^ ".lock")
-
 module Dot_jenga = struct
+
+  let dot_jenga = ".jenga"
 
   let prepare () =
     Core.Std.Unix.mkdir_p (Path.to_absolute_string (Path.root_relative dot_jenga))
 
-  (* We name everything ".jenga/.jenga." so it gets ignored by
-     the old .hgignore (Jan 2015).
-     eventually we can change the prefix to just ".jenga/".
-  *)
-  let file ?(old_convention = false) suf =
-    if old_convention
-    then Rel.create (dot_jenga ^/ dot_jenga ^ "." ^ suf)
-    else Rel.create (dot_jenga ^/                   suf)
+  let file suf = Rel.create (dot_jenga ^/ suf)
 
   let log = file "debug"
   let server = file "server"
   let plugin_cache = file "plugin-cache"
-  let db ~version =
-    let old_convention = version = "3" in
-    file ~old_convention ("db-v" ^ version)
-  let local_lock = file ~old_convention:false "lock"
+  let db ~version = file ("db-v" ^ version)
+  let local_lock = file "lock"
 
   let matches path =
     match Path.case path with

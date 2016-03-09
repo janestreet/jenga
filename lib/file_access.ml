@@ -8,7 +8,4 @@ let the_open_file_throttle =
   *)
   Throttle.create ~continue_on_error:true ~max_concurrent_jobs:500
 
-let enqueue f =
-  Throttle.enqueue the_open_file_throttle (fun () ->
-    f ()
-  )
+let enqueue f = Throttle.enqueue the_open_file_throttle f

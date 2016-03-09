@@ -1,18 +1,6 @@
 
-open Core.Std
-open Async.Std
-
-module Q : sig
-  (** [shell_escape s] can be used as a part of bash command line to mean the word [s]
-      with any special characters escaped. *)
-  val shell_escape : string -> string
-  (** [shell_escape_list l] constructs a part of bash command line with multiple
-      blank-separated words [l] on it with any special characters escaped *)
-  val shell_escape_list : string list -> string
-end
-
-module Job_start   : sig type t [@@deriving bin_io] end
-module Job_summary : sig type t [@@deriving bin_io] end
+open! Core.Std
+open! Async.Std
 
 val init_logging : Config.t -> log_filename:string -> unit
 
@@ -20,15 +8,22 @@ val error : ('a, unit, string, unit) format4 -> 'a
 val message : ('a, unit, string, unit) format4 -> 'a
 val verbose : ('a, unit, string, unit) format4 -> 'a
 val trace : ('a, unit, string, unit) format4 -> 'a
+
+(** [unlogged] - no leading triple stars; not recorded in log *)
 val unlogged : ('a, unit, string, unit) format4 -> 'a
 
-(* progress style message - will be overwritten by next transient or normal message *)
+(** [printf] - no leading triple stars *)
+val printf : ('a, unit, string, unit) format4 -> 'a
+
+(** [printf_verbose] - no leading triple stars; tagged verbose *)
+val printf_verbose : ('a, unit, string, unit) format4 -> 'a
+
+(** Progress style message - will be overwritten by next transient or normal message *)
 val transient : ('a, unit, string, unit) format4 -> 'a
 
 val clear_transient : unit -> unit
 
-(*_ used by jengraph *)
-val pretty_span       : Time.Span.t -> string
+(** Used by jengraph *)
 val parse_pretty_span : string -> Time.Span.t
 val parse_build_measures_assoc_list : string -> (string * string) list option
 
@@ -37,10 +32,10 @@ val job_started :
   where:string ->
   prog:string ->
   args:string list ->
-  Job_start.t (* returned for use in call to job_finished *)
+  Job_summary.Start.t (* returned for use in call to job_finished *)
 
 val job_finished :
-  Job_start.t ->
+  Job_summary.Start.t ->
   outcome : [`success | `error of string] ->
   duration : Time.Span.t ->
   stdout : string ->
@@ -66,5 +61,6 @@ val polling : unit -> unit
 val sensitized_on : desc:string -> unit
 val file_changed : desc:string -> unit
 val rebuilding : unit -> unit
+val var_changed : var:string -> old:string option -> new_:string option -> unit
 
 val flushed : unit -> unit Deferred.t

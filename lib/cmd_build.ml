@@ -93,17 +93,9 @@ let show_trace_messages =
   Param.flag "trace" Spec.no_arg
     ~doc:" switch on some additional trace messages"
 
-let debug_discovered_graph =
-  Param.flag "debug-discovered-graph" ~aliases:["dg"] Spec.no_arg
-    ~doc:" debug when edges are added/removed in the discovered-graph"
-
 let prefix_time =
   Param.flag "time" Spec.no_arg
-    ~doc:" prefix all messages with the time (since the build started)"
-
-let delay_for_dev =
-  Param.flag "delay" (Spec.optional Spec.int)
-    ~doc:"<seconds> (for development) delay for N seconds before every external job"
+    ~doc:" prefix all messages with the time"
 
 let report_long_cycle_times =
   Param.flag "report-long-cycle-times" ~aliases:["long"] (Spec.optional Spec.int)
@@ -191,9 +183,7 @@ let create_config
       ~show_reconsidering
       ~show_reflecting
       ~show_trace_messages
-      ~debug_discovered_graph
       ~prefix_time
-      ~delay_for_dev
       ~report_long_cycle_times
       ~omake_server
       ~output_postpone:_
@@ -229,9 +219,7 @@ let create_config
     show_reconsidering;
     show_trace_messages;
     show_error_dependency_paths;
-    debug_discovered_graph;
     prefix_time;
-    delay_for_dev = Option.map delay_for_dev ~f:(fun x -> sec (float x));
     report_long_cycle_times =
       Option.map report_long_cycle_times ~f:(fun ms -> Time.Span.create ~ms ());
 
@@ -262,7 +250,7 @@ let create_config
   }
 
 let config_param : Config.t Command.Param.t =
-  let module Let_syntax = Command.Let_syntax in
+  let open Command.Let_syntax in
   let%map_open
       j_number                        = j_number
   and f_number                        = f_number
@@ -280,9 +268,7 @@ let config_param : Config.t Command.Param.t =
   and show_reconsidering              = show_reconsidering
   and show_reflecting                 = show_reflecting
   and show_trace_messages             = show_trace_messages
-  and debug_discovered_graph          = debug_discovered_graph
   and prefix_time                     = prefix_time
-  and delay_for_dev                   = delay_for_dev
   and report_long_cycle_times         = report_long_cycle_times
   and omake_server                    = omake_server
   and output_postpone:_               = output_postpone
@@ -317,9 +303,7 @@ let config_param : Config.t Command.Param.t =
     ~show_reconsidering
     ~show_reflecting
     ~show_trace_messages
-    ~debug_discovered_graph
     ~prefix_time
-    ~delay_for_dev
     ~report_long_cycle_times
     ~omake_server
     ~output_postpone

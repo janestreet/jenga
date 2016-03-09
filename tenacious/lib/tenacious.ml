@@ -9,6 +9,7 @@ module Weak_glass = Heart.Weak_glass
 let version = sprintf "new-tenacious; %s" Heart.version
 
 type 'a result = ('a * Heart.t) option (* [None] when cancelled *)
+
 type 'a comp = 'a result Deferred.t
 
 (* The [~dep] is both an additional signal to cancel the computation (i.e. a second
@@ -20,11 +21,19 @@ type 'a comp = 'a result Deferred.t
        >>| Option.map ~f:(fun (res, heart_res) -> (res, Heart.combine heart_res dep))
 
    but sometimes it can do so more efficiently (less intermediate hearts). In practice,
-   right now, the [dep] are dependencies of the left hand side of surrounding binds. *)
-type 'a semantics = cancel:Heart.t -> dep:Heart.t -> 'a comp
+   right now, the [dep] are dependencies of the left hand side of surrounding binds.
+
+   The thread represents who is asking for the computation, some in some sense it is the
+   same kind of information as [cancel] and [dep], except that instead of being passed for
+   the purpose of cancelling the computation, it is passed around for the purpose of
+   finding cycles. Cycles can only be introduced by reify nodes, so everywhere else the
+   [thread] is just passed around (unlike [cancel] and [dep] which support cancel/restart
+   at a granularity finer than whole computations between [reify] nodes). *)
+type 'a semantics =
+  thread:Graph.Node.t -> cancel:Heart.t -> dep:Heart.t -> 'a comp
 
 type 'a state =
-| Wait of 'a comp
+| Wait of 'a result Deferred.t * Graph.Node.t
 | Running of 'a semantics
 | Ready of 'a * Heart.t
 
@@ -33,7 +42,7 @@ type 'a t =
   | Map : 'a t * ('a -> 'b) -> 'b t
   | All : 'a t list -> 'a list t
   | Bind : 'a t * ('a -> 'b t) -> 'b t
-  | Reify : 'a state ref * 'a t Lazy.t -> 'a t
+  | Reify : 'a state ref * String.t Lazy.t * 'a t Lazy.t -> 'a t
   | Lift : (unit -> ('a * Heart.t) Deferred.t) -> 'a t
   | Embed : 'a semantics -> 'a t
 
@@ -62,7 +71,7 @@ let rec reduce : type a . a t -> a t =
         | Return x -> reduce (k x)
         | _ -> if phys_equal s s' then t else Bind(s', k)
       end
-    | Reify (_, lazy s) -> begin
+    | Reify (_, _name, lazy s) -> begin
         (* The lazy contains the already reduced version. *)
         match s with
         | Return _ -> s
@@ -84,33 +93,35 @@ and reduce_list : type a . a t list -> a t list =
     in
     loop true [] ts
 
+let combine_result' ~with_:heart =
+  function
+  | None -> None
+  | Some(v, certificate) -> Some(v, Heart.combine2 certificate heart)
+
 let combine_result comp ~with_:heart =
   if Heart.is_unbreakable heart then comp
-  else
-    comp >>| function
-    | None -> None
-    | Some(v, certificate) -> Some(v, Heart.combine2 certificate heart)
+  else comp >>| combine_result' ~with_:heart
 
 let rec sample : type a . a t -> a semantics =
-  fun t ~cancel ~dep ->
+  fun t ~thread ~cancel ~dep ->
     match t with
-    | Return x -> return x ~cancel ~dep
-    | Bind (t, f) -> bind t f ~cancel ~dep
-    | Map (t, f) -> map t f ~ cancel ~dep
-    | All ts -> all ts ~cancel ~dep
-    | Reify (st, lazy t) -> reify st t ~cancel ~dep
-    | Lift f -> lift f ~cancel ~dep
-    | Embed emb -> emb ~cancel ~dep
+    | Return x -> return x ~thread ~cancel ~dep
+    | Bind (t, f) -> bind t f ~thread ~cancel ~dep
+    | Map (t, f) -> map t f ~thread ~cancel ~dep
+    | All ts -> all ts ~thread ~cancel ~dep
+    | Reify (st, name, lazy t) -> reify st ~name t ~thread ~cancel ~dep
+    | Lift f -> lift f ~thread ~cancel ~dep
+    | Embed emb -> emb ~thread ~cancel ~dep
 
 and bind : 'a 'b. 'a t -> ('a -> 'b t) -> 'b semantics =
-  fun t1 f ~cancel ~dep ->
-    sample t1 ~cancel ~dep >>= function
+  fun t1 f ~thread ~cancel ~dep ->
+    sample t1 ~thread ~cancel ~dep >>= function
     | None -> Deferred.return None
     | Some (v1, certificate1) ->
       match reduce (f v1) with
       | Return v2 -> Deferred.return (Some (v2, certificate1))
       | t2 ->
-        sample t2 ~cancel ~dep:certificate1 >>= function
+        sample t2 ~thread ~cancel ~dep:certificate1 >>= function
         | None ->
             (* [t2] was cancelled *)
           if Heart.is_broken cancel || Heart.is_broken dep then
@@ -121,22 +132,22 @@ and bind : 'a 'b. 'a t -> ('a -> 'b t) -> 'b semantics =
                Cancellation of [t2] must be because [v1] has been invalidated.
                Must sample again. *)
             assert (Heart.is_broken certificate1);
-            bind t1 f ~cancel ~dep
+            bind t1 f ~thread ~cancel ~dep
           end
         | Some _ as res -> Deferred.return res
 
 and return : 'a . 'a -> 'a semantics =
-  fun v ~cancel:_ ~dep ->
+  fun v ~thread:_ ~cancel:_ ~dep ->
     Deferred.return (Some (v, dep))
 
 and map : 'a 'b. 'a t -> ('a -> 'b) -> 'b semantics =
-  fun t1 f ~cancel ~dep ->
-    sample t1 ~cancel ~dep >>| function
+  fun t1 f ~thread ~cancel ~dep ->
+    sample t1 ~thread ~cancel ~dep >>| function
     | None -> None
     | Some (v1, certificate) -> Some (f v1, certificate)
 
 and all : 'a . 'a t list -> 'a list semantics =
-  fun ts ~cancel ~dep ->
+  fun ts ~thread ~cancel ~dep ->
     let cancel = Heart.combine2 cancel dep in
     let len = List.length ts in
     let cells = Array.create ~len None in
@@ -170,7 +181,7 @@ and all : 'a . 'a t list -> 'a list semantics =
       | _ ->
         let rec loop () =
           incr count;
-          sample t ~cancel ~dep:Heart.unbreakable >>> fun res ->
+          sample t ~thread ~cancel ~dep:Heart.unbreakable >>> fun res ->
           decr count;
           let certificate_opt =
             match res with
@@ -221,17 +232,22 @@ and all : 'a . 'a t list -> 'a list semantics =
   cancelled, returns a result with a valid certificate, that result can be used, and
   re-sampling is avoided.
 *)
-and reify : 'a . 'a state ref -> 'a t -> 'a semantics =
-  fun state t ~cancel ~dep ->
-    let start ~last =
+
+and reify : 'a . 'a state ref -> name:(String.t Lazy.t) -> 'a t -> 'a semantics =
+  fun state ~name t ->
+    let start ~last_result ~last_node =
       let stop_glass =
         (* This is filled to cancel the [shared_computation] *)
         Glass.create ()
       in
       let stop_heart = Heart.watch stop_glass in
+      let shared_computation_node =
+        Graph.Node.create (lazy ("reify: " ^ Lazy.force name))
+      in
       let shared_computation =
         (* wait for the previous (cancelled) computation to finish *)
-        last >>= fun res ->
+        Graph.edge_until shared_computation_node ~blocked_on:last_node last_result
+        >>= fun res ->
         let last_still_valid =
           match res with
           | None -> false
@@ -240,27 +256,31 @@ and reify : 'a . 'a state ref -> 'a t -> 'a semantics =
         (* if the last computation returns a result despite having been cancelled, we can
            use that result if the certificate is still valid, avoiding a new sampling *)
         if last_still_valid
-        then last
-        else sample t ~cancel:stop_heart ~dep:Heart.unbreakable
+        then Deferred.return res
+        else
+          sample t
+            ~thread:shared_computation_node ~cancel:stop_heart ~dep:Heart.unbreakable
       in
       let count = ref 0 in
-      let join ~cancel:my_cancel ~dep:my_dep =
+      let join ~thread ~cancel:my_cancel ~dep:my_dep =
         (* join a new client, with its own [my_cancel] to the running [shared_computation] *)
         let my_cancel = Heart.combine2 my_cancel my_dep in
         incr count;
-        Heart.or_broken my_cancel shared_computation >>= function
-        | Some _ -> combine_result shared_computation ~with_:my_dep
+        Graph.edge_until thread ~blocked_on:shared_computation_node
+          (Heart.or_broken my_cancel shared_computation)
+        >>| function
+        | Some res -> combine_result' res ~with_:my_dep
         | None -> (* this client has cancelled *)
           assert (!count >= 1);
           decr count;
           if (!count = 0) then (
-            state := Wait shared_computation;
+            state := Wait (shared_computation, shared_computation_node);
             Glass.break stop_glass
           );
-          Deferred.return None
+          None
       in
       begin
-        shared_computation >>> function
+        shared_computation  >>> function
         | None -> () (* was stopped *)
         | Some (x,certificate) ->
           (* wasn't stopped, of stop requested *)
@@ -272,18 +292,24 @@ and reify : 'a . 'a state ref -> 'a t -> 'a semantics =
           )
       end;
       state := Running join;
-      join ~cancel ~dep
+      join
     in
-    match !state with
-    | Wait last -> start ~last
-    | Running join -> join ~cancel ~dep
-    | Ready(x, certificate) ->
-      if Heart.is_broken certificate
-      then start ~last:(Deferred.return None)
-      else Deferred.return (Some(x, Heart.combine2 certificate dep))
+    fun ~thread ~cancel ~dep ->
+      match !state with
+      | Wait (result, node) ->
+        start ~last_result:result ~last_node:node ~thread ~cancel ~dep
+      | Running join -> join ~thread ~cancel ~dep
+      | Ready(x, certificate) ->
+        if Heart.is_broken certificate
+        then
+          start
+            ~last_result:(Deferred.return None)
+            ~last_node:(Graph.Node.create (lazy "reify_last_broken"))
+            ~thread ~cancel ~dep
+        else Deferred.return (Some (x, Heart.combine2 certificate dep))
 
 and lift : type a . (unit -> (a * Heart.t) Deferred.t) -> a semantics =
-  fun f ~cancel ~dep ->
+  fun f ~thread:_ ~cancel ~dep ->
     (* Make initial check of [cancel]; afterwards [cancel] is ignored.
        Waits until [f ()] is determined before returning *)
     if Heart.is_broken cancel || Heart.is_broken dep
@@ -303,12 +329,13 @@ let all = function
 
 let lift f = Lift f
 
-let reify t =
-  let state = ref (Wait (Deferred.return None)) in
-  Reify (state, lazy (reduce t))
+let reify ~name t =
+  let state = ref (Wait (
+    Deferred.return None, Graph.Node.create (lazy "reify wait"))) in
+  Reify (state, name, lazy (reduce t))
 
 let embed f =
-  Embed (fun ~cancel ~dep ->
+  Embed (fun ~thread:_ ~cancel ~dep ->
     let cancel = Heart.combine2 cancel dep in
     combine_result (f ~cancel) ~with_:dep
   )
@@ -317,20 +344,20 @@ let all_unit ts =
   map (all ts) ~f:(fun (_:unit list) -> ())
 
 let race a b =
-  Embed (fun ~cancel ~dep ->
+  Embed (fun ~thread ~cancel ~dep ->
     let cancel_a = Heart.Glass.create () in
     let cancel_b = Heart.Glass.create () in
     let ad =
       match reduce a with
       | Return v -> Deferred.return (Some (v, dep))
       | a ->
-        sample ~cancel:(Heart.combine2 cancel (Heart.watch cancel_a)) ~dep a
+        sample ~thread ~cancel:(Heart.combine2 cancel (Heart.watch cancel_a)) ~dep a
     in
     let bd =
       match reduce b with
       | Return v -> Deferred.return (Some (v, dep))
       | b ->
-        sample ~cancel:(Heart.combine2 cancel (Heart.watch cancel_b)) ~dep b
+        sample ~thread ~cancel:(Heart.combine2 cancel (Heart.watch cancel_b)) ~dep b
     in
     Deferred.choose
       [ choice ad (fun x -> `a x)
@@ -356,7 +383,7 @@ let both =
   map2 ~f:(fun x y -> x, y)
 
 let race_error (type e) =
-  let go cancel dep =
+  let go ~thread ~cancel ~dep =
     let module M : sig
       val go :
         ('a, e) Result.t t
@@ -382,8 +409,9 @@ let race_error (type e) =
             | Return v -> Deferred.return (Some (v, dep))
             | tenacious ->
                 sample tenacious
-                ~cancel:(Heart.combine2 cancel (Heart.watch g))
-                ~dep
+                  ~thread
+                  ~cancel:(Heart.combine2 cancel (Heart.watch g))
+                  ~dep
           end
         ; cancel = g
         }
@@ -451,19 +479,19 @@ let race_error (type e) =
     in
     M.go
   in
-  fun a b ~f -> Embed (fun ~cancel ~dep -> go cancel dep a b ~f)
+  fun a b ~f -> Embed (fun ~thread ~cancel ~dep -> go ~thread ~cancel ~dep a b ~f)
 
 let with_semantics inner_t ~f =
-  Embed (fun ~cancel ~dep ->
-    f (fun ~cancel ~dep -> sample (reduce inner_t) ~cancel ~dep)
-      ~cancel ~dep)
+  Embed (fun ~thread ~cancel ~dep ->
+    f (fun ~thread ~cancel ~dep -> sample (reduce inner_t) ~thread ~cancel ~dep)
+      ~thread ~cancel ~dep)
 
 let bracket t ~running ~finished ~cancelled =
   let count = ref 0 in
-  Embed (fun ~cancel ~dep ->
+  Embed (fun ~thread ~cancel ~dep ->
     running !count;
     incr count;
-    sample (reduce t) ~cancel ~dep >>| fun res ->
+    sample (reduce t) ~thread ~cancel ~dep >>| fun res ->
     begin match res with
     | None -> cancelled ()
     | Some (v, _) -> finished v
@@ -472,28 +500,32 @@ let bracket t ~running ~finished ~cancelled =
   )
 
 let uncancellable t =
-  with_semantics t ~f:(fun sample ~cancel:_ ~dep ->
+  with_semantics t ~f:(fun sample ~thread ~cancel:_ ~dep ->
     combine_result
-      (sample ~cancel:Heart.unbreakable ~dep:Heart.unbreakable)
+      (sample ~thread ~cancel:Heart.unbreakable ~dep:Heart.unbreakable)
       ~with_:dep
   )
 
 let desensitize t =
-  let f sample ~cancel ~dep =
+  let f sample ~thread ~cancel ~dep =
     let cancel = Heart.combine2 cancel dep in
-    sample ~cancel ~dep:Heart.unbreakable >>| function
+    sample ~thread ~cancel ~dep:Heart.unbreakable >>| function
     | None -> None
     | Some value_and_heart -> Some (value_and_heart, dep)
   in
   with_semantics t ~f
 
-let exec t =
-  sample (reduce t) ~cancel:Heart.unbreakable ~dep:Heart.unbreakable >>| function
+let exec' t ~thread =
+  sample (reduce t) ~thread ~cancel:Heart.unbreakable ~dep:Heart.unbreakable >>| function
   | Some result -> result
   | None ->
     (* This holds because [sample] only return a [None] if the [~cancel] or [~dep] it
        receives is broken. *)
     assert false
+
+let exec t ~name =
+  let node = Graph.Node.create (lazy ("exec: " ^ Lazy.force name)) in
+  Graph.root_until ~node (exec' ~thread:node t)
 
 module Var = struct
   type 'a t = {
@@ -505,7 +537,7 @@ module Var = struct
     ; glass = Heart.Glass.create ()
     }
   let watch var =
-    Embed (fun ~cancel:_ ~dep ->
+    Embed (fun ~thread:_ ~cancel:_ ~dep ->
       let heart = Heart.watch var.glass in
       Deferred.return (Some (var.value, Heart.combine2 heart dep))
     )
@@ -523,14 +555,14 @@ module Var = struct
 end
 
 let cutoff ~equal ten =
-  Embed (fun ~cancel:_ ~dep ->
+  Embed (fun ~thread ~cancel:_ ~dep ->
     let my_weak_glass, my_heart = Weak_glass.create () in
-    exec ten >>| fun (first_result,first_heart) ->
+    exec' ~thread ten >>| fun (first_result,first_heart) ->
     let rec loop heart =
       Heart.or_broken heart (Weak_glass.unwatched my_weak_glass)
       >>> function
       | None ->
-        exec ten >>> fun (replacement_result,heart) ->
+        exec ~name:(lazy "cutoff") ten >>> fun (replacement_result,heart) ->
         if (equal first_result replacement_result)
         then loop heart
         else Weak_glass.break my_weak_glass
@@ -561,8 +593,8 @@ let race_errors errors =
 module For_tests = struct
 
   let race_error a b ~f =
-    let a = reify a in
-    let b = reify b in
+    let a = reify ~name:(lazy "race-error-a") a in
+    let b = reify ~name:(lazy "race-error-b") b in
     bind
       (race (map ~f:(fun x -> `a x) a) (map ~f:(fun x -> `b x) b))
       (function
@@ -604,12 +636,14 @@ module Monad_infix = struct
   let (>>=) = (>>=)
 end
 module Let_syntax = struct
-  let return = return
-  let map    = map
-  let bind   = bind
-  let both   = both
-  module Open_on_rhs  = struct let return = return end
-  module Open_in_body = struct let return = return end
+  module Let_syntax = struct
+    let return = return
+    let map    = map
+    let bind   = bind
+    let both   = both
+    module Open_on_rhs  = struct let return = return end
+    module Open_in_body = struct let return = return end
+  end
 end
 
 module Result = struct

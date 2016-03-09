@@ -1,6 +1,6 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
+open! Async.Std
 
 (* [Action.t] - things which a build-rule can do:
    - [shell] run a process (a [Job.t])
@@ -16,13 +16,12 @@ val job : t -> Job.t
 val run : t ->
   message:(unit->unit) ->
   output: 'a Job.Output.t ->
-  putenv: (string * string) list ->
+  putenv: (string * string option) list ->
   progress: Progress.t ->
-  config: Config.t ->
   need: string ->
   ('a,
    [
-   | `command_failed of Message.Job_summary.t
+   | `command_failed of Job_summary.t
    | `other_error of exn
    ]
   ) Result.t Deferred.t

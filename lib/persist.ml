@@ -9,8 +9,6 @@ module Version = struct
   let current = "4"
 end
 
-let saves_done = Effort.Counter.create "db-save"
-
 let jenga_show_persist =
   Option.is_some (Core.Std.Sys.getenv "JENGA_SHOW_PERSIST")
 
@@ -92,7 +90,7 @@ end = struct
     if Jenga_options.t.turn_off_db_saves
     then Deferred.unit
     else
-      Effort.track saves_done (fun () ->
+      Effort.track Progress.saves_done (fun () ->
         Monitor.try_with (fun () ->
           Writer.with_file_atomic db_filename ~f:(fun w ->
             (* snapshot & write must be in same async-block *)

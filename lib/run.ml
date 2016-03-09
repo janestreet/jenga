@@ -62,18 +62,6 @@ let install_signal_handlers () =
 (* for pre-init_logging errors *)
 let error fmt = ksprintf (fun s -> Core.Std.Printf.eprintf "%s\n%!" s) fmt
 
-module For_user = struct
-
-  let the_installed_config = ref None
-  let install_config_for_user_rules config = the_installed_config := Some config
-
-  let config() =
-    match !the_installed_config with
-    | Some config -> config
-    | None -> assert false
-
-end
-
 let configure_scheduler ~report_long_cycle_times =
   Option.iter report_long_cycle_times ~f:(fun cutoff ->
     Scheduler.report_long_cycle_times ~cutoff ()
@@ -113,7 +101,6 @@ let main' jr_spec ~root_dir config =
 
   Path.Repo.set_root root_dir;
   tune_gc (Config.gc config);
-  For_user.install_config_for_user_rules config;
 
   Special_paths.Dot_jenga.prepare ();
 
@@ -161,7 +148,8 @@ let main' jr_spec ~root_dir config =
   let config =
     try
       if Config.f_number config > 0 then (
-        Async_parallel_deprecated.Std.Parallel.init();
+        Async_parallel_deprecated.Std.Parallel.init
+          ~close_stdout_and_stderr:true ();
       );
       config
     with | exn ->

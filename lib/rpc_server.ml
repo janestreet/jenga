@@ -2,13 +2,13 @@
 open Core.Std
 open Async.Std
 
-let make_periodic_pipe_writer span ~aborted ~f =
+let make_periodic_pipe_writer span ~f =
   let r =
     Pipe.init (fun w ->
       let rec loop () =
         let value = f () in
         choose [
-          choice aborted (fun () -> `aborted);
+          choice (Pipe.closed w) (fun () -> `aborted);
           choice
             (
               Pipe.write w value
@@ -26,28 +26,45 @@ let make_periodic_pipe_writer span ~aborted ~f =
   in
   return (Ok r)
 
+(* [State.t] is a place holder until the time we really need some connection state. *)
+module State : sig
+  type t
+  val create : unit -> t
+end = struct
+  type t = unit
+  let create () = ()
+end
+
+let getenv =
+  Rpc.Rpc.implement Rpc_intf.Getenv.rpc (fun _state q -> return (Var.Getenv.run q))
+
+let setenv =
+  Rpc.Rpc.implement Rpc_intf.Setenv.rpc (fun _state q -> return (Var.Setenv.run q))
+
+let env_info =
+  Rpc.Rpc.implement Rpc_intf.Env_info.rpc (fun _state () -> return (Var.all_registered ()))
+
 let really_go ~root_dir progress =
   let progress_report_span = sec (0.3) in
   let progress_stream =
     Rpc.Pipe_rpc.implement Rpc_intf.Progress_stream.rpc
-      (fun (_ : Progress.Update.State.t) () ~aborted ->
-         make_periodic_pipe_writer progress_report_span ~aborted ~f:(fun () ->
+      (fun (_ : State.t) () ->
+         make_periodic_pipe_writer progress_report_span ~f:(fun () ->
            Progress.snap progress
          )
       )
   in
-  let update_stream =
-    Rpc.Pipe_rpc.implement Rpc_intf.Update_stream.rpc
-      (fun state () ~aborted ->
-         make_periodic_pipe_writer progress_report_span ~aborted ~f:(fun () ->
-           Progress.updates progress state
-         )
-      )
+  let dump_tenacious_graph =
+    Rpc.Rpc.implement Rpc_intf.Dump_tenacious_graph.rpc
+      (fun _state () -> return (Tenacious_lib.Graph.Dump.collect ()))
   in
   let implementations =
     Rpc.Implementations.create ~on_unknown_rpc:`Close_connection ~implementations: [
       progress_stream;
-      update_stream;
+      dump_tenacious_graph;
+      getenv;
+      setenv;
+      env_info;
     ]
   in
   match implementations with
@@ -57,8 +74,7 @@ let really_go ~root_dir progress =
       Tcp.Server.create Tcp.on_port_chosen_by_os ~on_handler_error:`Ignore
         (fun _addr reader writer ->
            Rpc.Connection.server_with_close reader writer ~implementations
-             ~connection_state:(fun (_ : Rpc.Connection.t) ->
-               Progress.Update.State.create ())
+             ~connection_state:(fun (_ : Rpc.Connection.t) -> State.create ())
              ~on_handshake_error:`Ignore)
     in
     start_server () >>= fun inet ->

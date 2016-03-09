@@ -7,18 +7,15 @@ module Target_rule = struct
 
   type t = {
     targets : Path.Rel.t list;
-    action_depends : Action.t Dep.t
+    action_depends : Action.t Dep.t;
   }
   [@@deriving fields, sexp_of]
 
   let create ~targets action_depends =
-    (* Sort targets on construction.
-       This allows for better target-rule keyed caching, regarding as equivalent rules
-       which differ only in the order of their targets/deps.
-    *)
-    let targets = List.sort ~cmp:Path.Rel.compare targets in
-    match List.find_consecutive_duplicate targets ~equal:Path.Rel.equal with
-    | Some (path, _path2) ->
+    (* The first target listed by the user is the special [head_target] to which any
+       errors will be attributed. (So we don't sort the targets). *)
+    match List.find_a_dup targets ~compare:Path.Rel.compare with
+    | Some path ->
       raise_s [%sexp "duplicate target in rule", (path : Path.Rel.t)]
     | None -> { targets; action_depends }
 

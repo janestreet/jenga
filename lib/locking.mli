@@ -4,8 +4,8 @@
     of the [File_access] throttle, to avoid deadlocks.
 *)
 
-open Core.Std
-open Async.Std
+open! Core.Std
+open! Async.Std
 
 (** At any given time, you can either have any number of functions passed
     to [lock_directory_for_action] or any number of functions passed to

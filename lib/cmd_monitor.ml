@@ -16,52 +16,8 @@ let message =
   then fun fmt -> ksprintf (fun s -> Core.Std.Printf.printf "%s\r%!" s) fmt
   else fun fmt -> ksprintf (fun s -> Core.Std.Printf.printf "\027[2K%s\r%!" s) fmt
 
-module Connection_error = struct
-  type t =
-    | Not_running
-    | No_server_mode
-    | Rpc_failed of string * exn
-    | Tcp_failed of string * exn
-
-  let report = function
-    | Not_running -> message "jenga not running"
-    | No_server_mode -> message "jenga running in -no-server mode"
-    | Rpc_failed(server_name, exn) ->
-      message !"with_rpc_connection: %s\n%{Exn}" server_name exn
-    | Tcp_failed(server_name, exn) ->
-      message !"failed to connect with: %s\n%{Exn}" server_name exn
-
-  let may_retry = function
-    | Not_running | No_server_mode -> true
-    | Rpc_failed _ | Tcp_failed _ -> false
-
-  let exit_code err =
-    if may_retry err then 1 else 2
-end
-
-let with_connection ~root_dir ~f =
-  Server_lock.server_location ~root_dir >>= function
-  | `server_not_running -> return (Error Connection_error.Not_running)
-  | `info info ->
-    let host = Server_lock.Info.host info in
-    let port = Server_lock.Info.port info in
-    let host = if String.(host = Unix.gethostname()) then "localhost" else host in
-    match port with
-    | 0 -> return (Error Connection_error.No_server_mode)
-    | _ ->
-      let server_name = sprintf "%s:%d" host port in
-      try_with (fun () ->
-        Rpc.Connection.with_client ~host ~port f
-        >>| function
-        | Ok _ as ok -> ok
-        | Error exn -> Error (Connection_error.Rpc_failed(server_name, exn))
-      )
-      >>| function
-      | Ok res -> res
-      | Error exn -> Error (Connection_error.Tcp_failed(server_name, exn))
-
 let run_once ~root_dir style =
-  with_connection ~root_dir ~f:(fun conn ->
+  Jenga_client.with_connection_with_detailed_error ~root_dir ~f:(fun conn ->
     Rpc.Pipe_rpc.dispatch_exn Rpc_intf.Progress_stream.rpc conn ()
     >>= fun (reader,_id) ->
     Pipe.read reader >>| function
@@ -71,9 +27,9 @@ let run_once ~root_dir style =
   ) >>= function
   | Ok () -> return 0
   | Error err ->
-    Connection_error.report err;
+    message "%s" (Jenga_client.Connection_error.to_string err);
     printf "\n";
-    return (Connection_error.exit_code err)
+    return (Jenga_client.Connection_error.exit_code err)
 
 let run exit_on_finish ~root_dir style =
   let last_snap = ref None in
@@ -87,7 +43,7 @@ let run exit_on_finish ~root_dir style =
       if wait then Clock.after retry_span
       else Deferred.unit
     end >>= fun () ->
-    with_connection ~root_dir ~f:(fun conn ->
+    Jenga_client.with_connection_with_detailed_error ~root_dir ~f:(fun conn ->
       let stop = ref false in
       let fresh = ref false in
       don't_wait_for (
@@ -125,21 +81,18 @@ let run exit_on_finish ~root_dir style =
     ) >>= function
     | Ok () -> loop ~wait:true
     | Error err ->
-      Connection_error.report err;
-      if Connection_error.may_retry err && not exit_on_finish
+      message "%s" (Jenga_client.Connection_error.to_string err);
+      if Jenga_client.Connection_error.may_retry err && not exit_on_finish
       then loop ~wait:true
       else begin
         printf "\n";
-        return (Connection_error.exit_code err)
+        return (Jenga_client.Connection_error.exit_code err)
       end
   in
   loop ~wait:false
 
-
-let error fmt = ksprintf (fun s -> Core.Std.Printf.eprintf "%s\n%!" s) fmt
-
 let command =
-  Command.basic
+  Command.async_or_error
     Command.Spec.(
       empty
       +> flag "exit-on-finish" no_arg
@@ -147,14 +100,12 @@ let command =
       +> flag "snapshot" no_arg
            ~doc:" display only a single snapshot of jenga's state"
       +> flag "progress-fraction" no_arg
-           ~doc:" display only the built/total fraction"
-    )
+           ~doc:" display only the built/total fraction")
     ~summary:"monitor jenga running in the current repo."
     ~readme:Progress.readme
     (fun exit_on_finish snapshot progress_fraction () ->
        match Special_paths.discover_root () with
-       | Error e ->
-         error "%s" (Error.to_string_hum e)
+       | Error e -> return (Error e)
        | Ok root_dir ->
          Path.Repo.set_root root_dir;
          let style = if progress_fraction then `fraction else `jem_style in

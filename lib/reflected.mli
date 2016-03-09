@@ -1,5 +1,5 @@
 
-open Core.Std
+open! Core.Std
 
 (* [Reflected.Action.t] and [Reflected.Trip.t] are returned through the API in response to
    the reflection functions, which can discover the current rule-triple which generate a

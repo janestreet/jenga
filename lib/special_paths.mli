@@ -1,9 +1,4 @@
-open Core.Std
-open Async.Std
-
-(** Files created at the top level of the repository. *)
-
-val lock : Path.Rel.t
+open! Core.Std
 
 (** Files created in the [.jenga] sub-directory. *)
 module Dot_jenga : sig

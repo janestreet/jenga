@@ -1,8 +1,6 @@
 
-open Core.Std
-open Async.Std
-
-val saves_done : Effort.Counter.t
+open! Core.Std
+open! Async.Std
 
 type t
 

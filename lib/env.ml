@@ -20,7 +20,7 @@ let putenv_for_path =
     replacement_path
 
 type t = {
-  putenv : (string * string) list;
+  putenv : (string * string option) list;
   build_begin : unit -> unit Deferred.t;
   build_end : unit -> unit Deferred.t;
   artifacts_policy : Artifact_policy.t;
@@ -37,7 +37,7 @@ let create
   let putenv = putenv @
     match command_lookup_path with
     | None -> []
-    | Some spec -> [("PATH",putenv_for_path spec)]
+    | Some spec -> [("PATH", Some (putenv_for_path spec))]
   in
   let artifacts_policy =
     match artifacts with

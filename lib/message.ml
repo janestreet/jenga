@@ -3,6 +3,8 @@ open! Int.Replace_polymorphic_compare
 open Async.Std
 module Log = Async.Std.Log
 
+let parse_pretty_span = Job_summary.parse_pretty_span
+
 let pretend_to_be_omake =
   match Core.Std.Sys.getenv "JENGA_PRETEND_TO_BE_OMAKE" with
   | None -> false
@@ -11,143 +13,27 @@ let pretend_to_be_omake =
 let build_system_message_tag =
   if pretend_to_be_omake then "*** omake" else "*** jenga"
 
-module Q : sig
-
-  val shell_escape : string -> string
-  val shell_escape_list : string list -> string
-
-end = struct
-
-  let is_special_char_to_bash = function
-    | '\\' | '\'' | '"' | '`' | '<' | '>' | '|' | ';' | ' ' | '\t' | '\n'
-    | '(' | ')' | '[' | ']' | '?' | '#' | '$' | '^' | '&' | '*' | '=' | '!' | '~'
-      -> true
-    | _
-      -> false
-
-  let vanilla_shell_escape s =
-    "'" ^ String.concat_map s ~f:(function
-    | '\'' -> "'\\''"
-    | c -> String.make 1 c
-    ) ^ "'"
-
-  let needs_quoting = function
-    | "" -> true
-    | s -> String.exists s ~f:is_special_char_to_bash
-
-  let shell_escape s =
-    (* quote a string (if necessary) to prevent interpretation of any chars which have a
-       special meaning to bash *)
-    if needs_quoting s
-    then
-      if String.contains s '\''
-      (* already contains single-quotes; quote using backslash escaping *)
-      then vanilla_shell_escape s
-      else
-        (* no embedded single quotes; just wrap with single quotes;
-           same behavior as [shell_escape], but perhaps more efficient *)
-        sprintf "'%s'" s
-    else
-      (* does not need quoting *)
-      s
-
-  let shell_escape_list l =
-    String.concat ~sep:" " (List.map l ~f:(fun x -> shell_escape x))
-
-end
-
-let split_string_into_lines s =
-  match s with
-  | "" -> []
-  | "\n" -> [""]
-  | _ ->
-    let s =
-      match String.chop_suffix s ~suffix:"\n" with
-      | None -> s
-      | Some s -> s
-    in
-    String.split s ~on:'\n'
-
-
-let pretty_span span =
-  let { Time.Span.Parts.sign = _; hr; min; sec; ms; us = _ } = Time.Span.to_parts span in
-  let mins = 60 * hr + min in
-  if mins > 0     then sprintf "%dm %02ds" mins sec
-  else if sec > 0 then sprintf "%d.%03ds"  sec ms
-  else                 sprintf "%dms"      ms
-;;
-
-let parse_pretty_span span =
-  match String.lsplit2 ~on:' ' span with
-  | None -> Time.Span.of_string span
-  | Some (minutes, seconds) -> Time.Span.(of_string minutes + of_string seconds)
-;;
-
-let%test_unit _ =
-  List.iter ~f:(fun str -> [%test_result: string] ~expect:str
-                             (pretty_span (parse_pretty_span str)))
-    [ "1m 44s"
-    ; "23.123s"
-    ; "55ms"
-    ]
-;;
-
-module Job_start = struct
-  type t = {
-    uid : int;
-    need : string;
-    where : string;
-    prog : string;
-    args : string list;
-  } [@@deriving bin_io, fields, sexp_of]
-end
-
-module Job_finish = struct
-  type t = {
-    outcome : [`success | `error of string];
-    duration : Time.Span.t;
-  } [@@deriving bin_io, fields, sexp_of]
-end
-
-module Job_output = struct
-  type t = {
-    stdout : string list;
-    stderr : string list;
-  } [@@deriving bin_io, fields, sexp_of]
-end
-
-module Job_summary = struct
-
-  type t = Job_start.t * Job_finish.t * Job_output.t
-  [@@deriving bin_io, sexp_of]
-
-  let output_with ~put (
-    {Job_start. where; need; prog; args; uid=_},
-    {Job_finish. outcome; duration},
-    {Job_output. stdout; stderr}
-  ) =
-    put (sprintf "- build %s %s" where need);
-    (* print out the command in a format suitable for cut&pasting into bash
-       (except for the leading "+")
-    *)
-    let args = List.map args ~f:(fun arg -> Q.shell_escape arg) in
-    put (sprintf "+ %s %s" prog (String.concat ~sep:" " args));
-    List.iter stdout ~f:put;
-    List.iter stderr ~f:put;
-    let duration_string = pretty_span duration in
-    let status_string =
-      match outcome with
-      | `success -> "code 0"
-      | `error status_string -> status_string
-    in
-    put (sprintf "- exit %s %s, %s, %s" where need duration_string status_string)
-
-end
-
 module Tag = struct
-  (* Error, Message(info), Verbose, Trace, Unlogged *)
-  type t = E | M | V | T | U [@@deriving sexp_of]
-  let to_string t = Sexp.to_string (sexp_of_t t)
+  type t =
+  (* with triple leading stars *)
+  | Error
+  | Message
+  | Verbose (* -verbose *)
+  | Trace   (* -trace *)
+  (* without triple leading stars *)
+  | Unlogged
+  | Printf
+  | Printf_verbose
+  [@@deriving sexp_of, bin_io]
+
+  let to_string = function
+    | Error -> "E"
+    | Message -> "M"
+    | Verbose -> "V"
+    | Trace -> "T"
+    | Unlogged -> "U"
+    | Printf -> "P"
+    | Printf_verbose -> "PV"
 end
 
 module Err = struct
@@ -169,7 +55,7 @@ module Event = struct
   | Load_jenga_root of Path.t * string list
   | Load_jenga_root_done of Path.t * Time.Span.t
   | Errors_for_omake_server of Path.t * Err.t list
-  | Job_started of Job_start.t
+  | Job_started of Job_summary.Start.t
   | Job_completed of Job_summary.t
   | Job_summary of Job_summary.t
   | Build_done of Time.Span.t * [`u of int] * int * string
@@ -177,8 +63,8 @@ module Event = struct
   | Polling
   | Sensitized_on of string
   | File_changed of string
+  | Var_changed of string * string option * string option
   | Rebuilding
-
   [@@deriving sexp_of]
 end
 
@@ -216,12 +102,13 @@ let tagged_message tag fmt =
     T.dispatch the_log event
   ) fmt
 
-let error fmt   = tagged_message Tag.E fmt
-let message fmt = tagged_message Tag.M fmt
-let verbose fmt = tagged_message Tag.V fmt
-let trace fmt   = tagged_message Tag.T fmt
-let unlogged fmt= tagged_message Tag.U fmt
-
+let error fmt    = tagged_message Error fmt
+let message fmt  = tagged_message Message fmt
+let verbose fmt  = tagged_message Verbose fmt
+let trace fmt    = tagged_message Trace fmt
+let unlogged fmt = tagged_message Unlogged fmt
+let printf fmt   = tagged_message Printf fmt
+let printf_verbose fmt = tagged_message Printf_verbose fmt
 
 let last_transient_message = ref None
 
@@ -244,21 +131,14 @@ let load_jenga_root_done path span =
 let errors_for_omake_server path errs =
   T.dispatch the_log (Event.Errors_for_omake_server (path,errs))
 
-let job_started =
-  let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-  fun ~need ~where ~prog ~args ->
-  let uid = genU() in
-  let started = { Job_start. uid; need; where; prog; args } in
+let job_started ~need ~where ~prog ~args =
+  let started = Job_summary.Start.create ~need ~where ~prog ~args in
   let event = Event.Job_started started in
   T.dispatch the_log event;
   started
 
 let job_finished start ~outcome ~duration ~stdout ~stderr =
-  let finish = { Job_finish. outcome; duration } in
-  let stdout = split_string_into_lines stdout in
-  let stderr = split_string_into_lines stderr in
-  let output = { Job_output. stdout; stderr } in
-  let summary = (start,finish,output) in
+  let summary = Job_summary.create start ~outcome ~duration ~stdout ~stderr in
   let event = Event.Job_completed summary  in
   T.dispatch the_log event;
   summary
@@ -279,22 +159,15 @@ let sensitized_on ~desc =
 let file_changed ~desc =
   T.dispatch the_log (Event.File_changed desc)
 
+let var_changed ~var ~old ~new_ =
+  T.dispatch the_log (Event.Var_changed (var, old, new_))
+
 let repeat_job_summary summary =
   let event = Event.Job_summary summary  in
   T.dispatch the_log event
 
-let base_time = ref (Time.now())
-
 let rebuilding () =
-  (* reset base_time spans since build-started reported by -time *)
-  base_time := Time.now();
   T.dispatch the_log (Event.Rebuilding)
-
-let fixed_span_for_message_prefix span =
-  (* fixed width (upto 100min) format for span for -time flag -- mm:ss.xxx *)
-  let parts = Time.Span.to_parts span in
-  let module P = Time.Span.Parts in
-  sprintf "%02d:%02d.%03d" (60 * parts.P.hr + parts.P.min) parts.P.sec parts.P.ms
 
 let stat_since_last_checked get_current zero (-) =
   let last = ref zero in
@@ -345,8 +218,7 @@ let omake_style_logger config event =
 
   let elapsed =
     if not (Config.prefix_time config) then "" else
-      let duration = Time.diff (Time.now()) (!base_time) in
-      sprintf "%s " (fixed_span_for_message_prefix duration)
+      sprintf "[%s] " (Time.to_string (Time.now ()))
   in
 
   let dont_emit_kill_line () =
@@ -379,12 +251,13 @@ let omake_style_logger config event =
 
   match event with
   (* jput -- with leading triple stars *)
-  | Event.Tagged_message (Tag.E,s) -> jput (sprintf "ERROR: %s" s)
-  | Event.Tagged_message (Tag.M,s) -> jput s
-  | Event.Tagged_message (Tag.V,s) -> if verbose then jput s
-  | Event.Tagged_message (Tag.T,s) -> if show_trace_messages then jput s
+  | Event.Tagged_message (Error, s) -> jput (sprintf "ERROR: %s" s)
+  | Event.Tagged_message (Message, s) -> jput s
+  | Event.Tagged_message (Verbose, s) -> if verbose then jput s
+  | Event.Tagged_message (Trace, s) -> if show_trace_messages then jput s
   (*put*)
-  | Event.Tagged_message (Tag.U,s) -> put s
+  | Event.Tagged_message ((Unlogged | Printf), s) -> put s
+  | Event.Tagged_message (Printf_verbose, s) -> if verbose then put s
 
   (* progress style message - wll be overwritten by next transient or normal message *)
   | Event.Transient s -> put_trans s
@@ -405,7 +278,7 @@ let omake_style_logger config event =
   | Event.Load_jenga_root_done (path,duration) ->
     jput (sprintf "finished reading %s (%s)"
       (Path.to_string path)
-      (pretty_span duration))
+      (Job_summary.pretty_span duration))
 
   | Event.Errors_for_omake_server (path,errs) ->
     let where = Path.to_string (Path.dirname path) in
@@ -427,32 +300,28 @@ let omake_style_logger config event =
   | Event.Job_started _ -> () (* used to print the "- build" line here *)
 
   | Event.Job_completed summary ->
-    let (
-      {Job_start. where=_; need=_; prog=_; args=_; uid=_},
-      {Job_finish. outcome; duration=_},
-      {Job_output. stdout=_; stderr=_}
-    ) = summary in
+    let outcome = Job_summary.outcome summary in
     let job_failed =
       match outcome with | `success -> false | `error _ -> true
     in
     let show_something = job_failed || verbose in
     if show_something then (
-      Job_summary.output_with summary ~put
+      Job_summary.iter_lines summary ~f:put
     )
 
   | Event.Job_summary summary ->
-    Job_summary.output_with summary
-      ~put:(fun line -> put (sprintf "      %s" line)) (* six spaces matches omake *)
+    Job_summary.iter_lines summary
+      ~f:(fun line -> put (sprintf "      %s" line)) (* six spaces matches omake *)
 
   | Event.Build_done (duration,`u u,total,s) ->
     jput (sprintf "%d/%d targets are up to date" total total);
     jput (sprintf "done (#%d, %s, %s, %s) -- HURRAH"
-            u (pretty_span duration) (pretty_mem_usage config) s)
+            u (Job_summary.pretty_span duration) (pretty_mem_usage config) s)
 
   | Event.Build_failed (duration, `u u,(num,den),s) -> (
     jput (sprintf "%d/%d targets are up to date" num den);
     jput (sprintf "failed (#%d, %s, %s, %s)"
-            u (pretty_span duration) (pretty_mem_usage config) s);
+            u (Job_summary.pretty_span duration) (pretty_mem_usage config) s);
   )
 
   | Event.Polling ->
@@ -460,6 +329,11 @@ let omake_style_logger config event =
 
   | Event.File_changed desc ->
     jput (sprintf "%s changed" desc)
+
+  | Event.Var_changed (var, old_, new_) ->
+    let old_ = Option.value old_ ~default:"<none>" in
+    let new_ = Option.value new_ ~default:"<none>" in
+    jput (sprintf "variable %s changed: %s -> %s" var old_ new_)
 
   | Event.Sensitized_on desc ->
     jput (sprintf "- sensitized to: %s" desc)
@@ -528,7 +402,7 @@ let string_of_event event =
 
 let to_log_full_logger log event =
   match event with
-  | Event.Tagged_message (Tag.U,_) -> ()
+  | Event.Tagged_message (Unlogged, _) -> ()
   | _ ->
     Log.raw log "%s" (string_of_event event)
 

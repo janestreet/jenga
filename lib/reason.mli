@@ -1,5 +1,5 @@
 
-open Core.Std
+open! Core.Std
 
 include module type of Error_reason_type
 

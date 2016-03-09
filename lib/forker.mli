@@ -1,6 +1,6 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
+open! Async.Std
 
 val init : Config.t -> unit (* just once *)
 
@@ -16,7 +16,7 @@ module Request : sig
   type t
   val create :
     (* calls to putenv, to be done in parent, before the fork *)
-    putenv:(string * string) list ->
+    putenv:(string * string option) list ->
     dir:Path.t ->
     prog:string ->
     args:string list ->

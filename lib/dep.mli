@@ -1,5 +1,5 @@
 
-open Async.Std
+open! Async.Std
 
 (* [Dep.t] is the type central to jenga's API, supporting the description of dependencies
    in monadic style *)
@@ -19,6 +19,7 @@ val action : Action.t t -> unit t
 val action_stdout : Action.t t -> string t
 val alias : Alias.t -> unit t
 val path : Path.t -> unit t
+val getenv : 'a Var.t -> 'a t
 val group_dependencies : 'a t -> 'a t
 
 val source_if_it_exists : Path.t -> unit t

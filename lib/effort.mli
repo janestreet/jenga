@@ -1,6 +1,5 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
 
 module Counter : sig
 

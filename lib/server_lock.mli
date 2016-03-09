@@ -1,6 +1,6 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
+open! Async.Std
 
 val lock_running_server : root_dir:Path.Abs.t -> port:int -> unit Deferred.t
 

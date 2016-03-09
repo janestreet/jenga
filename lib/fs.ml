@@ -5,19 +5,21 @@ open Async.Std
 module Heart = Tenacious.Heart
 module Glass = Heart.Glass
 
-let memoize_reified_with_cache ht ~key f =
+let memoize_reified_with_cache ~name ~key_to_string ht ~key f =
   Hashtbl.find_or_add ht key ~default:(
-    fun () -> Tenacious.reify (f key))
+    fun () ->
+      Tenacious.reify
+        ~name:(lazy (
+          sprintf "memoize_reified_with_cache %S: %s" name (key_to_string key)))
+        (f key))
 
-let memoize_reified hashable f =
-  Memo.general ~hashable (fun x -> Tenacious.reify (f x))
+let memoize_reified ~name ~key_to_string hashable f =
+  Memo.general ~hashable (fun x ->
+    Tenacious.reify
+      ~name:(lazy (
+        sprintf "memoize_reified %S: %s" name (key_to_string x))) (f x))
 
 let unbreakable x = x,Heart.unbreakable
-
-let lstat_counter = Effort.Counter.create "stat"
-let digest_counter = Effort.Counter.create "digest"
-let ls_counter = Effort.Counter.create "ls"
-let mkdir_counter = Effort.Counter.create "mkdir"
 
 (* Naming...
    memo - dynamic cache of computations
@@ -39,7 +41,7 @@ module Digest = Db.Digest
 ----------------------------------------------------------------------*)
 
 let unix_stat ~follow_symlinks path =
-  Effort.track lstat_counter (fun () ->
+  Effort.track Progress.lstat_counter (fun () ->
     try_with ~extract_exn:true (fun () ->
       (*Message.message "stat: %s" path;*)
       if follow_symlinks then Unix.stat path
@@ -82,7 +84,7 @@ let ensure_directory ~dir =
   | `unknown_error err -> return (`failed err)
   | `does_not_exist ->
     (*Message.message "mkdir: %s" (Path.to_string dir);*)
-    Effort.track mkdir_counter (fun () ->
+    Effort.track Progress.mkdir_counter (fun () ->
       try_with (fun () ->
         Unix.mkdir ~p:() (Path.to_absolute_string dir)
       )
@@ -113,7 +115,7 @@ end = struct
   let of_file path =
     Throttle.enqueue (Option.value_exn !throttle) (fun () ->
       File_access.enqueue (fun () ->
-        Effort.track digest_counter (fun () ->
+        Effort.track Progress.digest_counter (fun () ->
           Deferred.Or_error.try_with (fun () ->
             Unix.with_file (Path.to_absolute_string path) ~mode:[`Rdonly]
               ~f:(fun fd ->
@@ -147,7 +149,7 @@ let run_ls ~dir =
   Locking.lock_directory_for_listing ~dir (fun () ->
     let path_string = Path.to_string dir in
     File_access.enqueue (fun () ->
-      Effort.track ls_counter (fun () ->
+      Effort.track Progress.ls_counter (fun () ->
         try_with (fun () -> Unix.opendir path_string) >>= function
         | Error exn -> return (Error (Error.of_exn exn)) (* opendir failed *)
         | Ok dir_handle ->
@@ -598,13 +600,22 @@ end = struct
            | `does_not_exist -> `does_not_exist))
 
     and lstat =
-      let r = lazy (memoize_reified Path.hashable uncached_lstat) in
+      let r = lazy (
+        memoize_reified
+          ~name:"lstat" ~key_to_string:Path.to_string Path.hashable uncached_lstat)
+      in
       fun x -> Lazy.force r x
     and stat =
-      let r = lazy (memoize_reified Path.hashable uncached_stat) in
+      let r = lazy (
+        memoize_reified
+          ~name:"stat" ~key_to_string:Path.to_string  Path.hashable uncached_stat)
+      in
       fun x -> Lazy.force r x
     and inode =
-      let r = lazy (memoize_reified Path.hashable uncached_inode) in
+      let r = lazy (
+        memoize_reified
+          ~name:"inode" ~key_to_string:Path.to_string  Path.hashable uncached_inode)
+      in
       fun x -> Lazy.force r x
     in
 
@@ -625,7 +636,8 @@ end = struct
           >>| fun x -> `listing x
     in
     let list_dir =
-      memoize_reified Path.hashable uncached_list_dir
+      memoize_reified
+        ~name:"list_dir" ~key_to_string:Path.to_string  Path.hashable uncached_list_dir
     in
     { stat; list_dir }
 
@@ -745,7 +757,10 @@ end = struct
   }
 
   let contents_file t sm ~file =
-    memoize_reified_with_cache t.cache ~key:file (fun file -> contents_file sm ~file)
+    memoize_reified_with_cache
+      ~name:"contents"
+      ~key_to_string:Path.to_string
+      t.cache ~key:file (fun file -> contents_file sm ~file)
 
   let create () = {
     cache = Path.Table.create ();
@@ -777,9 +792,12 @@ end = struct
   }
 
   let digest_file t dp sm ~file =
-    memoize_reified_with_cache t.cache ~key:file (fun file ->
-      Digest_persist.digest_file dp sm ~file
-    )
+    memoize_reified_with_cache
+      ~name:"digest"
+      ~key_to_string:Path.to_string
+      t.cache ~key:file (fun file ->
+        Digest_persist.digest_file dp sm ~file
+      )
 
   let create () = {
     cache = Path.Table.create ();
@@ -884,9 +902,12 @@ end = struct
   }
 
   let list_glob t fsm glob =
-    memoize_reified_with_cache t.cache ~key:glob (fun glob ->
-      Glob.exec glob fsm
-    )
+    memoize_reified_with_cache
+      ~name:"glob"
+      ~key_to_string:Glob.to_string
+      t.cache ~key:glob (fun glob ->
+        Glob.exec glob fsm
+      )
 
   let create () = {
     cache = Glob.Table.create ();
@@ -1063,7 +1084,7 @@ let mtime_files_right_now files =
     | mtimes -> Ok mtimes)
   >>| Result.map ~f:(fun mtimes ->
     List.mapi files ~f:(fun i file ->
-      Effort.incr lstat_counter;
+      Effort.incr Progress.lstat_counter;
       file, Mtime.of_float mtimes.(i)))
 
 

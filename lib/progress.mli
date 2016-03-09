@@ -1,19 +1,17 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
+open! Async.Std
+
+val lstat_counter : Effort.Counter.t
+val digest_counter : Effort.Counter.t
+val ls_counter : Effort.Counter.t
+val mkdir_counter : Effort.Counter.t
+
+val saves_done : Effort.Counter.t
 
 val actions_run : Effort.Counter.t
 val saves_run : Effort.Counter.t
 val considerations_run : Effort.Counter.t
-
-module Need : sig
-  type t
-  val goal : Goal.t -> t
-  val jengaroot : t
-  include Hashable_binable with type t := t
-  include Comparable_binable with type t := t
-  val to_string : t -> string
-end
 
 module Status : sig
   type t =
@@ -27,9 +25,9 @@ val create : Config.t -> t
 
 val enqueue_job : t -> (unit -> 'a Deferred.t) -> 'a Deferred.t
 
-val set_status : t -> Need.t -> Status.t option -> unit
+val set_status : t -> Goal.t -> Status.t option -> unit
 
-val mask_unreachable : t -> is_reachable_error:(Need.t -> bool) -> unit
+val mask_unreachable : t -> is_reachable_error:(Goal.t -> bool) -> unit
 
 module Snap : sig
 
@@ -48,20 +46,3 @@ val snap : t -> Snap.t
 val reset_effort : unit -> unit
 
 val readme : unit -> string
-
-(** A snapshot of the status table would be large. *)
-module Update : sig
-  type t =
-    | Set of Need.t * [`todo | `built | `error]
-    | Remove of Need.t
-  [@@deriving bin_io]
-
-  module State : sig
-    type t
-    val create : unit -> t
-  end
-end
-
-module Updates : sig type t = Update.t list [@@deriving bin_io] end
-
-val updates : t -> Update.State.t -> Updates.t

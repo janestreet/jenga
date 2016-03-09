@@ -1,4 +1,4 @@
-open Core.Std
+open! Core.Std
 
 type t
 val create : decay_factor_per_second:float -> t

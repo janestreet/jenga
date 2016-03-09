@@ -1,6 +1,5 @@
 
-open Core.Std
-open Async.Std
+open! Core.Std
 
 
 (* [Scheme.t] supports the description of rule-generation schemes in jenga, where the

@@ -52,9 +52,11 @@ module type S = sig
   val map2 : 'a t -> 'b t -> f:('a -> 'b -> 'c) -> 'c t
   val both : 'a t -> 'b t -> ('a * 'b) t
 
-  val exec        : 'a t -> ('a * Heart.t) Deferred.t
+  (** note that [exec] adds a new root in the observable tenacious graph,
+      even if you call it from a function given to [embed] or [lift]. *)
+  val exec        : 'a t -> name:(String.t Lazy.t) -> ('a * Heart.t) Deferred.t
   val embed       : (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> 'a t
-  val reify       : 'a t -> 'a t
+  val reify       : name:(String.t Lazy.t) -> 'a t -> 'a t
 
   (* This is most useful in combination with reify:
      [reify (bracket ~running ~finished ~cancelled x)].

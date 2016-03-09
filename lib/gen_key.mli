@@ -1,5 +1,5 @@
 
-open Core.Std
+open! Core.Std
 
 (* [Gen_key.t] is the key used to select a [Scheme.t] for rule-generation.
    Now just a [Path.Rel.t] *)

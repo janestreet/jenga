@@ -4,7 +4,7 @@ open Async.Std
 
 module Request = struct
   type t = {
-    putenv : (string * string) list;
+    putenv : (string * string option) list;
     dir : Path.t;
     prog : string;
     args : string list;
@@ -27,7 +27,10 @@ end
 module Fork_process : Fork_process_sig = struct
 
   let run {Request. putenv; dir; prog; args} =
-    List.iter putenv ~f:(fun (key,data) -> Core.Std.Unix.putenv ~key ~data);
+    List.iter putenv ~f:(fun (key, data) ->
+      match data with
+      | None -> Core.Std.Unix.unsetenv key
+      | Some data -> Core.Std.Unix.putenv ~key ~data);
     let working_dir = Path.to_absolute_string dir in
     Process.create ~working_dir ~prog ~args () >>= function
     | Error error ->
@@ -37,15 +40,33 @@ module Fork_process : Fork_process_sig = struct
       let stderr = "" in
       return { Reply. stdout; stderr; outcome }
     | Ok process ->
-      let module Output = Process.Output in
-      Process.collect_output_and_wait process >>= fun output ->
-      let stdout = output.Output.stdout in
-      let stderr = output.Output.stderr in
-      let exit_status = output.Output.exit_status in
+      let stdout = Process.stdout process in
+      let stderr = Process.stderr process in
+      let out_err = Deferred.both (Reader.contents stdout) (Reader.contents stderr) in
+      Deferred.both
+        (Writer.close (Process.stdin process))
+        (Process.wait process)
+      >>= fun ((), exit_status) ->
+      let timeout = Jenga_options.t.fd_close_timeout in
+      Clock.with_timeout timeout out_err
+      >>= (function
+        | `Result out_err -> return (`Closed_normally, out_err)
+        | `Timeout ->
+          Deferred.both
+            (Deferred.all_unit [ Reader.close stdout; Reader.close stderr ])
+            out_err
+          >>| fun ((), v) ->
+          (`Forcefully_closed timeout, v)
+      ) >>= fun (what_happened_to_fds, (stdout, stderr)) ->
       let outcome =
         match exit_status with
         | Error _ -> `error (Unix.Exit_or_signal.to_string_hum exit_status)
-        | Ok () -> `success
+        | Ok () ->
+          match what_happened_to_fds with
+          | `Closed_normally -> `success
+          | `Forcefully_closed timeout ->
+            `error (sprintf !"stdout or stderr wasn't closed %{Time.Span} after process \
+                              exited (due to a stray process perhaps?)" timeout)
       in
       return { Reply. stdout; stderr; outcome }
 
