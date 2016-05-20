@@ -626,8 +626,8 @@ end
 include T
 
 let build_index acc { digest_cache = _; generated = _; ruled; actioned } =
-  Hashtbl.iter_vals ruled ~f:(Rule_proxy.build_index acc);
-  Hashtbl.iter_vals actioned ~f:(Output_proxy.build_index acc);
+  Hashtbl.iter ruled ~f:(Rule_proxy.build_index acc);
+  Hashtbl.iter actioned ~f:(Output_proxy.build_index acc);
 ;;
 
 module T_with_serialization(X : Proxy_map.Serialization_param) = struct

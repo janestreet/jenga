@@ -4,7 +4,7 @@ open Async.Std
 
 let make_periodic_pipe_writer span ~f =
   let r =
-    Pipe.init (fun w ->
+    Pipe.create_reader ~close_on_exception:true (fun w ->
       let rec loop () =
         let value = f () in
         choose [

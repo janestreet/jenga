@@ -833,7 +833,7 @@ let read_then_convert_string_via_reader :
       try_with (fun () ->
         let info = Info.of_string ("read_then_convert_string_via_reader"
                                    ^ Path.to_string path) in
-        let pipe = Pipe.init (fun writer -> Pipe.write writer string) in
+        let pipe = Pipe.create_reader ~close_on_exception:true (fun writer -> Pipe.write writer string) in
         Reader.of_pipe info pipe >>= fun reader ->
         do_read reader >>= fun outcome ->
         Reader.close reader >>| fun () ->

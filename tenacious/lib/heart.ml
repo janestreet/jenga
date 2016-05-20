@@ -67,7 +67,7 @@ module Breakable = struct
     | Fragile x -> x
 
   let combine0 () =
-    let registrations = Array.empty () in
+    let registrations = [||] in
     let clients = Ring.create () in
     let trigger = Ivar.create () in
     let fragile = { registrations; clients; trigger } in

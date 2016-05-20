@@ -67,9 +67,9 @@ let stats =
            ; num_generated_entries = (Hashtbl.length (Db.generated db) : int)
            ; index = (avg Db.With_index.Index.iter (Db.With_index.index db_with_index)
                        (fun t -> Db.Proxy_map.shallow_length t) : Sexp.t)
-           ; ruled = (avg Hashtbl.iter_vals (Db.ruled db)
+           ; ruled = (avg Hashtbl.iter (Db.ruled db)
                        (fun t -> Db.Proxy_map.shallow_length t.deps) : Sexp.t)
-           ; actioned = (avg Hashtbl.iter_vals (Db.actioned db)
+           ; actioned = (avg Hashtbl.iter (Db.actioned db)
                           (fun t -> Db.Proxy_map.shallow_length t.deps) : Sexp.t)
            }]
          in

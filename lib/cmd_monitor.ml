@@ -109,8 +109,7 @@ let command =
        | Ok root_dir ->
          Path.Repo.set_root root_dir;
          let style = if progress_fraction then `fraction else `jem_style in
-         Misc.in_async ~f:(fun () ->
-           if snapshot then run_once ~root_dir style
-           else run exit_on_finish ~root_dir style
-         )
+         (if snapshot then run_once ~root_dir style
+          else run exit_on_finish ~root_dir style)
+         >>= Shutdown.exit
     )

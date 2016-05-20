@@ -14,7 +14,7 @@ let bashf ~dir fmt = ksprintf (fun str -> bash ~dir str) fmt
 let read_sexp ~t_of_sexp string =
   Dep.deferred (fun () ->
     let info = Info.of_string ("sexp_of_string") in
-    let pipe = Pipe.init (fun writer -> Pipe.write writer string) in
+    let pipe = Pipe.create_reader ~close_on_exception:true (fun writer -> Pipe.write writer string) in
     Reader.of_pipe info pipe >>= fun reader ->
     Reader.read_sexp reader >>= fun outcome ->
     Reader.close reader >>| fun () ->

@@ -636,13 +636,13 @@ module Monad_infix = struct
   let (>>=) = (>>=)
 end
 module Let_syntax = struct
+  let return = return
   module Let_syntax = struct
     let return = return
     let map    = map
     let bind   = bind
     let both   = both
     module Open_on_rhs  = struct let return = return end
-    module Open_in_body = struct let return = return end
   end
 end
 

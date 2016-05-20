@@ -1,7 +1,6 @@
 
 open! Core.Std
 
-
 (* [Scheme.t] supports the description of rule-generation schemes in jenga, where the
    scheme may itself have dependencies. This allows generation of rules based on a glob
    pattern, say [*.c], or generation w.r.t to a config file. *)

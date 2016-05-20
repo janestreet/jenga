@@ -80,7 +80,7 @@ CAMLprim value caml_batched_mtimes(value list_of_paths, value len_list)
   }
   free_paths(paths, n);
   caml_leave_blocking_section();
-  res = caml_alloc(n, Double_array_tag);
+  res = caml_alloc(n * Double_wosize, Double_array_tag);
   for (i = 0; i < n; i++) {
     Store_double_field(res, i, mtimes[i]);
   }

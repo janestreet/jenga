@@ -317,10 +317,7 @@ end = struct
     | `directly -> path                , t.watching_directly
 
   let watch_file_or_dir t ~how path =
-    let path =
-      Path.of_absolute_string (
-        Path.to_absolute_string path)
-    in
+    let path = Path.of_absolute_string (Path.to_absolute_string path) in
     let dir, cache = dir_and_cache t ~how path in
     (* Message.unlogged "watch: %s (dir: %s)" (Path.to_string path) (Path.to_string dir); *)
     match (Hashtbl.find cache path) with
@@ -527,7 +524,7 @@ end = struct
           | Error err ->
             return (unbreakable (Error (
               Error.tag err
-                (sprintf "%S's parent directory exists, but watcher set up failed"
+                ~tag:(sprintf "%S's parent directory exists, but watcher set up failed"
                 (Path.to_string path)))))
           | Ok heart ->
             plain_stat ~follow_symlinks:false path
@@ -541,7 +538,7 @@ end = struct
             | Error err ->
               Error (
                 Error.tag err
-                  (sprintf "%S exists, but watcher set up failed"
+                  ~tag:(sprintf "%S exists, but watcher set up failed"
                      (Path.to_string path))), heart
             | Ok heart2 ->
               let heart = Heart.combine2 heart heart2 in
