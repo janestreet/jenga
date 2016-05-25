@@ -36,5 +36,6 @@ let parse_string ~dir string =
     Sys.is_directory_exn ~follow_symlinks:false (
       Path.to_absolute_string (Path.of_relative path))
     >>| function
+    (* Map: [jenga dir] -> [jenga dir/.DEFAULT] *)
     | true -> Alias (Alias.default ~dir:(Path.of_relative path))
     | false -> Path path
