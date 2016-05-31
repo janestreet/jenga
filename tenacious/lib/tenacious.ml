@@ -643,7 +643,7 @@ module Let_syntax = struct
     let map    = map
     let bind   = bind
     let both   = both
-    module Open_on_rhs  = struct let return = return end
+    module Open_on_rhs  = struct end
   end
 end
 
