@@ -89,22 +89,22 @@ end = struct
   let save_db db ~db_filename =
     if Jenga_options.t.turn_off_db_saves
     then Deferred.unit
-    else
-      Effort.track Progress.saves_done (fun () ->
-        Monitor.try_with (fun () ->
-          Writer.with_file_atomic db_filename ~f:(fun w ->
-            (* snapshot & write must be in same async-block *)
-            let state = State.snapshot db in
-            Writer.write_bin_prot w State.bin_writer_t state;
-            set_is_saved();
-            return ()
-          )
-        ) >>| function
-        | Ok () -> ()
-        | Error exn ->
-          Message.error "exception thrown while saving %s:\n%s"
-            db_filename (Exn.to_string exn)
-      )
+    else (
+      Metrics.Counter.incr Progress.saves_done;
+      Monitor.try_with (fun () ->
+        Writer.with_file_atomic db_filename ~f:(fun w ->
+          (* snapshot & write must be in same async-block *)
+          let state = State.snapshot db in
+          Writer.write_bin_prot w State.bin_writer_t state;
+          set_is_saved();
+          return ()
+        )
+      ) >>| function
+      | Ok () -> ()
+      | Error exn ->
+        Message.error "exception thrown while saving %s:\n%s"
+          db_filename (Exn.to_string exn)
+    )
 
 end
 

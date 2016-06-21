@@ -58,8 +58,8 @@ module Event = struct
   | Job_started of Job_summary.Start.t
   | Job_completed of Job_summary.t
   | Job_summary of Job_summary.t
-  | Build_done of Time.Span.t * [`u of int] * int * string
-  | Build_failed of Time.Span.t * [`u of int] * (int*int) * string
+  | Build_done of Time.Span.t * [`u of int] * int * string * Metrics.Memory.t
+  | Build_failed of Time.Span.t * [`u of int] * (int*int) * string * Metrics.Memory.t
   | Polling
   | Sensitized_on of string
   | File_changed of string
@@ -143,11 +143,11 @@ let job_finished start ~outcome ~duration ~stdout ~stderr =
   T.dispatch the_log event;
   summary
 
-let build_done ~duration ~u ~total s =
-  T.dispatch the_log (Event.Build_done (duration, `u u, total, s))
+let build_done ~duration ~u ~total s memory_metrics =
+  T.dispatch the_log (Event.Build_done (duration, `u u, total, s, memory_metrics))
 
-let build_failed ~duration ~u ~fraction s =
-  T.dispatch the_log (Event.Build_failed (duration, `u u,fraction,s))
+let build_failed ~duration ~u ~fraction s memory_metrics =
+  T.dispatch the_log (Event.Build_failed (duration, `u u, fraction, s, memory_metrics))
 
 let polling () =
   clear_transient();
@@ -169,46 +169,19 @@ let repeat_job_summary summary =
 let rebuilding () =
   T.dispatch the_log (Event.Rebuilding)
 
-let stat_since_last_checked get_current zero (-) =
-  let last = ref zero in
-  fun stat ->
-    let current = get_current stat in
-    let diff = current - !last in
-    last := current;
-    diff
-;;
-
-let stat_since_last_checked_int get_current =
-  stat_since_last_checked get_current 0 (-)
-let stat_since_last_checked_float get_current =
-  stat_since_last_checked get_current 0. (-.)
-
-let pretty_mem_usage =
-  let float_words x = Byte_units.create `Words x in
-  let int_words x = float_words (Float.of_int x) in
-  let major_collections = stat_since_last_checked_int Gc.Stat.major_collections in
-  let minor_words = stat_since_last_checked_float Gc.Stat.minor_words in
-  let major_words = stat_since_last_checked_float Gc.Stat.major_words in
-  let promoted_words = stat_since_last_checked_float Gc.Stat.promoted_words in
-  fun (config : Config.t) ->
-    let stat = Gc.quick_stat () in
-    let heap = int_words stat.heap_words in
-    let gc_details =
-      if config.show_memory_allocations
-      then sprintf !", m=%{Byte_units}, M=%{Byte_units}, p=%{Byte_units}, major=%d"
-             (float_words (minor_words stat))
-             (float_words (major_words stat))
-             (float_words (promoted_words stat))
-             (major_collections stat)
-      else ""
-    in
-    let top_heap =
-      let top_heap = int_words stat.top_heap_words in
-      if Byte_units.(=) heap top_heap
-      then ""
-      else sprintf !", top heap=%{Byte_units}" top_heap
-    in
-    sprintf !"heap=%{Byte_units}%s%s" heap top_heap gc_details
+let pretty_mem_usage (config : Config.t) (m : Metrics.Memory.t) =
+  let gc_details =
+    if config.show_memory_allocations
+    then sprintf !", m=%{Byte_units}, M=%{Byte_units}, p=%{Byte_units}, major=%d"
+           m.minor m.major m.promoted m.major_collections
+    else ""
+  in
+  let top_heap =
+    if Byte_units.(=) m.heap m.top_heap
+    then ""
+    else sprintf !", top heap=%{Byte_units}" m.top_heap
+  in
+  sprintf !"heap=%{Byte_units}%s%s" m.heap top_heap gc_details
 ;;
 
 let omake_style_logger config event =
@@ -313,15 +286,17 @@ let omake_style_logger config event =
     Job_summary.iter_lines summary
       ~f:(fun line -> put (sprintf "      %s" line)) (* six spaces matches omake *)
 
-  | Event.Build_done (duration,`u u,total,s) ->
+  | Event.Build_done (duration, `u u, total, s, memory_metrics) ->
     jput (sprintf "%d/%d targets are up to date" total total);
     jput (sprintf "done (#%d, %s, %s, %s) -- HURRAH"
-            u (Job_summary.pretty_span duration) (pretty_mem_usage config) s)
+            u (Job_summary.pretty_span duration)
+            (pretty_mem_usage config memory_metrics) s)
 
-  | Event.Build_failed (duration, `u u,(num,den),s) -> (
+  | Event.Build_failed (duration, `u u, (num,den), s, memory_metrics) -> (
     jput (sprintf "%d/%d targets are up to date" num den);
     jput (sprintf "failed (#%d, %s, %s, %s)"
-            u (Job_summary.pretty_span duration) (pretty_mem_usage config) s);
+            u (Job_summary.pretty_span duration)
+            (pretty_mem_usage config memory_metrics) s);
   )
 
   | Event.Polling ->

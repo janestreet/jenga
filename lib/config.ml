@@ -38,7 +38,6 @@ type t = {
   no_notifiers : bool;
   no_fs_triggers : bool;
   sandbox_actions : bool;
-  deprecated_camlp4 : bool;
   buildable_targets_fixpoint_max : int;
   gc : Gc.t
 } [@@deriving fields]

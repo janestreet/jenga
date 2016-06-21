@@ -159,10 +159,6 @@ let sandbox_actions =
     ~doc:" Check dependencies are right by running actions in a part of the filesystem \
           where only the declared dependencies are available"
 
-let deprecated_camlp4 =
-  Param.flag "-camlp4" Spec.no_arg
-    ~doc:" Preprocess files listed in jenga.conf using camlp4 instead of ppx (deprecated)"
-
 let anon_demands =
   Spec.anon (Spec.sequence ("DEMAND" %: Spec.string))
 
@@ -198,7 +194,6 @@ let create_config
       ~no_fs_triggers
       ~buildable_targets_fixpoint_max
       ~sandbox_actions
-      ~deprecated_camlp4
       ~anon_demands
   =
   {
@@ -239,7 +234,6 @@ let create_config
     no_fs_triggers;
     buildable_targets_fixpoint_max;
     sandbox_actions;
-    deprecated_camlp4;
     demands = anon_demands;
     gc = {
       Config.Gc.
@@ -283,7 +277,6 @@ let config_param : Config.t Command.Param.t =
   and no_fs_triggers                  = no_fs_triggers
   and buildable_targets_fixpoint_max  = buildable_targets_fixpoint_max
   and sandbox_actions                 = sandbox_actions
-  and deprecated_camlp4               = deprecated_camlp4
   and anon_demands                    = anon_demands
   in
   create_config
@@ -318,7 +311,6 @@ let config_param : Config.t Command.Param.t =
     ~no_fs_triggers
     ~buildable_targets_fixpoint_max
     ~sandbox_actions
-    ~deprecated_camlp4
     ~anon_demands
 
 let command ~toplevel =

@@ -6,20 +6,16 @@ let make_periodic_pipe_writer span ~f =
   let r =
     Pipe.create_reader ~close_on_exception:true (fun w ->
       let rec loop () =
-        let value = f () in
-        choose [
-          choice (Pipe.closed w) (fun () -> `aborted);
-          choice
-            (
-              Pipe.write w value
-              >>= fun () ->
-              Clock.after span
-            )
-            (fun () -> `again)
-        ]
-        >>= function
-        | `aborted -> return ()
-        | `again -> loop ()
+        if Pipe.is_closed w then return ()
+        else begin
+          choose [
+            choice (Pipe.closed w) (fun () -> `aborted);
+            choice (Pipe.write w (f ()) >>= fun () -> Clock.after span) (fun () -> `again)
+          ]
+          >>= function
+          | `aborted -> return ()
+          | `again -> loop ()
+        end
       in
       loop ()
     )

@@ -11,7 +11,8 @@ module Dot_jenga = struct
 
   let file suf = Rel.create (dot_jenga ^/ suf)
 
-  let log = file "debug"
+  let debug = file "debug"
+  let metrics = file "metrics"
   let server = file "server"
   let plugin_cache = file "plugin-cache"
   let db ~version = file ("db-v" ^ version)

@@ -41,12 +41,11 @@ module Digest = Db.Digest
 ----------------------------------------------------------------------*)
 
 let unix_stat ~follow_symlinks path =
-  Effort.track Progress.lstat_counter (fun () ->
-    try_with ~extract_exn:true (fun () ->
-      (*Message.message "stat: %s" path;*)
-      if follow_symlinks then Unix.stat path
-      else Unix.lstat path
-    )
+  Metrics.Counter.incr Progress.lstat_counter;
+  try_with ~extract_exn:true (fun () ->
+    (*Message.message "stat: %s" path;*)
+    if follow_symlinks then Unix.stat path
+    else Unix.lstat path
   )
 
 let stat ~follow_symlinks path =
@@ -79,17 +78,15 @@ module Ensure_directory_result = struct
 end
 
 let ensure_directory ~dir =
-  stat ~follow_symlinks:false dir >>= function
+  stat ~follow_symlinks:true dir >>= function
   | `ok stats -> return (if is_dir stats then `ok else `not_a_dir)
   | `unknown_error err -> return (`failed err)
   | `does_not_exist ->
     (*Message.message "mkdir: %s" (Path.to_string dir);*)
-    Effort.track Progress.mkdir_counter (fun () ->
-      try_with (fun () ->
-        Unix.mkdir ~p:() (Path.to_absolute_string dir)
-      )
-    ) >>= fun res ->
-    match res with
+    Metrics.Counter.incr Progress.mkdir_counter;
+    try_with (fun () ->
+      Unix.mkdir ~p:() (Path.to_absolute_string dir)
+    ) >>= function
     | Ok () -> return `ok
     | Error exn -> return (`failed (Error.of_exn exn))
 
@@ -115,14 +112,14 @@ end = struct
   let of_file path =
     Throttle.enqueue (Option.value_exn !throttle) (fun () ->
       File_access.enqueue (fun () ->
-        Effort.track Progress.digest_counter (fun () ->
-          Deferred.Or_error.try_with (fun () ->
-            Unix.with_file (Path.to_absolute_string path) ~mode:[`Rdonly]
-              ~f:(fun fd ->
-                Fd.with_file_descr_deferred_exn fd (fun fd ->
-                  let fd = Core.Std.Unix.File_descr.to_int fd in
-                  In_thread.run (fun () -> digest_fd fd))))
-          |> Deferred.Or_error.map ~f:Caml.Digest.to_hex)))
+        Metrics.Counter.incr Progress.digest_counter;
+        Deferred.Or_error.try_with (fun () ->
+          Unix.with_file (Path.to_absolute_string path) ~mode:[`Rdonly]
+            ~f:(fun fd ->
+              Fd.with_file_descr_deferred_exn fd (fun fd ->
+                let fd = Core.Std.Unix.File_descr.to_int fd in
+                In_thread.run (fun () -> digest_fd fd))))
+        |> Deferred.Or_error.map ~f:Caml.Digest.to_hex))
 
   let%test_unit _ =
     set 20;
@@ -149,56 +146,56 @@ let run_ls ~dir =
   Locking.lock_directory_for_listing ~dir (fun () ->
     let path_string = Path.to_string dir in
     File_access.enqueue (fun () ->
-      Effort.track Progress.ls_counter (fun () ->
-        try_with (fun () -> Unix.opendir path_string) >>= function
-        | Error exn -> return (Error (Error.of_exn exn)) (* opendir failed *)
-        | Ok dir_handle ->
-            (* opendir succeeded, we must be sure to close *)
-          let close () =
-            try_with (fun () -> Unix.closedir dir_handle) >>| function | Ok () -> ()
+      Metrics.Counter.incr Progress.ls_counter;
+      try_with (fun () -> Unix.opendir path_string) >>= function
+      | Error exn -> return (Error (Error.of_exn exn)) (* opendir failed *)
+      | Ok dir_handle ->
+          (* opendir succeeded, we must be sure to close *)
+        let close () =
+          try_with (fun () -> Unix.closedir dir_handle) >>| function | Ok () -> ()
+          | Error exn ->
+            Message.error "Unix.closedir failed: %s\n%s" path_string (Exn.to_string exn)
+        in
+          (* catch all exns while processing so we can close in every case *)
+        try_with (fun () ->
+          let rec loop acc =
+            try_with (fun () -> Unix.readdir dir_handle) >>= function
+            | Ok "." -> loop acc
+            | Ok ".." -> loop acc
+            | Ok base ->
+              begin
+                let path_string = Path.to_string dir ^ "/" ^ base in
+                unix_stat ~follow_symlinks:false path_string >>= function
+                | Error _e ->
+                    (* File disappeared between readdir & lstat system calls.
+                       Handle as if readdir never told as about it *)
+                  loop acc
+                | Ok u ->
+                  let kind = u.Unix.Stats.kind in
+                  loop (Elem.create ~base ~kind :: acc)
+              end
             | Error exn ->
-              Message.error "Unix.closedir failed: %s\n%s" path_string (Exn.to_string exn)
+              match Monitor.extract_exn exn with
+              | End_of_file ->
+                  (* no more filenames - normal; we are finished listing *)
+                return (create ~dir ~elems:acc)
+              | exn ->
+                  (* some other unexpected error; raise to outer handler *)
+                raise exn
           in
-            (* catch all exns while processing so we can close in every case *)
-          try_with (fun () ->
-            let rec loop acc =
-              try_with (fun () -> Unix.readdir dir_handle) >>= function
-              | Ok "." -> loop acc
-              | Ok ".." -> loop acc
-              | Ok base ->
-                begin
-                  let path_string = Path.to_string dir ^ "/" ^ base in
-                  unix_stat ~follow_symlinks:false path_string >>= function
-                  | Error _e ->
-                      (* File disappeared between readdir & lstat system calls.
-                         Handle as if readdir never told as about it *)
-                    loop acc
-                  | Ok u ->
-                    let kind = u.Unix.Stats.kind in
-                    loop (Elem.create ~base ~kind :: acc)
-                end
-              | Error exn ->
-                match Monitor.extract_exn exn with
-                | End_of_file ->
-                    (* no more filenames - normal; we are finished listing *)
-                  return (create ~dir ~elems:acc)
-                | exn ->
-                    (* some other unexpected error; raise to outer handler *)
-                  raise exn
-            in
-            loop []
+          loop []
 
-          ) >>= fun res ->
-            (* convert exn -> Or_error *)
-          let ore =
-            match res with
-            | Error exn -> Error (Error.of_exn exn)
-            | Ok x -> Ok x
-          in
-            (* close in every case *)
-          close () >>= fun () ->
-          return ore
-      )))
+        ) >>= fun res ->
+          (* convert exn -> Or_error *)
+        let ore =
+          match res with
+          | Error exn -> Error (Error.of_exn exn)
+          | Ok x -> Ok x
+        in
+          (* close in every case *)
+        close () >>= fun () ->
+        return ore
+    ))
 
 (*----------------------------------------------------------------------
  Watcher (inotify wrapper)
@@ -1081,7 +1078,7 @@ let mtime_files_right_now files =
     | mtimes -> Ok mtimes)
   >>| Result.map ~f:(fun mtimes ->
     List.mapi files ~f:(fun i file ->
-      Effort.incr Progress.lstat_counter;
+      Metrics.Counter.incr Progress.lstat_counter;
       file, Mtime.of_float mtimes.(i)))
 
 

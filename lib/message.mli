@@ -54,8 +54,20 @@ end
 
 val errors_for_omake_server : Path.t -> Err.t list -> unit
 
-val build_done : duration:Time.Span.t -> u:int -> total:int -> string -> unit
-val build_failed : duration:Time.Span.t -> u:int -> fraction:(int*int) -> string -> unit
+val build_done
+  : duration:Time.Span.t
+  -> u:int
+  -> total:int
+  -> string
+  -> Metrics.Memory.t
+  -> unit
+val build_failed
+  : duration:Time.Span.t
+  -> u:int
+  -> fraction:(int*int)
+  -> string
+  -> Metrics.Memory.t
+  -> unit
 
 val polling : unit -> unit
 val sensitized_on : desc:string -> unit

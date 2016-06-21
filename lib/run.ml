@@ -105,7 +105,7 @@ let main' jr_spec ~root_dir config =
   Special_paths.Dot_jenga.prepare ();
 
   let log_filename =
-    Path.to_absolute_string (Path.of_relative Special_paths.Dot_jenga.log)
+    Path.to_absolute_string (Path.of_relative Special_paths.Dot_jenga.debug)
   in
   Message.init_logging config ~log_filename;
 

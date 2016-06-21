@@ -96,46 +96,6 @@ module Alias = struct
   let submodule_cmis ~dir = Alias.create ~dir "submodule_cmis"
 end
 
-let read_sexp_throttle =
-  (* The throttle is to avoid exceeding fd limits. *)
-  assert (Thread_safe.am_holding_async_lock ());
-  Throttle.create ~continue_on_error:true ~max_concurrent_jobs:32
-
-let read_then_convert_string_via_reader :
-    (
-      path : Path.t ->
-      contents : (Path.t -> string Dep.t) ->
-      do_read : (Reader.t -> 'a Deferred.t) ->
-      'a Dep.t
-    ) =
-  fun ~path ~contents ~do_read ->
-    contents path *>>= fun string ->
-    Dep.deferred (fun () ->
-      try_with (fun () ->
-        let outcome_ivar = Ivar.create () in
-        Throttle.enqueue read_sexp_throttle (fun () ->
-        (* This trick enables the reading of a sexp from a string using [Reader]'s
-           parsing functions.  This is easier than using the low-level [Sexplib]
-           interface (partially since we don't want to use the lex/yacc-based
-           implementation, since it blocks, and the interface not using that is more
-           involved). *)
-          let info = Info.of_string ("Description.convert_using_reader " ^ Path.to_string path) in
-          let pipe = Pipe.create_reader ~close_on_exception:true (fun writer -> Pipe.write writer string) in
-          Reader.of_pipe info pipe >>= fun reader ->
-          do_read reader >>= fun outcome ->
-          Reader.close reader >>| fun () ->
-          Ivar.fill outcome_ivar outcome
-        ) >>= fun () ->
-        Ivar.read outcome_ivar
-      ) >>| function
-      | Ok x -> x
-      | Error exn ->
-        put "File \"%s\", line 1, characters 1-1:" (Path.to_string path);
-        put "Error: sexp conversion\n%s" (Exn.to_string exn);
-        failwithf "%s: sexp conversion" (Path.to_string path) ()
-    )
-
-
 let glob_ml = Glob.create "*.ml"
 let glob_mli = Glob.create "*.mli"
 
@@ -3593,13 +3553,9 @@ end = struct
   let rep t = t
 
   let load path =
-    read_then_convert_string_via_reader
-      ~path
-      ~contents:Dep.contents
-      ~do_read:(fun reader ->
-        Pipe.to_list (Reader.read_sexps reader)
-        >>| List.map ~f:t_of_sexp
-      )
+    Dep.contents path
+    *>>| fun str ->
+    Sexp.of_string_conv_exn ("(" ^ str ^ "\n)") [%of_sexp: t list]
 
 end
 
@@ -3826,14 +3782,9 @@ end = struct
     )
 
   let load path =
-    read_then_convert_string_via_reader
-      ~path
-      ~contents:Dep.contents_cutoff
-      ~do_read:(fun reader ->
-        Reader.read_sexp reader >>| function
-        | `Ok sexp -> t_of_sexp sexp
-        | `Eof -> failwith "Eof"
-      )
+    Dep.contents_cutoff path
+    *>>| fun str ->
+    Sexp.of_string_conv_exn (String.rstrip str) [%of_sexp: t]
 
   let get =
     load libmap_sexp_path *>>| Libmap.create_exn

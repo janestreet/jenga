@@ -81,9 +81,19 @@ let to_extra_lines = function
   | Mtimes_changed _
     -> []
 
+  | Jengaroot_load_failed error ->
+    let lines = String.split_lines (Error.to_string_hum error) in
+     (* If the error looks like a normal compilation error, remove the noise from
+        ocaml_plugin *)
+    (match
+       List.drop_while lines ~f:(fun line ->
+         not (String.is_prefix ~prefix:"File \"" line))
+     with
+     | [] -> lines
+     | _ :: _ as rest -> rest)
+
   | Running_job_raised sexp
   | Usercode_raised sexp
-  | Jengaroot_load_failed sexp
   | File_read_error sexp
   | Digest_error sexp
     -> [Sexp.to_string sexp]

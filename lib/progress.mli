@@ -2,16 +2,16 @@
 open! Core.Std
 open! Async.Std
 
-val lstat_counter : Effort.Counter.t
-val digest_counter : Effort.Counter.t
-val ls_counter : Effort.Counter.t
-val mkdir_counter : Effort.Counter.t
+val lstat_counter : Metrics.Counter.t
+val digest_counter : Metrics.Counter.t
+val ls_counter : Metrics.Counter.t
+val mkdir_counter : Metrics.Counter.t
 
-val saves_done : Effort.Counter.t
+val saves_done : Metrics.Counter.t
 
-val actions_run : Effort.Counter.t
-val saves_run : Effort.Counter.t
-val considerations_run : Effort.Counter.t
+val actions_run : Metrics.Counter.t
+val saves_run : Metrics.Counter.t
+val considerations_run : Metrics.Counter.t
 
 module Status : sig
   type t =
@@ -40,9 +40,10 @@ module Snap : sig
   val to_string : t -> [< `omake_style | `jem_style | `fraction ] -> string
   val to_effort_string : t -> string
   val finished: t -> [ `Success | `Failure ] option
+  val to_metrics : t -> Metrics.t
 end
 
 val snap : t -> Snap.t
-val reset_effort : unit -> unit
+val reset_metrics : unit -> unit
 
 val readme : unit -> string

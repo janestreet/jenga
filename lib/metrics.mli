@@ -1,0 +1,60 @@
+open! Core.Std
+
+module Unit : sig
+  type t =
+    | Byte
+    | Second
+    | Dimensionless
+  [@@deriving compare, sexp_of]
+end
+
+type t = (float * Unit.t) String.Map.t [@@deriving sexp_of]
+type metrics = t
+
+val disjoint_union_exn : t -> t -> t
+
+module Counter : sig
+  type t
+  val create : string -> t
+  val incr : t -> unit
+  val get : t -> int
+end
+
+module Counters : sig
+  type t
+  val create : Counter.t list -> t
+  val reset_to_zero : t -> unit
+
+  module Snap : sig
+    type t [@@deriving bin_io]
+    val to_string : ?sep:string -> t -> string
+    val to_metrics : t -> metrics
+  end
+
+  val snap : t -> Snap.t
+end
+
+module Memory : sig
+  type t =
+    { top_heap : Byte_units.t
+    ; minor : Byte_units.t
+    ; major : Byte_units.t
+    ; promoted : Byte_units.t
+    ; major_collections : int
+    ; heap : Byte_units.t
+    } [@@deriving sexp]
+  val create_diff_from_previous_create : unit -> t
+  val to_metrics : t -> metrics
+end
+
+module Disk_format : sig
+  open Async.Std
+  type nonrec t =
+    { build_info : Sexp.t
+    ; version_util : string list
+    ; metrics : t
+    }
+  [@@deriving sexp]
+
+  val append : metrics -> unit Deferred.t
+end

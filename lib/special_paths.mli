@@ -7,7 +7,8 @@ module Dot_jenga : sig
       Not async because we do it very early (but after [discover_root]). *)
   val prepare : unit -> unit
 
-  val log : Path.Rel.t
+  val debug : Path.Rel.t
+  val metrics : Path.Rel.t
   val server : Path.Rel.t
   val plugin_cache : Path.Rel.t
   val db : version:string -> Path.Rel.t

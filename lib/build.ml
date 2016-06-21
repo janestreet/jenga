@@ -750,7 +750,7 @@ let build_considering_needed : (t -> Goal.t -> 'a Builder.t -> 'a Builder.t) =
               (if first_time then "Considering" else "Re-considering") need
           ))
         ~finished:(fun a ->
-          Effort.incr Progress.considerations_run;
+          Metrics.Counter.incr Progress.considerations_run;
           report_status t need a)
         ~cancelled:(fun () ->
           set_status t need None;
@@ -820,32 +820,6 @@ let errors_for_omake_server ~within errs short =
 let one_error_for_omake_server ~within ?extra short =
   errors_for_omake_server ~within [Message.Err.create ?extra short] short
 
-let read_then_convert_string_via_reader :
-    (
-      path : Path.t ->
-      contents : (Path.t -> string Builder.t) ->
-      do_read : (Reader.t -> 'a Deferred.t) ->
-      'a Builder.t
-    ) =
-  fun ~path ~contents ~do_read ->
-    contents path *>>= fun string ->
-    Builder.of_deferred (fun () ->
-      try_with (fun () ->
-        let info = Info.of_string ("read_then_convert_string_via_reader"
-                                   ^ Path.to_string path) in
-        let pipe = Pipe.create_reader ~close_on_exception:true (fun writer -> Pipe.write writer string) in
-        Reader.of_pipe info pipe >>= fun reader ->
-        do_read reader >>= fun outcome ->
-        Reader.close reader >>| fun () ->
-        outcome
-      )
-    ) *>>= function
-    | Ok x -> return x
-    | Error exn ->
-      one_error_for_omake_server ~within:path
-        ~extra:(Exn.to_string exn) "failed sexp conversion"
-
-
 module Jenga_conf_rep : sig
   type t [@@deriving of_sexp]
   val modules : t -> string list
@@ -854,17 +828,18 @@ end = struct
   let modules (`modules xs) = xs
 end
 
-
 let read_jenga_conf : (t -> conf:Path.t -> Jenga_conf_rep.t Builder.t) =
   fun t ~conf:path ->
-    read_then_convert_string_via_reader
-      ~path
-      ~contents:(get_contents t)
-      ~do_read:(fun reader ->
-        Reader.read_sexp reader >>| function
-        | `Ok sexp -> Jenga_conf_rep.t_of_sexp sexp
-        | `Eof -> failwith "Eof"
-      )
+    get_contents t path
+    *>>= fun contents ->
+    match Sexp.of_string_conv_exn (String.rstrip contents)
+            [%of_sexp: Jenga_conf_rep.t]
+    with
+    | exception exn ->
+      one_error_for_omake_server ~within:path
+        ~extra:(Exn.to_string exn) "failed sexp conversion"
+    | x -> return x
+;;
 
 let path_exists : (t -> Path.t -> bool Builder.t) =
   fun t path ->
@@ -950,9 +925,9 @@ let jenga_root_load_spec : (t -> root_ml:Path.t -> Load_root.Spec.t Builder.t) =
 let jenga_load_spec : (t -> Jr_spec.t -> Env.t Builder.t) =
   fun t jr_spec ->
     let env_of_load_root_spec spec =
-      Builder.of_deferred (fun () -> Load_root.get_env t.config spec) *>>= function
+      Builder.of_deferred (fun () -> Load_root.get_env spec) *>>= function
       | Error e ->
-        error (Reason.Jengaroot_load_failed (Error.sexp_of_t e))
+        error (Reason.Jengaroot_load_failed e)
       | Ok env ->
         return env
     in
@@ -2135,7 +2110,7 @@ let build_once :
 
     let top_tenacious = Builder.expose top_builder in
 
-    Tenacious.exec ~name:(lazy "top-tenacious") top_tenacious >>| fun (ore,heart) ->
+    Tenacious.exec ~name:(lazy "top-tenacious") top_tenacious >>= fun (ore,heart) ->
 
     (* to avoid reporting of stale errors etc... *)
     (*Progress.mask_unreachable progress dg;*)
@@ -2154,19 +2129,27 @@ let build_once :
     let snap = Progress.snap progress in
 
     let effort_string = Progress.Snap.to_effort_string snap in
+    let memory_metrics = Metrics.Memory.create_diff_from_previous_create () in
 
     let exit_code =
       if Progress.Snap.no_errors snap then (
         let built = Progress.Snap.built snap in
-        Message.build_done ~duration ~u ~total:built effort_string;
+        Message.build_done ~duration ~u ~total:built effort_string memory_metrics;
         Exit_code.build_done
       ) else (
         let fraction = Progress.Snap.fraction snap in
-        Message.build_failed ~duration ~u ~fraction effort_string;
+        Message.build_failed ~duration ~u ~fraction effort_string memory_metrics;
         Exit_code.build_failed
       )
     in
     Message.message "%s" (Progress.Snap.to_string snap `jem_style);
+
+    Metrics.Disk_format.append
+      (Map.add ~key:"time" ~data:(Time.Span.to_float duration, Second)
+         (Metrics.disjoint_union_exn
+            (Progress.Snap.to_metrics snap)
+            (Metrics.Memory.to_metrics memory_metrics)))
+    >>| fun () ->
 
     List.iter errors ~f:(fun (reason, stack_trace) ->
       Reason.message_summary
@@ -2215,7 +2198,7 @@ let build_forever =
 
     let rec build_and_poll ()  = (* never finishes if polling *)
 
-      Progress.reset_effort();
+      Progress.reset_metrics();
 
       (* start up various asyncronous writers/dumpers *)
       let fin = ref false in

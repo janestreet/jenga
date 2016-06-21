@@ -12,16 +12,7 @@ let bash ~dir command_string = Action.process ~dir ~prog:"bash" ~args:["-c"; com
 let bashf ~dir fmt = ksprintf (fun str -> bash ~dir str) fmt
 
 let read_sexp ~t_of_sexp string =
-  Dep.deferred (fun () ->
-    let info = Info.of_string ("sexp_of_string") in
-    let pipe = Pipe.create_reader ~close_on_exception:true (fun writer -> Pipe.write writer string) in
-    Reader.of_pipe info pipe >>= fun reader ->
-    Reader.read_sexp reader >>= fun outcome ->
-    Reader.close reader >>| fun () ->
-    match outcome with
-    | `Eof -> failwith "read_sexp"
-    | `Ok sexp -> t_of_sexp sexp
-  )
+  Sexp.of_string_conv_exn (String.rstrip string) t_of_sexp
 
 let recusive_default_scheme ~dir =
   Scheme.rules [
@@ -153,16 +144,14 @@ let default_exe_rule ~dir config =
 let ocaml_rules ~dir =
   let config_path = Path.relative ~dir "config.sexp" in
   Scheme.contents config_path (fun string ->
-    Scheme.dep (
-      Config.read string *>>| fun config ->
-      Scheme.all [
-        compile_rules ~dir;
-        Scheme.rules [
-          link_rule ~dir config;
-          default_exe_rule ~dir config;
-        ]
+    let config = Config.read string in
+    Scheme.all [
+      compile_rules ~dir;
+      Scheme.rules [
+        link_rule ~dir config;
+        default_exe_rule ~dir config;
       ]
-    )
+    ]
   )
 
 let scheme ~dir =

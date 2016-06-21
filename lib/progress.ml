@@ -2,15 +2,30 @@ open Core.Std
 open Async.Std
 open! Int.Replace_polymorphic_compare
 
-let lstat_counter = Effort.Counter.create "stat"
-let digest_counter = Effort.Counter.create "digest"
-let ls_counter = Effort.Counter.create "ls"
-let mkdir_counter = Effort.Counter.create "mkdir"
-let saves_done = Effort.Counter.create "db-save"
+let lstat_counter = Metrics.Counter.create "stat"
+let digest_counter = Metrics.Counter.create "digest"
+let ls_counter = Metrics.Counter.create "ls"
+let mkdir_counter = Metrics.Counter.create "mkdir"
+let saves_done = Metrics.Counter.create "db-save"
 
-let actions_run = Effort.Counter.create "act" (* for use in action.ml *)
-let saves_run = Effort.Counter.create "save" (* for use in save_description.ml *)
-let considerations_run = Effort.Counter.create "con" (* for use in build.ml *)
+let fs_metrics =
+  Metrics.Counters.create [
+    lstat_counter;
+    digest_counter;
+    ls_counter;
+    saves_done;
+  ]
+
+let actions_run = Metrics.Counter.create "act" (* for use in action.ml *)
+let saves_run = Metrics.Counter.create "save" (* for use in save_description.ml *)
+let considerations_run = Metrics.Counter.create "con" (* for use in build.ml *)
+
+let act_metrics =
+  Metrics.Counters.create [
+    considerations_run;
+    saves_run;
+    actions_run;
+  ]
 
 module Status = struct
   type t =
@@ -108,10 +123,8 @@ module Snap = struct
     counts : Counts.t;
     running : int;
     waiting : int;
-    all_effort : Effort.Counts.t;
-    con : int;
-    save : int;
-    act : int;
+    fs_metrics : Metrics.Counters.Snap.t;
+    act_metrics : Metrics.Counters.Snap.t;
   } [@@deriving bin_io, fields]
 
   let no_errors t = Counts.no_errors t.counts
@@ -119,7 +132,13 @@ module Snap = struct
   let fraction t = Counts.fraction t.counts
 
   let to_effort_string t =
-    Effort.Counts.to_string t.all_effort
+    Metrics.Counters.Snap.to_string t.fs_metrics
+
+  let to_metrics t =
+    Metrics.disjoint_union_exn
+      (Metrics.Counters.Snap.to_metrics t.fs_metrics)
+      (Metrics.Counters.Snap.to_metrics t.act_metrics)
+  ;;
 
   let to_string t style =
     match style with
@@ -129,12 +148,10 @@ module Snap = struct
     | `jem_style ->
       let todo = Counts.todo t.counts in
       Finish_time_estimator.push_todo estimator todo;
-      sprintf "%s j=%d+%d con=%d save=%d act=%d%s"
+      sprintf "%s j=%d+%d %s%s"
         (Counts.to_string t.counts)
         t.running t.waiting
-        t.con
-        t.save
-        t.act
+        (Metrics.Counters.Snap.to_string ~sep:" " t.act_metrics)
         (Finish_time_estimator.estimated_finish_time_string estimator)
     | `fraction ->
       let top, bot = Counts.fraction t.counts in
@@ -150,37 +167,18 @@ module Snap = struct
   ;;
 end
 
-let all_effort =
-  Effort.create [
-    lstat_counter;
-    digest_counter;
-    (*Fs.mkdir_counter;*)
-    ls_counter;
-    (*Job.external_jobs_run;*)
-    saves_done;
-  ]
-
-let act_effort =
-  Effort.create [
-    saves_run;
-    actions_run;
-    considerations_run;
-  ]
-
 let snap t = {
   Snap.
   counts = Counts.snap t;
   running = Throttle.num_jobs_running t.job_throttle;
   waiting = Throttle.num_jobs_waiting_to_start t.job_throttle;
-  all_effort = Effort.snap all_effort;
-  con = Effort.get considerations_run;
-  save = Effort.get saves_run;
-  act = Effort.get actions_run;
+  fs_metrics = Metrics.Counters.snap fs_metrics;
+  act_metrics = Metrics.Counters.snap act_metrics;
 }
 
-let reset_effort () = (
-  Effort.reset_to_zero all_effort;
-  Effort.reset_to_zero act_effort;
+let reset_metrics () = (
+  Metrics.Counters.reset_to_zero fs_metrics;
+  Metrics.Counters.reset_to_zero act_metrics;
 )
 
 let readme () = "

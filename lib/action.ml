@@ -39,9 +39,8 @@ let run t ~message ~output ~putenv ~progress ~need =
   | Process job ->
     enqueue_external_job progress (fun () ->
       message();
-      Effort.track Progress.actions_run (fun () ->
-        Job.run job ~need ~putenv ~output
-      )
+      Metrics.Counter.incr Progress.actions_run;
+      Job.run job ~need ~putenv ~output
     )
 
 let of_job job = Process job
