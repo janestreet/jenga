@@ -13,6 +13,7 @@ let%test_unit _ = (
   let def = Heart.when_broken heart in
   let def = def >>| Fn.id in
   Gc.full_major();
+  Gc.full_major();
   Glass.break g1;
   Async_kernel.Scheduler.run_cycles_until_no_jobs_remain();
   assert (Deferred.is_determined def)
@@ -20,7 +21,9 @@ let%test_unit _ = (
 
 module Memory = struct
 
-  let gc = Gc.full_major
+  let gc () =
+    Gc.full_major ();
+    Gc.full_major ()
 
   let used_memory () =
     let stat = Gc.stat () in

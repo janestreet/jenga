@@ -8,8 +8,8 @@
 
 /* Defined in byterun/md5.{c,h} but not exported */
 struct MD5Context {
-        uint32 buf[4];
-        uint32 bits[2];
+        uint32_t buf[4];
+        uint32_t bits[2];
         unsigned char in[64];
 };
 
@@ -17,7 +17,7 @@ CAMLextern void caml_MD5Init (struct MD5Context *context);
 CAMLextern void caml_MD5Update (struct MD5Context *context, unsigned char *buf,
                                 uintnat len);
 CAMLextern void caml_MD5Final (unsigned char *digest, struct MD5Context *ctx);
-CAMLextern void caml_MD5Transform (uint32 *buf, uint32 *in);
+CAMLextern void caml_MD5Transform (uint32_t *buf, uint32_t *in);
 
 /* Contrary to caml_md5_chan, this function releases the runtime lock.
 
