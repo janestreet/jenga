@@ -73,7 +73,7 @@ module Counts = struct
     built   : int;
     error   : int;
     failure : int; (* error in dep *)
-  } [@@deriving compare, bin_io]
+  } [@@deriving hash, compare, bin_io]
 
   let total {todo;built;error;failure} = todo + built + error + failure
 

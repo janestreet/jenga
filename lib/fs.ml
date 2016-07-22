@@ -442,15 +442,15 @@ end = struct
 end
 
 module Listing_result = struct
-  type t = [
-    | `does_not_exist
-    | `not_a_dir
-    | `listing of Listing.t
-  ] [@@deriving compare, sexp]
-
-  include Comparable.Make(struct
-    type nonrec t = t [@@deriving compare, sexp]
-  end)
+  module T = struct
+    type t = [
+      | `does_not_exist
+      | `not_a_dir
+      | `listing of Listing.t
+    ] [@@deriving compare, sexp]
+  end
+  include T
+  include Comparable.Make(T)
 end
 
 (** Stats for a path, as comes from [lstat]. *)
@@ -458,10 +458,10 @@ module Lstat_result = struct
   type t = [
   | `does_not_exist
   | `stats of Stats.t
-  ] [@@deriving compare, sexp]
+  ] [@@deriving hash, compare, sexp]
 
   include Comparable.Make(struct
-    type nonrec t = t [@@deriving compare, sexp]
+    type nonrec t = t [@@deriving hash, compare, sexp]
   end)
 end
 
@@ -475,10 +475,10 @@ module Inode_result = struct
   type t = [
   | `does_not_exist
   | `inode of (Kind.t * int * int)
-  ] [@@deriving compare, sexp]
+  ] [@@deriving hash, compare, sexp]
 
   include Comparable.Make(struct
-    type nonrec t = t [@@deriving compare, sexp]
+    type nonrec t = t [@@deriving hash, compare, sexp]
   end)
 end
 
@@ -814,8 +814,7 @@ module Glob = struct
         dir : Path.t;
         pat : Pattern.t;
         kinds : Kind.t list option;
-      } [@@deriving sexp, bin_io, compare]
-      let hash = Hashtbl.hash
+      } [@@deriving sexp, bin_io, hash, compare]
     end
     include T
     include Hashable.Make(T)

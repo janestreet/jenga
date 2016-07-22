@@ -612,18 +612,20 @@ let find_build_dot_ninja_upwards_from =
   loop
 
 let scheme ~dir =
-  J.Scheme.exclude (fun path -> J.Path.basename path = "build.ninja") (
-    J.Scheme.rules_dep (
-      find_build_dot_ninja_upwards_from ~dir *>>= function
-      | None -> return []
-      | Some build_dot_ninja ->
-        Dep.contents build_dot_ninja *>>| fun contents ->
-        let module Loaded = Load_ninja (struct
-          let dir = dir
-          let build_dot_ninja = build_dot_ninja
-          let contents = contents
-        end) in
-        Loaded.rules))
+  J.Scheme.all
+    [ J.Scheme.sources [relative ~dir "build.ninja"]
+    ; J.Scheme.rules_dep (
+        find_build_dot_ninja_upwards_from ~dir *>>= function
+        | None -> return []
+        | Some build_dot_ninja ->
+          Dep.contents build_dot_ninja *>>| fun contents ->
+          let module Loaded = Load_ninja (struct
+            let dir = dir
+            let build_dot_ninja = build_dot_ninja
+            let contents = contents
+          end) in
+          Loaded.rules)
+    ]
 
 let env = J.Env.create scheme
 let setup () = Deferred.return env

@@ -5,7 +5,8 @@ open! Core.Std
    indicates an alias when running jenga by a leading period.  So for example ".DEFAULT"
    or ".runtest". Aliases are directory relative. *)
 
-type t [@@deriving sexp, bin_io]
+type t [@@deriving hash, sexp, bin_io]
+include Comparable with type t := t
 include Hashable with type t := t
 
 (** [split a/b/.DEFAULT] is [("a/b", "DEFAULT")]. *)

@@ -45,6 +45,7 @@ type 'a t =
   | Reify : 'a state ref * String.t Lazy.t * 'a t Lazy.t -> 'a t
   | Lift : (unit -> ('a * Heart.t) Deferred.t) -> 'a t
   | Embed : 'a semantics -> 'a t
+type 'a tenacious = 'a t
 
 let rec reduce : type a . a t -> a t =
   fun t ->
@@ -217,24 +218,29 @@ and all : 'a . 'a t list -> 'a list semantics =
     finished
 
 (*
-  When a computation instance has completed, the certified result is remembered for
-  subsequent samplers.  Each subsequent sampler checks the certificate, and will begin a
-  new shared computation if the certificate is invalid.
+   When a computation instance has completed, the certified result is remembered for
+   subsequent samplers.  Each subsequent sampler checks the certificate, and will begin a
+   new shared computation if the certificate is invalid.
 
-  Whilst the computation is running, subsequent samplers [join] the single running
-  computation.  Clients may cancel, and new clients may join, at any time.  When a
-  clients cancels it receives a `cancellation-occurred' response `[None]' immediately.
-  If that client is only remaining client then the computation is cancelled.
+   Whilst the computation is running, subsequent samplers [join] the single running
+   computation.  Clients may cancel, and new clients may join, at any time.  When a
+   clients cancels it receives a `cancellation-occurred' response `[None]' immediately.
+   If that client is only remaining client then the computation is cancelled.
 
-  When a computation has been cancelled, the next sampling is responsible for starting a
-  new computation instance, if necessary.  The computation instance will not start until
-  the previous instance has occurred.  If the old computation, despite having been
-  cancelled, returns a result with a valid certificate, that result can be used, and
-  re-sampling is avoided.
-*)
+   When a computation has been cancelled, the next sampling is responsible for starting a
+   new computation instance, if necessary.  The computation instance will not start until
+   the previous instance has occurred.  If the old computation, despite having been
+   cancelled, returns a result with a valid certificate, that result can be used, and
+   re-sampling is avoided.
 
-and reify : 'a . 'a state ref -> name:(String.t Lazy.t) -> 'a t -> 'a semantics =
-  fun state ~name t ->
+   [shared_dep] is an optimization for the case where all the computations sampling a
+   reify are known to have a common Heart.t in their [~dep] argument. This common
+   dependency can be pushed inside of [reify], so the dep can be combined with the cancel
+   heart and the result heart once per computation of reify, instead of once per sampling
+   of [reify]. *)
+and reify_with_shared_dep
+  : 'a . 'a state ref -> name:(String.t Lazy.t) -> shared_dep:Heart.t -> 'a t -> 'a semantics =
+  fun state ~name ~shared_dep t ->
     let start ~last_result ~last_node =
       let stop_glass =
         (* This is filled to cancel the [shared_computation] *)
@@ -259,7 +265,7 @@ and reify : 'a . 'a state ref -> name:(String.t Lazy.t) -> 'a t -> 'a semantics 
         then Deferred.return res
         else
           sample t
-            ~thread:shared_computation_node ~cancel:stop_heart ~dep:Heart.unbreakable
+            ~thread:shared_computation_node ~cancel:stop_heart ~dep:shared_dep
       in
       let count = ref 0 in
       let join ~thread ~cancel:my_cancel ~dep:my_dep =
@@ -284,7 +290,7 @@ and reify : 'a . 'a state ref -> name:(String.t Lazy.t) -> 'a t -> 'a semantics 
         | None -> () (* was stopped *)
         | Some (x,certificate) ->
           (* wasn't stopped, of stop requested *)
-          if Heart.is_broken stop_heart then (
+          if Heart.is_broken stop_heart || Heart.is_broken shared_dep then (
           (* Cancel of [shared_computation] requested, but it returned a result anyway.
              We cannot prevent this race. *)
           ) else (
@@ -308,6 +314,9 @@ and reify : 'a . 'a state ref -> name:(String.t Lazy.t) -> 'a t -> 'a semantics 
             ~thread ~cancel ~dep
         else Deferred.return (Some (x, Heart.combine2 certificate dep))
 
+and reify : 'a . 'a state ref -> name:(String.t Lazy.t) -> 'a t -> 'a semantics =
+  fun r ~name -> reify_with_shared_dep r ~name ~shared_dep:Heart.unbreakable
+
 and lift : type a . (unit -> (a * Heart.t) Deferred.t) -> a semantics =
   fun f ~thread:_ ~cancel ~dep ->
     (* Make initial check of [cancel]; afterwards [cancel] is ignored.
@@ -329,10 +338,12 @@ let all = function
 
 let lift f = Lift f
 
+let create_reify_state () =
+  ref (Wait (Deferred.return None, Graph.Node.create (lazy "reify wait")))
+;;
+
 let reify ~name t =
-  let state = ref (Wait (
-    Deferred.return None, Graph.Node.create (lazy "reify wait"))) in
-  Reify (state, name, lazy (reduce t))
+  Reify (create_reify_state (), name, lazy (reduce t))
 
 let embed f =
   Embed (fun ~thread:_ ~cancel ~dep ->
@@ -526,6 +537,62 @@ let exec' t ~thread =
 let exec t ~name =
   let node = Graph.Node.create (lazy ("exec: " ^ Lazy.force name)) in
   Graph.root_until ~node (exec' ~thread:node t)
+
+module Stream = struct
+
+  type 'a t = 'a stream_elt Lazy.t
+  and 'a stream_elt = Stream_elt of 'a * 'a t tenacious
+
+  let unfold init next ~name =
+    let rec loop count init heart1 =
+      lazy (
+        let a, init_dep = next init in
+        let stream_tail =
+          Embed
+            (reify_with_shared_dep
+               (create_reify_state ())
+               ~name:(lazy (force name ^ " #" ^ Int.to_string count))
+               ~shared_dep:heart1
+               (Embed (fun ~thread ~cancel ~dep ->
+                  sample (reduce init_dep) ~thread ~cancel ~dep >>| function
+                  | None -> None
+                  | Some (init, heart2) -> (* heart2 includes heart1 *)
+                    Some (loop (count + 1) init heart2, heart2))))
+        in
+        Stream_elt (a, stream_tail)
+      )
+    in
+    loop 0 init Heart.unbreakable
+
+  type ('a, 'res) query =
+    | Return of 'res
+    | Continue of ('a -> ('a, 'res) query)
+
+  let query t q =
+    Embed (fun ~thread ~cancel ~dep ->
+      let cancel = Heart.combine2 cancel dep in
+      let rec restart () = loop (return t) q Heart.unbreakable
+      and loop (t : _ t tenacious) q heart1 =
+        match q with
+        | Return res -> Deferred.return (Some (res, Heart.combine2 dep heart1))
+        | Continue k ->
+          (* We do not pass [~dep] here because we don't want to combine [dep] with either
+             cancel or with the resulting heart at every step in the stream. *)
+          sample t ~thread ~cancel ~dep:Heart.unbreakable
+          >>= function
+          | Some (lazy (Stream_elt (a, t)), heart2) -> loop t (k a) heart2
+          | None ->
+            if Heart.is_broken cancel
+            then Deferred.return None
+            else
+              (* At this point, we don't have enough information to tell at which point of
+                 the stream hearts became invalid, not because of some fundamental issue
+                 but simply because we don't keep enough information to figure it out when
+                 we recurse. *)
+              restart ()
+      in
+      restart ())
+end
 
 module Var = struct
   type 'a t = {

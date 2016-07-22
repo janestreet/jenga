@@ -24,8 +24,6 @@ module Rule = Rule
 module Scheme = Scheme
 module Env = Env
 
-module Artifact_policy = Artifact_policy
-
 module Shell = struct
   let escape = Job_summary.Q.shell_escape
   let check arg result = String.(escape arg = result)

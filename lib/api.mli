@@ -279,13 +279,22 @@ end
 
 module Scheme : sig
   type t [@@deriving sexp_of]
-  val rules : Rule.t list -> t
+  val empty : t
+
+  val rules : ?sources:Path.t list -> Rule.t list -> t
+  val sources : Path.t list -> t
+
   val dep : t Dep.t -> t
+  (** Evaluates the schemes sequentially, which means that latter schemes can
+      depend (using [glob]) on the targets of the former schemes. *)
   val all : t list -> t
-  val exclude : (Path.t -> bool) -> t -> t
   val rules_dep : Rule.t list Dep.t -> t
   val contents : Path.t -> (string -> t)-> t
-  val no_rules : t
+
+  (** Used to glob the directory of the current scheme, without causing dependency
+      cycles. It is an error if any rule created after this glob is matched by the
+      glob. *)
+  val glob : Glob.t -> (Path.t list -> t) -> t
 end
 
 module Env : sig
@@ -296,15 +305,35 @@ module Env : sig
     ?build_begin : (unit -> unit Deferred.t) ->
     ?build_end : (unit -> unit Deferred.t) ->
 
-    (* [create ~artifacts ...]
+    (** Optional specification of which paths are to be regarded as artifacts, and hence
+        become candidates for deletion as stale-artifacts, if there is no build rule for
+        them.
 
-       Optional [artifacts] allows specification, on a per-directory basis, which paths
-       are to be regarded as artifacts, and hence become candidates for deletion as
-       stale-artifacts, if there is no build rule.
+        [delete_if_depended_upon] is what is expected to be used, whereas [delete_eagerly]
+        is more of a workaround for certain specific scenarios.
 
-       If [artifacts] is not provided, jenga will determine artifacts using it's own
-       knowledge of what was previously built, as recorded in .jenga/db. *)
-    ?artifacts: (dir:Path.t -> Path.t list Dep.t) ->
+        If [delete_if_depended_upon] is not provided, nothing is deleted (which is not
+        already deleted by the other rule). The predicate will be called when specifying a
+        dependency on a file that is not a target (using Dep.path or Dep.glob_listing).
+        It is useful to guarantee that the build doesn't depend on ignored files that
+        can't be built (otherwise, how could you build a fresh clone, where that ignored
+        file isn't there?).
+
+        If [delete_eagerly] is not provided, jenga will delete artifacts that it knows it
+        built previously, as recorded in .jenga/db.
+        The downside of [delete_eagerly] is that it is (in general) too aggressive, as it
+        can delete files that are ignored but not related to the build system (like .orig
+        files from the version control system). Is is mostly meant to delete certain files
+        that you know a command can read even though you haven't put dependencies on them
+        (like ocamlopt reading cmis for which no ml exist, if you create dependencies
+        based on which ml files exist).
+
+        The [Dep.t] used in these functions should only be the ones that depend on what's
+        on the filesystem right now, rather than the ones that also anticipate what can be
+        built. So [fs_glob_listing] should be used instead of [glob_listing] for instance.
+    *)
+    ?delete_eagerly:((non_target:Path.t -> bool) Dep.t) ->
+    ?delete_if_depended_upon:((non_target:Path.t -> bool) Dep.t) ->
 
     (* [create f] - Mandatory argument [f] specifies, per-directory, the rule-scheme. *)
     (dir:Path.t -> Scheme.t) ->

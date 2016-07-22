@@ -1,6 +1,6 @@
 version = "$(pkg_version)"
 description = "Build system"
-requires = "async async_inotify async_parallel bin_prot core fieldslib jenga.tenacious ocaml_plugin ppx_assert.runtime-lib ppx_bench.runtime-lib ppx_expect.collector ppx_hash.runtime-lib ppx_inline_test.runtime-lib re2 sexplib str typerep variantslib"
+requires = "async async_inotify async_parallel bin_prot core fieldslib jenga.tenacious ocaml_plugin ppx_assert.runtime-lib ppx_bench.runtime-lib ppx_expect.collector ppx_hash.runtime-lib ppx_inline_test.runtime-lib re sexplib str typerep variantslib"
 archive(byte  ) = "jenga_lib.cma"
 archive(native) = "jenga_lib.cmxa"
 plugin(byte  ) = "jenga_lib.cma"

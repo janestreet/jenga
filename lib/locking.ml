@@ -83,7 +83,7 @@ module Dir_resource : sig
 end = struct
 
   module Mode = struct
-    type t = A | L [@@deriving compare]
+    type t = A | L [@@deriving hash, compare]
     let (=) x1 x2 = 0 = compare x1 x2
   end
 

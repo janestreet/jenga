@@ -157,7 +157,7 @@ let ocaml_rules ~dir =
 let scheme ~dir =
   Scheme.all [
     recusive_default_scheme ~dir;
-    (if Path.the_root = dir then Scheme.no_rules else Scheme.all [
+    (if Path.the_root = dir then Scheme.empty else Scheme.all [
       (* only setup ocaml build rules in subdirs *)
       ocaml_rules ~dir;
      ])]

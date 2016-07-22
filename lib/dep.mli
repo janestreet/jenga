@@ -34,7 +34,6 @@ val subdirs : dir:Path.t -> Path.t list t
 val file_exists : Path.t -> bool t
 val file_existence : Path.t -> unit t
 
-val on_filesystem : dir:Path.t -> Path.t list t
 val buildable_targets : dir:Path.t -> Path.t list t
 val source_files : dir:Path.t -> Path.t list t
 

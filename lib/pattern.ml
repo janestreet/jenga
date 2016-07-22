@@ -5,12 +5,7 @@ open! Int.Replace_polymorphic_compare
 module T = struct
 
   type t = Literal of string | Glob of string | Regexp of string
-  [@@deriving sexp, bin_io, compare]
-
-  let hash = function
-    | Literal s -> String.hash s
-    | Glob s -> String.hash s
-    | Regexp s -> String.hash s
+  [@@deriving sexp, bin_io, hash, compare]
 
 end
 

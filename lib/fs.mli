@@ -14,7 +14,7 @@ module Digest = Db.Digest
 module Kind = Db.Kind
 
 module Glob : sig (* glob specification *)
-  type t = Db.Glob.t [@@deriving sexp, compare]
+  type t = Db.Glob.t [@@deriving sexp, hash, compare]
   include Hashable with type t := t
   val dir : t -> Path.t
   val pattern : t -> Pattern.t
@@ -73,7 +73,7 @@ val lock_targets_and_mask_updates :
 val clear_watcher_cache : t -> Path.t -> needed_for_correctness:bool -> unit
 
 module Mtime : sig
-  type t [@@deriving compare, sexp_of]
+  type t [@@deriving hash, compare, sexp_of]
   val equal : t -> t -> bool
 end
 

@@ -8,11 +8,11 @@ module T = struct
   type t = {
     dir : Path.Rel.t;
     name : string;
-  } [@@deriving sexp, bin_io, compare]
-  let hash = Hashtbl.hash
+  } [@@deriving sexp, bin_io, hash, compare]
 end
 
 include T
+include Comparable.Make(T)
 include Hashable.Make(T)
 
 let create ~dir name = { dir; name; }

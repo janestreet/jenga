@@ -9,7 +9,7 @@ exception Shutdown
    shell, such as "bash -c". *)
 
 type t = Db.Job.t
-[@@deriving sexp_of, compare]
+[@@deriving sexp_of, hash, compare]
 val create : dir:Path.t -> prog:string -> args:string list -> ignore_stderr:bool -> t
 
 val bracket : t -> sh_prelude:string -> sh_postlude:string -> t

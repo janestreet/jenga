@@ -1,5 +1,4 @@
-
-(*
+(**
   [Tenacious.t] -- A type for "Tenacious computations".
 
   A value [tenacious] of type ['a Tenacious.t] is a recipe for cancellable computation
@@ -48,6 +47,7 @@ module type S = sig
   module Heart : Heart_intf.S
 
   include Monad.S
+  type 'a tenacious = 'a t
   val all_unit    : unit t list -> unit t
   val map2 : 'a t -> 'b t -> f:('a -> 'b -> 'c) -> 'c t
   val both : 'a t -> 'b t -> ('a * 'b) t
@@ -58,22 +58,22 @@ module type S = sig
   val embed       : (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> 'a t
   val reify       : name:(String.t Lazy.t) -> 'a t -> 'a t
 
-  (* This is most useful in combination with reify:
-     [reify (bracket ~running ~finished ~cancelled x)].
-     Without [reify], you can get multiple concurrent [running..canceled] and
-     [running..finished] blocks even when your tenacious doesn't breaks its heart.
+  (** This is most useful in combination with reify:
+      [reify (bracket ~running ~finished ~cancelled x)].
+      Without [reify], you can get multiple concurrent [running..canceled] and
+      [running..finished] blocks even when your tenacious doesn't breaks its heart.
   *)
   val bracket
     :  'a t
-    -> running:(int -> unit) (* Number of times this tenacious has run, starting at
-                                0 for the first execution. *)
+    -> running:(int -> unit) (** Number of times this tenacious has run, starting at
+                                 0 for the first execution. *)
     -> finished:('a -> unit)
     -> cancelled:(unit -> unit)
     -> 'a t
   val uncancellable : 'a t -> 'a t
   val desensitize : 'a t -> ('a * Heart.t) t
 
-  (* [lift] is specialization/simplification of [embed] *)
+  (** [lift] is specialization/simplification of [embed] *)
   val lift : (unit -> ('a * Heart.t) Deferred.t) -> 'a t
 
   (** cutoff is dangerous:
@@ -96,6 +96,20 @@ module type S = sig
       result should not depend on which result gets produced first.
   *)
   val race : 'a t -> 'a t -> 'a t
+
+  (** [Stream] provides two things:
+      - sharing of the computations needed by various tenacious computations (same as
+        reify)
+      - sharing of the [Heart]s representing the validity of the prefixes of the stream
+      That second part is important, as it cannot be done by simply calling [reify]. *)
+  module Stream : sig
+    type 'a t
+    val unfold : 's -> ('s -> ('a * 's tenacious)) -> name:string Lazy.t -> 'a t
+    type ('a, 'res) query =
+      | Return of 'res
+      | Continue of ('a -> ('a, 'res) query)
+    val query : 'a t -> ('a, 'res) query -> 'res tenacious
+  end
 
   module Result : sig
     type nonrec ('a, 'e) t = ('a, 'e) Result.t t

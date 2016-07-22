@@ -17,9 +17,6 @@ shift
   done;
   echo Timeout after "$timeout"s;
   echo
-  # stupid nyc-qws-cd* don't have pstack
-  # echo '$' pstack $$
-  # pstack $$
   for ((i = 0; i < 2; i++)) {
       com=(gdb /proc/$$/exe $$ -batch -ex 'thread apply all bt')
       echo '$' "${com[@]}"

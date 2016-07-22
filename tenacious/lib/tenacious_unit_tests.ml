@@ -67,7 +67,7 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
     in
     loop 0
 
-  let run tenacious =
+  let run' tenacious =
     (* Run a tenacious computation to get a result *)
     let r = ref None in
     begin
@@ -78,7 +78,8 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
     stabilize();
     match Option.value_exn (!r) with
     | Error e -> raise e
-    | Ok (x,h) -> assert (not (Heart.is_broken h)); x
+    | Ok (x, h) -> assert (not (Heart.is_broken h)); x, h
+  let run tenacious = fst (run' tenacious)
 
   (* Tests start here... *)
 
@@ -320,6 +321,127 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
     Var.set var2 2;
     [%test_result: int] (run sum) ~expect:22;
   )
+
+  let make_events (test_result : ?here:_ -> ?message:_ -> ?equal:_ -> _) =
+    let q = Queue.create () in
+    (fun e -> Queue.enqueue q e),
+    (fun expect ->
+       test_result ~expect (Queue.to_list q);
+       Queue.clear q)
+  ;;
+
+  let%test_unit "stream compute/recompute correctly" =
+    let add, check =
+      make_events [%test_result: [ `Computing_stream_elt of int
+                                 | `Query of int * int] list]
+    in
+    let glasses = Array.init 4 ~f:(fun _ -> Heart.Glass.create ()) in
+    let stream =
+      Tenacious.Stream.unfold ~name:(lazy "")
+        0
+        (fun count ->
+          add (`Computing_stream_elt count);
+          count, Tenacious.embed (fun ~cancel:_ ->
+            (* Breaking glasses.(X) makes any computation using [`Computing_stream_elt X]
+               stale. *)
+            let index = count + 1 in
+            if Heart.Glass.is_broken glasses.(index)
+            then glasses.(index) <- Heart.Glass.create ();
+            Deferred.return (Some (count + 1, Heart.watch glasses.(index)))))
+
+    in
+    let queries =
+      Array.init 4 ~f:(fun stop_at ->
+        let rec loop i : _ Tenacious.Stream.query =
+          if i = stop_at then Return i
+          else Continue (fun value ->
+            assert (value = i);
+            add (`Query (stop_at, i));
+            loop (i + 1))
+        in
+        let query = loop 0 in
+        Tenacious.Stream.query stream query
+      )
+    in
+    let run index =
+      let value, heart = run' queries.(index) in
+      [%test_result:int] value ~expect:index;
+      heart
+    in
+    (* First we check that stream elements are:
+       - properly generated (the state is not dropped or something)
+       - only on demand
+       - only once *)
+    check [];
+    let heart0 = run 0 in
+    check [];
+    let heart1 = run 1 in
+    check [ `Computing_stream_elt 0; `Query (1, 0) ];
+    let heart3 = run 3 in
+    check [ `Query (3, 0)
+          ; `Computing_stream_elt 1; `Query (3, 1)
+          ; `Computing_stream_elt 2; `Query (3, 2) ];
+    let heart2 = run 2 in
+    check [ `Query (2, 0); `Query (2, 1) ];
+    (* And now if some suffix of the stream becomes invalid, only the affected queries
+       need to be rerun. And rerunning these queries only forces the invalid part of the
+       scheme to be recomputed. *)
+    Heart.Glass.break glasses.(1);
+    assert (not (Heart.is_broken heart0));
+    assert (not (Heart.is_broken heart1));
+    assert (Heart.is_broken heart2); (* queries.(2) is the first computation that uses
+                                        `Computing_stream_elt 1 *)
+    assert (Heart.is_broken heart3);
+    let _heart3 = run 3 in
+    check [ `Query (3, 0); `Computing_stream_elt 1
+          ; `Query (3, 1); `Computing_stream_elt 2; `Query (3, 2) ];
+    (* Finally, queries share the same hearts, if they force the same prefix of the
+       same stream. *)
+    assert (phys_equal (run 3) (run 3));
+    check [ `Query (3, 0); `Query (3, 1); `Query (3, 2)
+          ; `Query (3, 0); `Query (3, 1); `Query (3, 2) ];
+  ;;
+
+  let%test_unit "cancellation during stream execution" =
+    let add, check =
+      make_events [%test_result: [ `Computing_stream_elt of int
+                                 | `Query of int ] list]
+    in
+    let glass = Heart.Glass.create () in
+    let stream =
+      (* We create a stream where the computation of the first elements breaks during the
+         computation ofthe second element (only once). *)
+      Tenacious.Stream.unfold ~name:(lazy "")
+        0 (fun count ->
+          count, Tenacious.embed (fun ~cancel ->
+                add (`Computing_stream_elt count);
+                assert (not (Heart.is_broken cancel));
+                if count = 0 || Heart.Glass.is_broken glass
+                then Deferred.return (Some (count + 1, Heart.unbreakable))
+                else begin
+                  if count = 1
+                  then Deferred.return (Some (count + 1, Heart.watch glass))
+                  else begin
+                    Heart.Glass.break glass;
+                    assert (Heart.is_broken cancel);
+                    Deferred.return None
+                  end
+                end))
+    in
+    let rec query i : _ Tenacious.Stream.query =
+      if i = 4 then Return ()
+      else Continue (fun a -> add (`Query a); assert (a = i); query (i + 1))
+    in
+    run (Tenacious.Stream.query stream (query 0));
+    check [ `Query 0; `Computing_stream_elt 0; `Query 1; `Computing_stream_elt 1
+          ; `Query 2; `Computing_stream_elt 2
+          (*  [`Computing_stream_elt 2] invalidates [`Computing_stream_elt 1], so we
+              restart the query. *)
+          ; `Query 0; `Query 1; `Computing_stream_elt 1
+          ; `Query 2; `Computing_stream_elt 2
+          ; `Query 3
+          ];
+  ;;
 end
 
 module Test_reference = Tenacious_tests (struct

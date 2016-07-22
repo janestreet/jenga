@@ -5,7 +5,7 @@ module String : functor (X : sig val who : string end) -> sig
 
   (** Interned string handle. Binprot representation only makes sense when written as a
       part of a larger ['a With_store.t] data structure. *)
-  type t [@@deriving sexp, bin_io, compare]
+  type t [@@deriving sexp, bin_io, hash, compare]
 
   val intern : string -> t
   val extern : t -> string

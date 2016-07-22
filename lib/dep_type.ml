@@ -20,7 +20,6 @@ type _ t =
 | Reflect_path : Path.t -> Reflected.Trip.t option t
 | Reflect_alias : Alias.t -> Path.Set.t t
 | Reflect_putenv : (string * string option) list t
-| On_filesystem : Path.t -> Path.Set.t t
 | Buildable_targets : Path.t -> Path.Set.t t
 | Source_files : Path.t -> Path.Set.t t
 | Glob_listing_OLD : Fs.Glob.t -> Path.Set.t t

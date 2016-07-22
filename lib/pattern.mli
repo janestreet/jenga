@@ -1,7 +1,7 @@
 
 open! Core.Std
 
-type t [@@deriving sexp, bin_io, compare]
+type t [@@deriving sexp, bin_io, hash, compare]
 
 val to_string : t -> string
 

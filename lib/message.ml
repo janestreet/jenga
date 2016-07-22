@@ -318,23 +318,23 @@ let omake_style_logger config event =
 ;;
 
 let parse_build_measures_assoc_list =
-  let parse =
-    let open Re2.Std.Parser in
-    Staged.unstage (compile (
-      or_ [string "done"; string "failed"]
-      *> string " ("
-      *> capture (
-        string "#"
-        *> ignore Decimal.int
-        *> string ", "
-        *> repeat (ignore Char.any)
-      )
-      <* string ")"
-      <* ignore (optional (string " -- HURRAH"))))
+  let regexp =
+    Re.(compile
+          (seq [ alt [str "done"; str "failed"]
+               ; str " ("
+               ; group (seq [ str "#"
+                            ; opt (set "-+"); rep1 digit
+                            ; str ", "
+                            ; rep any
+                            ])
+               ; str ")"
+               ; opt (str " -- HURRAH")
+               ]))
   in
   (fun str ->
-     Option.map (parse str)
-       ~f:(fun csv ->
+     Option.map (Re.exec_opt regexp str)
+       ~f:(fun groups ->
+         let csv = Re.Group.get groups 1 in
          List.map (String.split ~on:',' csv) ~f:(fun value ->
            let value = String.strip value in
            match String.lsplit2 ~on:'=' value with

@@ -5,18 +5,6 @@ module Unix = Async.Std.Unix
 
 let equal_using_compare compare = fun x1 x2 -> 0 = compare x1 x2
 
-module Hash = struct
-  type t = int
-  let alpha = 65599
-  let combine t1 t2 : t = t1 * alpha + t2
-  let map hash_k hash_v map =
-    Map.fold ~init:0 map
-      ~f:(fun ~key ~data hash -> combine (combine hash (hash_k key)) (hash_v data))
-  let set hash_v map =
-    Set.fold ~init:0 map
-      ~f:(fun hash data -> combine hash (hash_v data))
-end
-
 module Job = struct
 
   module T = struct
@@ -25,8 +13,8 @@ module Job = struct
       prog : string;
       args : string list;
       ignore_stderr : bool;
-    } [@@deriving sexp, bin_io, compare, fields]
-    let hash = Hashtbl.hash
+    }
+[@@deriving sexp, bin_io, hash, compare, fields]
   end
   include T
   include Hashable.Make_binable(T)
@@ -38,13 +26,12 @@ end
 module Kind = struct
   type t =
   [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
-  [@@deriving sexp, bin_io, compare]
+  [@@deriving sexp, bin_io, hash, compare]
   let to_string t = Sexp.to_string (sexp_of_t t)
-  let hash : t -> int = Hashtbl.hash
 end
 
 module Mtime = struct
-  type t = float [@@deriving sexp, bin_io, compare]
+  type t = float [@@deriving sexp, bin_io, hash, compare]
   let of_float f = f
   let equal = equal_using_compare compare
 end
@@ -80,7 +67,7 @@ module Stats = struct
     kind : Kind.t;
     size : int64;
     mtime : Mtime.t;
-  } [@@deriving fields, sexp, bin_io, compare]
+  } [@@deriving fields, sexp, bin_io, hash, compare]
 
   let equal = equal_using_compare compare
 
@@ -108,36 +95,35 @@ module Listing = struct
       type t = {
         base : string;
         kind : Kind.t;
-      } [@@deriving sexp, bin_io, compare]
-
-      let hash { base; kind } =
-        Hash.combine (String.hash base) (Kind.hash kind)
+      } [@@deriving sexp, bin_io, hash, compare]
     end
     include T
-    include Comparable.Make_binable(T)
+
+    module C = Comparable.Make(T)
+    include (C : module type of struct include C end with module Set := C.Set)
+    module Set = struct
+      include C.Set
+      include C.Set.Provide_hash(T)
+    end
+
     let create ~base ~kind = { base; kind }
   end
 
+  type listing = Elem.t list [@@deriving sexp, bin_io]
+
+  let compare_listing xs1 xs2 =
+    (* Allow differently ordering listings to be regarded as equal *)
+    Elem.Set.compare (Elem.Set.of_list xs1) (Elem.Set.of_list xs2)
+
+  let hash_fold_listing s xs =
+    Elem.Set.hash_fold_t s (Elem.Set.of_list xs)
+
   type t = {
     dir : Path.t;
-    listing : Elem.t list;
-  } [@@deriving sexp, bin_io, compare]
+    listing : listing;
+  } [@@deriving sexp, bin_io, hash, compare]
 
   let create ~dir ~elems = { dir; listing = elems }
-
-  let compare t1 t2 =
-    let res = Path.compare t1.dir t2.dir in
-    if res <> 0 then res
-    else
-      (* Allow differently ordering listings to be regarded as equal *)
-      Elem.Set.compare (Elem.Set.of_list t1.listing) (Elem.Set.of_list t2.listing)
-
-  let hash { dir; listing } =
-    Hash.combine (Path.hash dir)
-      (* Combining hashes in such a way that the order of the list doesn't matter, since
-         comparison doesn't care about order either. *)
-      (List.fold listing ~init:0 ~f:(fun acc elt -> acc + Elem.hash elt))
-  ;;
 
   let equal = equal_using_compare compare
 
@@ -158,7 +144,7 @@ module Listing = struct
     type t = {
       kinds : Kind.t list option; (* None means any kind *)
       pat : Pattern.t;
-    } [@@deriving sexp, bin_io, compare]
+    } [@@deriving sexp, bin_io, hash, compare]
 
     let create ~kinds pat = { kinds; pat; }
 
@@ -202,8 +188,7 @@ module Glob = struct
     type t = {
       dir : Path.t;
       restriction : Listing.Restriction.t;
-    } [@@deriving sexp, bin_io, compare, fields]
-    let hash = Hashtbl.hash
+    } [@@deriving sexp, bin_io, hash, compare, fields]
   end
 
   include T
@@ -222,14 +207,17 @@ module Pm_key = struct
 
   module T = struct
     type t = Path of Path.t | Glob of Glob.t
-    [@@deriving sexp, bin_io, compare]
-
-    let hash = function
-      | Path path -> Hash.combine 0 (Path.hash path)
-      | Glob glob -> Hash.combine 1 (Glob.hash glob)
+    [@@deriving sexp_of, bin_io, hash, compare]
   end
   include T
-  include Comparable.Make_binable(T)
+
+  module C = Comparable.Make_plain(T)
+  include (C : module type of struct include C end with module Map := C.Map)
+  module Map = struct
+    include C.Map
+    include C.Map.Provide_bin_io(T)
+    include C.Map.Provide_hash(T)
+  end
 
   let equal = equal_using_compare compare
 
@@ -260,11 +248,7 @@ module Proxy = struct
   type t =
     | Digest of Digest.t
     | Fs_proxy of Listing.t
-  [@@deriving sexp_of, bin_io, compare]
-
-  let hash = function
-    | Digest d -> Hash.combine 0 (Digest.hash d)
-    | Fs_proxy listing -> Hash.combine 1 (Listing.hash listing)
+  [@@deriving sexp_of, bin_io, hash, compare]
 
   let of_digest x = Digest x
 
@@ -295,25 +279,28 @@ module Proxy_map = struct
       mutable cache : Cache.t;
     }
     val compare_group : group -> group -> int
+    val hash_fold_group : Hash.state -> group -> Hash.state
     val sexp_of_group : group -> Sexp.t
   end = struct
     include T_with_shallow_ops
     let compare_group group1 group2 = Id.compare group1.id group2.id
     let sexp_of_group group = Id.sexp_of_t group.id
+    let hash_group group = group.hash
+    let hash_fold_group state group = hash_fold_int state (hash_group group)
   end
-  and Group_comparator : Comparator.S with type t = T_with_shallow_ops.group = struct
-    type t = T_with_shallow_ops.group
-    include Comparator.Make(struct type t = T_with_shallow_ops.group [@@deriving compare, sexp_of] end)
-  end
+  and Group_comparator : Comparator.S with type t := T_with_shallow_ops.group =
+    Comparator.Make(struct
+      type t = T_with_shallow_ops.group [@@deriving compare, sexp_of]
+    end)
 
   module Group_set = struct
-    include Set.Make_using_comparator(struct
+    module T = struct
+      type t = T_with_shallow_ops.group [@@deriving hash]
       include Group_comparator
       let sexp_of_t = T_with_shallow_ops.sexp_of_group
-      let t_of_sexp _ = assert false
-    end)
-    let t_of_sexp = `Undefined
-    let _ = t_of_sexp
+    end
+    include Set.Make_plain_using_comparator(T)
+    include Provide_hash(T)
   end
 
   (* We allow some values to compare as not equal even though we would prefer to think of
@@ -325,7 +312,7 @@ module Proxy_map = struct
     map : Proxy.t Pm_key.Map.t;
     groups : Group_set.t;
   }
-  [@@deriving compare]
+  [@@deriving hash, compare]
 
   type group = T_with_shallow_ops.group = {
     id : Id.t;
@@ -341,13 +328,8 @@ module Proxy_map = struct
     let equal t1 t2 = t1.hash = t2.hash && compare t1.t t2.t = 0
   end)
   let weak_group_set = lazy (Weak_group_set.create 1000)
-  let create_group ({ map; groups } as t) =
-    let hash =
-      Hash.combine
-        (Hash.map Pm_key.hash Proxy.hash map)
-        (Hash.set (fun group -> group.hash) groups)
-    in
-    let group = { hash; t; id = Id.create (); cache = None } in
+  let create_group t =
+    let group = { hash = [%hash:t] t; t; id = Id.create (); cache = None } in
     Weak_group_set.merge (force weak_group_set) group
 
   module type Serialization_param = sig
@@ -382,6 +364,7 @@ module Proxy_map = struct
       include Sexpable
       module Set =
         Set.Make_binable_using_comparator(struct
+          type t = T_with_shallow_ops.group
           include Group_comparator
           include Binable
           include Sexpable
@@ -578,7 +561,7 @@ module Rule_proxy = struct
     targets : Proxy_map.t;
     deps : Proxy_map.t;
     action : Job.t
-  } [@@deriving compare, fields]
+  } [@@deriving hash, compare, fields]
 
   let build_index acc { targets; deps; action = _ } =
     Proxy_map.build_index acc targets;
@@ -601,7 +584,7 @@ module Output_proxy = struct
   type t = {
     deps : Proxy_map.t;
     stdout : string;
-  } [@@deriving compare, fields]
+  } [@@deriving hash, compare, fields]
 
   let build_index acc { deps; stdout = _ } = Proxy_map.build_index acc deps
 

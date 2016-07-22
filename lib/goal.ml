@@ -7,8 +7,7 @@ module T = struct
     | Jengaroot
     | Path of Path.Rel.t
     | Alias of Alias.t
-  [@@deriving sexp, compare, bin_io]
-  let hash = Hashtbl.hash
+  [@@deriving sexp, hash, compare, bin_io]
 end
 
 include T

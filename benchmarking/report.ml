@@ -1,4 +1,5 @@
 open Core.Std
+module T = Textutils.Text_block
 
 type t =
   { version : string
@@ -13,12 +14,23 @@ let display_metric v (unit : Jenga_lib.Metrics.Unit.t) =
   | Dimensionless -> Printf.sprintf "%.0f" v
 ;;
 
+let use_colors = lazy (Unix.isatty Unix.stdout)
+
 let relative_change ~from:v1 ~to_:v2 =
-  Textutils.Text_block.text
-    (let f = v2 /. v1 -. 1. in
-     if v1 =. v2 || Float.abs f <. 0.001
-     then "="
-     else Printf.sprintf "%+.1f%%" (f *. 100.))
+  let f = v2 /. v1 -. 1. in
+  if v1 =. v2 || Float.abs f <. 0.001
+  then T.text "="
+  else
+    let s = T.text (Printf.sprintf "%+.1f%%" (f *. 100.)) in
+    let prefix, suffix =
+      if not (force use_colors)
+      then "", ""
+      else
+        if f >. 0.
+        then "[01;31m", "[22;39m"
+        else "[01;32m", "[22;39m"
+    in
+    T.ansi_escape ~prefix ~suffix s
 ;;
 
 let same_unit u1 u2 =
@@ -26,12 +38,14 @@ let same_unit u1 u2 =
   u1
 ;;
 
-let display (inputs : t list) =
+let mean a ~f =
+  List.sum (module Float) a ~f /. Int.to_float (List.length a)
+
+let display (inputs : t list) ~show_dispersion =
   let all_metrics =
     List.stable_dedup
-      ([ "time"; "top_heap"; "minor"; "major"; "promoted"; "major_collections" ] @
-       (List.concat_map inputs ~f:(fun t ->
-          Map.keys (Map.remove t.metrics.metrics "heap"))))
+      ([ "time"; "top_heap"; "heap"; "minor"; "major"; "promoted"; "major_collections" ] @
+       (List.concat_map inputs ~f:(fun t -> Map.keys t.metrics.metrics)))
   in
   let first_version, all_versions =
     match List.stable_dedup (List.map inputs ~f:(fun t -> t.version)) with
@@ -46,7 +60,6 @@ let display (inputs : t list) =
     in
     List.map all_keys ~f:(fun key -> key, Map.find_exn map_by_bench key)
   in
-  let module T = Textutils.Text_block in
   let list_of_columns =
     List.map by_bench ~f:(fun (bench, version_and_metrics) ->
       let count_by_version =
@@ -62,8 +75,14 @@ let display (inputs : t list) =
               | `Both ((xs, unit1), (x, unit2)) ->
                 Some (x :: xs, same_unit unit1 unit2)))
         |> Map.map ~f:(Map.map ~f:(fun (values, unit) ->
-          let mean = List.sum (module Float) values ~f:Fn.id /. Int.to_float (List.length values) in
-          mean, unit))
+          let mean_v = mean values ~f:Fn.id in
+          let dispersion =
+            mean values ~f:(fun v ->
+              if v =. 0. && mean_v =. 0.
+              then 0.
+              else Float.abs (v /. mean_v -. 1.))
+          in
+          mean_v, dispersion, unit))
       in
       let versions_to_show = List.filter all_versions ~f:(Map.mem metrics_by_version) in
       let left_column =
@@ -76,20 +95,44 @@ let display (inputs : t list) =
            List.map (first_version :: versions_to_show)
              ~f:(fun v -> T.text (Int.to_string (Map.find_exn count_by_version v))))
       in
+      let and_dispersion block dispersion =
+        let prefix, suffix =
+          if not (force use_colors)
+          then "", ""
+          else if dispersion >. 1.
+          then "[45m", "[49m"
+          else if dispersion >. 0.3
+          then "[41m", "[49m"
+          else if dispersion >. 0.05
+          then "[43m", "[49m"
+          else "", ""
+        in
+        T.hcat
+          [ T.ansi_escape ~prefix ~suffix block
+          ; if show_dispersion
+            then T.text (Printf.sprintf " %.0f%%" (dispersion *. 100.))
+            else T.nil
+          ]
+      in
       let columns_of_data =
         List.map all_metrics ~f:(fun metric_name ->
-          let first_metric, unit =
+          let first_metric, first_dispersion, unit =
             Map.find_exn (Map.find_exn metrics_by_version first_version) metric_name
           in
           T.vcat ~align:`Right
             (T.text metric_name ::
-             T.text (display_metric first_metric unit) ::
+             and_dispersion
+               (T.text (display_metric first_metric unit))
+               first_dispersion ::
              List.map versions_to_show ~f:(fun version ->
-               let this_metric, unit' =
+               let this_metric, this_dispersion, unit' =
                  Map.find_exn (Map.find_exn metrics_by_version version) metric_name
                in
-               let _ = same_unit unit unit' in
-               relative_change ~from:first_metric ~to_:this_metric)))
+               ignore (same_unit unit unit');
+               and_dispersion
+                 (relative_change ~from:first_metric ~to_:this_metric)
+                 this_dispersion
+             )))
       in
       left_column :: sample_size :: columns_of_data)
   in
@@ -99,21 +142,6 @@ let display (inputs : t list) =
     |> List.intersperse ~sep:(T.hstrut 1)
     |> T.hcat
     |> T.render
-  in
-  let table_as_string =
-    if Unix.isatty Unix.stdout then
-      (* Can't stick ansi escapes on the values directly, as Text_block assumes that all
-         characters are the same width. *)
-      let module Re2 = Re2.Std.Re2 in
-      let worse_metrics = Re2.create_exn {|\+[0-9.]+%|} in
-      let better_metrics = Re2.create_exn {|-[0-9.]+%|} in
-      table_as_string
-      |> Re2.replace_exn worse_metrics ~f:(fun m ->
-        sprintf "[31;01m%s[39;22m" (Re2.Match.get_exn m ~sub:(`Index 0)))
-      |> Re2.replace_exn better_metrics ~f:(fun m ->
-        sprintf "[32;01m%s[39;22m" (Re2.Match.get_exn m ~sub:(`Index 0)))
-    else
-      table_as_string
   in
   print_string table_as_string
 ;;
@@ -135,10 +163,18 @@ let () =
            The report shows the metrics for all the versions relative to the \
            first version in the file (ie the first version is expected to be the \
            baseline).\n\n\
+           Background color represents variance:\n\
+           - no background color: little variance\n\
+           - yellow: slightly high variance\n\
+           - red: really high variance\n\
+           - purple: so much variance the data is nonsensical\n\n\
            There is no accompanying executable to create input files matching this \
-           format.")
+           format.\
+       ")
        [%map_open
          let metrics_files = anon (sequence ("METRICS" %: file))
+         and show_dispersion =
+           flag "-dispersion" no_arg ~doc: " show the average relative distance between the values and their mean"
          in fun () ->
            let lines =
              match metrics_files with
@@ -158,7 +194,7 @@ let () =
                  { version; bench; metrics }
                | _ -> failwithf "parse error on line: %s" line ())
            in
-           display inputs
+           display ~show_dispersion inputs
        ]
     )
 ;;

@@ -57,7 +57,8 @@ module String(X : sig val who : string end) = struct
   include Shared
 
   let compare t1 t2 = String.compare (extern t1) (extern t2)
-  let hash t = String.hash (extern t)
+  let hash_fold_t state t = hash_fold_string state (extern t)
+  let hash = [%hash: t]
 
   (* For sexp conversion, we use extern/intern *)
   let sexp_of_t t = String.sexp_of_t (Shared.extern t)
@@ -66,7 +67,7 @@ module String(X : sig val who : string end) = struct
   module Handle = struct
     (* [Handle.t] represents an interned-string when saved persistently (via bin_io) *)
     module T = struct
-      type t = int [@@deriving sexp, bin_io, compare]
+      type t = int [@@deriving sexp, bin_io, hash, compare]
       let hash x = x
     end
     include T

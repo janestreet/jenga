@@ -7,7 +7,7 @@ open! Core.Std
    Internally represented & displayed without a leading /.
 *)
 module Rel : sig
-  type t [@@deriving sexp, compare, bin_io]
+  type t [@@deriving sexp, hash, compare, bin_io]
   include Hashable_binable with type t := t
   include Comparable_binable with type t := t
   val the_root : t
@@ -31,7 +31,7 @@ end
 module Abs : sig
 
   (** Type for absolute paths. *)
-  type t [@@deriving sexp_of, compare, bin_io]
+  type t [@@deriving sexp_of, hash, compare, bin_io]
 
   val unix_root : t
   val create : string -> t
@@ -56,7 +56,7 @@ module Abs : sig
 end
 
 (* [t] Type for relative or absolute path *)
-type t [@@deriving sexp, compare, bin_io]
+type t [@@deriving sexp, hash, compare, bin_io]
 include Hashable_binable with type t := t
 include Comparable_binable with type t := t
 

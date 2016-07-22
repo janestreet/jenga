@@ -2,6 +2,8 @@
 open Core.Std
 open Async.Std
 
+type delete_predicate = (non_target:Path.t -> bool) Dep.t
+
 let putenv_for_path =
   (* lookup once and remember to avoid repeated pushing on to the front *)
   let orig_path = match (Core.Std.Sys.getenv "PATH") with | None -> "" | Some s -> s in
@@ -23,7 +25,8 @@ type t = {
   putenv : (string * string option) list;
   build_begin : unit -> unit Deferred.t;
   build_end : unit -> unit Deferred.t;
-  artifacts_policy : Artifact_policy.t;
+  delete_eagerly : delete_predicate option;
+  delete_if_depended_upon : delete_predicate;
   scheme_for_dir : (dir:Path.t -> Scheme.t);
 } [@@deriving fields]
 
@@ -32,20 +35,17 @@ let create
     ?command_lookup_path
     ?(build_begin=(fun () -> Deferred.return ()))
     ?(build_end=(fun () -> Deferred.return ()))
-    ?artifacts
+    ?delete_eagerly
+    ?(delete_if_depended_upon = Dep.return (fun ~non_target:_ -> false))
     scheme_for_dir =
   let putenv = putenv @
     match command_lookup_path with
     | None -> []
     | Some spec -> [("PATH", Some (putenv_for_path spec))]
   in
-  let artifacts_policy =
-    match artifacts with
-    | None -> Artifact_policy.Use_persistent_state
-    | Some artifacts -> Artifact_policy.Artifacts artifacts
-  in
   {
-    putenv; build_begin; build_end; artifacts_policy; scheme_for_dir
+    putenv; build_begin; build_end; scheme_for_dir;
+    delete_eagerly; delete_if_depended_upon;
   }
 
 let get_scheme t ~dir = t.scheme_for_dir ~dir

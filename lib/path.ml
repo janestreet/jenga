@@ -32,7 +32,7 @@ module Rel = struct
 
   module Inner : sig
 
-    type t [@@deriving sexp, bin_io, compare]
+    type t [@@deriving sexp, bin_io, hash, compare]
     include Hashable_binable with type t := t
     include Comparable_binable with type t := t
     val unpack : t -> string
@@ -160,7 +160,7 @@ end
 
 module Abs : sig
 
-  type t [@@deriving sexp_of, compare, bin_io]
+  type t [@@deriving sexp_of, hash, compare, bin_io]
   val create : string -> t
   val to_string : t -> string
   val relative_seg : dir:t -> string -> t

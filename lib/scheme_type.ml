@@ -4,8 +4,8 @@ open Core.Std
    are interpreted by jenga's build algorithm.*)
 
 type t =
-| Dep of (int * t Dep.t)
-| Rules of Ruleset.t
+| Dep of t Dep.t
+| Glob of Db.Glob.t * (Path.t list -> t)
+| Rules of [ `Duplicate_target of Path.Rel.t | `Ok of Ruleset.t ]
 | All of t list
-| Exclude of (Path.Rel.t -> bool) * t
 [@@deriving sexp_of]

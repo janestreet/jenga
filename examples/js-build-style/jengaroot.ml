@@ -3958,24 +3958,20 @@ let command_lookup_path =
   ]
 
 let scheme ~dir =
-  Scheme.exclude (fun path ->
-    (* We [exclude] the following basenames, which are consulted at scheme setup time, to
+  Scheme.all
+    (* We exclude the following basenames, which are consulted at scheme setup time, to
        prevent cyclic dependencies. *)
-    List.mem [
-      "jbuild";
-      "jbuild-ignore";
-    ] (Path.basename path)
-  ) begin
-    if dir = Path.the_root then
-      Scheme.rules [
-        Libmap_sexp.rule;
-        hg_version_out_rule;
-      ]
-    else if dirname dir = root_relative "lib" then
-      setup_liblinks ~dir
-    else
-      setup_main ~dir
-  end
+    [ Scheme.sources [relative ~dir "jbuild"; relative ~dir "jbuild-ignore"]
+    ; if dir = Path.the_root then
+        Scheme.rules [
+          Libmap_sexp.rule;
+          hg_version_out_rule;
+        ]
+      else if dirname dir = root_relative "lib" then
+        setup_liblinks ~dir
+      else
+        setup_main ~dir
+    ]
 
 let env =
   Env.create

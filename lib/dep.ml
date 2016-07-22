@@ -55,9 +55,6 @@ let action a =
 let contents_cutoff p =
   cutoff ~equal:String.equal (contents p)
 
-let on_filesystem ~dir =
-  On_filesystem dir *>>| Path.Set.to_list
-
 let buildable_targets ~dir =
   Buildable_targets dir *>>| Path.Set.to_list
 

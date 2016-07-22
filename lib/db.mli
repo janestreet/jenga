@@ -5,7 +5,7 @@ open! Core.Std
 
 module Job : sig
   type t
-  [@@deriving sexp_of, compare]
+  [@@deriving sexp_of, hash, compare]
   include Hashable_binable with type t := t
   val create : dir:Path.t -> prog:string -> args:string list -> ignore_stderr:bool -> t
   val dir : t -> Path.t
@@ -16,20 +16,20 @@ end
 
 module Kind : sig
   type t = [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
-  [@@deriving sexp, bin_io, compare]
+  [@@deriving sexp, bin_io, hash, compare]
   val to_string : t -> string
 end
 
 module Mtime : sig
   type t
-  [@@deriving sexp_of, bin_io, compare]
+  [@@deriving sexp_of, bin_io, hash, compare]
   val of_float : float -> t
   val equal : t -> t -> bool
 end
 
 module Stats : sig  (* reduced stat info *)
   type t
-  [@@deriving sexp, bin_io, compare]
+  [@@deriving sexp, bin_io, hash, compare]
   val of_unix_stats : Async.Std.Unix.Stats.t -> t
   val equal : t -> t -> bool
   val kind : t -> Kind.t
@@ -41,7 +41,7 @@ end
 module Digest : sig  (* proxy for the contents of a file in the file-system *)
 
   type t
-  [@@deriving sexp_of, compare]
+  [@@deriving sexp_of, hash, compare]
   val intern : string -> t
 
   module With_store : sig
@@ -74,7 +74,7 @@ module Listing : sig (* result of globbing *)
 end
 
 module Glob : sig
-  type t [@@deriving sexp]
+  type t [@@deriving sexp, hash, compare]
   include Hashable with type t := t
   val create : dir:Path.t -> restriction:Listing.Restriction.t -> t
   val dir : t -> Path.t
@@ -83,8 +83,8 @@ module Glob : sig
 end
 
 module Pm_key : sig  (* Pm_key - path or glob *)
-  type t [@@deriving sexp_of, compare]
-  include Comparable with type t := t
+  type t [@@deriving sexp_of, hash, compare]
+  include Comparable.S_plain with type t := t
   val equal : t -> t -> bool
   val of_abs_path : Path.Abs.t -> t
   val of_rel_path : Path.Rel.t -> t
@@ -96,14 +96,14 @@ module Pm_key : sig  (* Pm_key - path or glob *)
 end
 
 module Proxy : sig
-  type t [@@deriving sexp_of, compare]
+  type t [@@deriving sexp_of, hash, compare]
   val of_digest : Digest.t -> t
   val of_listing : dir:Path.t -> Path.Set.t -> t
   val equal : t -> t -> bool
 end
 
 module Proxy_map : sig
-  type t [@@deriving compare]
+  type t [@@deriving hash, compare]
   val empty  : t
   val single : Pm_key.t -> Proxy.t -> t
   val group : t -> t
@@ -157,14 +157,14 @@ module Rule_proxy : sig
     targets : Proxy_map.t;
     deps : Proxy_map.t;
     action : Job.t
-  } [@@deriving compare, fields]
+  } [@@deriving hash, compare, fields]
 end
 
 module Output_proxy : sig
   type t = {
     deps : Proxy_map.t;
     stdout : string;
-  } [@@deriving compare, fields]
+  } [@@deriving hash, compare, fields]
 end
 
 type t

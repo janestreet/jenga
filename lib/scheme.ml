@@ -6,21 +6,17 @@ include Scheme_type
 
 let ( *>>| ) = Dep.map
 
-let rules xs = Rules (Ruleset.create xs)
+let rules ?(sources = []) xs = Rules (Ruleset.create ~sources xs)
+let sources paths = rules ~sources:paths []
 
-let dep =
-  let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-  fun x ->
-    let u = genU() in
-    Dep (u,x)
+let dep x = Dep x
 
 let all ts = All ts
-let exclude f t = Exclude ((fun rel -> f (Path.of_relative rel)),t)
+
+let glob g f = Glob (g, f)
 
 let rules_dep x = dep (x *>>| rules)
-let no_rules = rules []
+let empty = rules []
 
 let contents path f =
-  exclude (Path.equal path) (
-    dep (Dep.contents path *>>| f)
-  )
+  dep (Dep.contents path *>>| f)

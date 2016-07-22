@@ -2,9 +2,9 @@
 open Core.Std
 open Async.Std
 open Jenga_lib.Api
-let return = Dep.return
+(* let return = Dep.return *)
 let ( *>>| ) = Dep.map
-let ( *>>= ) = Dep.bind
+(* let ( *>>= ) = Dep.bind *)
 
 (* Example to show the programmatic setup of compilation & link rules for a directory of
    source files.
@@ -75,11 +75,10 @@ let name_of_path path =
   fst (String.rsplit2_exn (Path.basename path) ~on:'.')
 
 let scheme ~dir =
-  Scheme.rules_dep (
+  let dot1s = Glob.create ~dir "*.1" in
+  let n_max = 3 in
+  Scheme.glob dot1s (fun dot1_paths ->
     (* Rule setup depends on all sources found in the directory *)
-    let dot1s = Glob.create ~dir "*.1" in
-    let n_max = 3 in
-    Dep.glob_listing dot1s *>>= fun dot1_paths ->
     let names = List.map dot1_paths ~f:name_of_path in
     message "Generate rules: %s, names = %s"
       (Path.to_string dir) (String.concat ~sep:" " names);
@@ -96,7 +95,7 @@ let scheme ~dir =
       link_files_by_concatenation ~sources:fully_compiled_files ~target:the_library
     in
     let default_rule = Rule.default ~dir [Dep.path the_library] in
-    return (compile_rules @ [link_rule; default_rule;])
+    Scheme.rules (compile_rules @ [link_rule; default_rule;])
   )
 
 let env = Env.create scheme
