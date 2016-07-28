@@ -641,6 +641,8 @@ module With_index = struct
   (* It's important for [index] to go first because its bin_io reading implementation is
      side-effectful and the side-effects are necessary to load [t]. *)
   type t = { index : Index.t; t : T.t }
+  [@@deriving bin_shape ~basetype:"89920580-490a-11e6-a091-1398e5058293"]
+
   let index t = t.index
 
   module T_with_serialization(X : Proxy_map.Serialization_param) = struct
@@ -689,6 +691,7 @@ module With_index = struct
         end
       end) in
     T.bin_read_t buf ~pos_ref
+
   let __bin_read_t__ _ ~pos_ref:_ = assert false
 
   (* Define bin_writer, bin_reader etc. *)

@@ -188,7 +188,7 @@ module String(X : sig val who : string end) = struct
         snap : Loaded_snap.t;
         via_string : Handle.t String.Table.t;
         value : 'a;
-      } [@@deriving fields]
+      } [@@deriving fields, bin_shape ~basetype:"89927dee-490a-11e6-82df-ef5b401cd1a1"]
 
       type 'a disk = {
         snap : Loaded_snap.t;
