@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -e -u -o pipefail
+
+if [ 5 != "$#" ]; then echo -e "use with 4 features and a target to build:\n  run.sh <jenga1> <jenga2> <build1> <build2> <target>"; exit 1; fi
+
 export FEATURE1="$1"
 export FEATURE2="$2"
+
+FEATURE_TO_BUILD1="$3"
+FEATURE_TO_BUILD2="$4"
+
+TARGET="$5"
 
 [ "$(stat -f -L -c %T .)" != "nfs" ] || (echo "don't run this on nfs"; exit 1)
 
@@ -28,9 +36,6 @@ build_jenga () {
   diff <("$BIN" version | tail -n 1 | sed -r 's#^.*_(.*)$#\1#') <(cat <<< "$REV_SHORT")
 }
 
-FEATURE_TO_BUILD=jane/build
-TARGET=lib
-
 FEATURE=$FEATURE1 ensure_clean
 FEATURE=$FEATURE2 ensure_clean
 
@@ -42,9 +47,11 @@ FEATURE=$FEATURE2 build_jenga
 BIN2=$BIN
 REV2=$REV
 
-TEST_DIR1="$BASE_DIR/$REV1"
-TEST_DIR2="$BASE_DIR/$REV2"
-REV_TO_BUILD=$(fe show "$FEATURE_TO_BUILD" -tip)
+REV_TO_BUILD1=$(fe show "$FEATURE_TO_BUILD1" -tip)
+REV_TO_BUILD2=$(fe show "$FEATURE_TO_BUILD2" -tip)
+
+TEST_DIR1="$BASE_DIR/${REV1}_$REV_TO_BUILD1"
+TEST_DIR2="$BASE_DIR/${REV2}_$REV_TO_BUILD2"
 
 echo "writing to $TEST_DIR1 and $TEST_DIR2"
 
@@ -54,17 +61,18 @@ mkdir "$TEST_DIR2"
 J1="$TEST_DIR1/+clone+"
 J2="$TEST_DIR2/+clone+"
 
-(cd "$(fe workspace dir -basedir)"/jane/+clone+; hg pull -r "$REV_TO_BUILD")
+(cd "$(fe workspace dir -basedir)"/jane/+clone+; hg pull -r "$REV_TO_BUILD1")
+(cd "$(fe workspace dir -basedir)"/jane/+clone+; hg pull -r "$REV_TO_BUILD2")
 hg quick-share "$(fe workspace dir -basedir)"/jane/+clone+ "$J1"
 hg quick-share "$(fe workspace dir -basedir)"/jane/+clone+ "$J2"
-(cd "$J1"; hg up -r "$REV_TO_BUILD")
-(cd "$J2"; hg up -r "$REV_TO_BUILD")
+(cd "$J1"; hg up -r "$REV_TO_BUILD1")
+(cd "$J2"; hg up -r "$REV_TO_BUILD2")
 
 ulimit -s 500000
 export LINK_EXECUTABLES=false
 
 
-for x in `seq 1 10`; do
+for x in `seq 1 5`; do
   build() {
       cd "$1"/+clone+
       "$2" build "$TARGET" > "$1"/"$3"-verbose
@@ -76,7 +84,7 @@ for x in `seq 1 10`; do
 
   build "$TEST_DIR1" "$BIN1" "from-clean"
   build "$TEST_DIR2" "$BIN2" "from-clean"
-  for x in `seq 1 10`; do
+  for x in `seq 1 4`; do
     echo -n "."
     build "$TEST_DIR1" "$BIN1" "incremental"
     build "$TEST_DIR2" "$BIN2" "incremental"

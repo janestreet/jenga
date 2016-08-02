@@ -11,7 +11,9 @@ let parse_pretty_span span =
 
 let parse_heap h = match String.chop_suffix h ~suffix:"g" with
   | Some s -> Float.of_string s *. 1024.
-  | None -> failwith "heap needs to be in gigabytes"
+  | None -> match String.chop_suffix h ~suffix:"m" with
+    | Some s -> Float.of_string s
+    | None -> failwith "heap needs to be in gigabytes or megabytes"
 
 (* copy&pasted from lib/message.ml *)
 let parse_build_measures_assoc_list =

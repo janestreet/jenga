@@ -2,6 +2,11 @@
 open Core.Std
 open Async.Std
 
+let heartbeat_config =
+  Rpc.Connection.Heartbeat_config.create
+    ~timeout: Time_ns.Span.max_value
+    ~send_every: (Time_ns.Span.of_sec 10.)
+
 let make_periodic_pipe_writer span ~f =
   let r =
     Pipe.create_reader ~close_on_exception:true (fun w ->
@@ -31,6 +36,13 @@ end = struct
   let create () = ()
 end
 
+let error_pipe =
+  let module R = Rpc_intf.Error_pipe in
+  Rpc.State_rpc.implement R.rpc (fun (_:State.t) () ->
+    let trace = Message.trace "%s" in
+    let (snap,updates) = Reportable.snap_with_updates ~trace Progress.the_reportable_errors in
+    return (Ok (snap,updates)))
+
 let getenv =
   Rpc.Rpc.implement Rpc_intf.Getenv.rpc (fun _state q -> return (Var.Getenv.run q))
 
@@ -55,13 +67,15 @@ let really_go ~root_dir progress =
       (fun _state () -> return (Tenacious_lib.Graph.Dump.collect ()))
   in
   let implementations =
-    Rpc.Implementations.create ~on_unknown_rpc:`Close_connection ~implementations: [
-      progress_stream;
-      dump_tenacious_graph;
-      getenv;
-      setenv;
-      env_info;
-    ]
+    Rpc.Implementations.create ~on_unknown_rpc:`Close_connection ~implementations:(
+      Versioned_rpc.Menu.add [
+        progress_stream;
+        error_pipe;
+        dump_tenacious_graph;
+        getenv;
+        setenv;
+        env_info;
+      ])
   in
   match implementations with
   | Error (`Duplicate_implementations _descrs) -> assert false
@@ -70,6 +84,7 @@ let really_go ~root_dir progress =
       Tcp.Server.create Tcp.on_port_chosen_by_os ~on_handler_error:`Ignore
         (fun _addr reader writer ->
            Rpc.Connection.server_with_close reader writer ~implementations
+             ~heartbeat_config
              ~connection_state:(fun (_ : Rpc.Connection.t) -> State.create ())
              ~on_handshake_error:`Ignore)
     in

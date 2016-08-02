@@ -82,16 +82,25 @@ let root = Node.create (lazy "root")
 
 module Dump = struct
 
-  type t = {
-    id : Int63.t;
-    name : string;
-    age : Time.Span.t;
-    children : children;
-  }
-  and children =
-    | See_above
-    | Here of t list
-  [@@deriving bin_io, sexp]
+  module Stable = struct
+    open Core.Stable
+    module V1 = struct
+
+      type t = {
+        id : Int63.t;
+        name : string;
+        age : Span.V2.t;
+        children : children;
+      }
+      and children =
+        | See_above
+        | Here of t list
+      [@@deriving bin_io, sexp]
+
+    end
+  end
+
+  include Stable.V1
 
   let collect node =
     let already_printed = Id.Hash_set.create () in

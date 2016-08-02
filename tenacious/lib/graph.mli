@@ -26,7 +26,14 @@ module Dump : sig
   and children =
     | See_above
     | Here of t list
-  [@@deriving bin_io, sexp]
+  [@@deriving sexp]
+
+  module Stable : sig
+    module V1 : sig
+      type nonrec t = t [@@deriving bin_io]
+      type nonrec children = children [@@deriving bin_io]
+    end
+  end
 
   val collect : unit -> t
 

@@ -2,15 +2,19 @@ open! Core.Std
 open! Int.Replace_polymorphic_compare
 
 module Info = struct
-
-  type t = {
-    name    : string;
-    default : string option;
-    choices : string list;
-    value   : string option;
-    peeked  : bool;
-  } [@@deriving bin_io, sexp_of]
-
+  open Core.Stable
+  module Stable = struct
+    module V1 = struct
+      type t = {
+        name    : string;
+        default : string option;
+        choices : string list;
+        value   : string option;
+        peeked  : bool;
+      } [@@deriving bin_io, sexp_of]
+    end
+  end
+  include Stable.V1
 end
 
 (* Wrap [Sys.getenv] to support set/unset within jenga *)
@@ -80,15 +84,30 @@ let lookup name =
   | Some entry -> Ok entry
 
 module Getenv = struct
-  type query = { name : string } [@@deriving bin_io]
-  type response = Info.t Or_error.t [@@deriving bin_io]
+  module Stable = struct
+    module I = Info
+    open Core.Stable
+    module V1 = struct
+      type query = { name : string } [@@deriving bin_io]
+      type response = I.Stable.V1.t Or_error.V2.t [@@deriving bin_io]
+    end
+  end
+  include Stable.V1
+
   let query name = { name }
   let run {name} = Or_error.map (lookup name) ~f:Entry.info
 end
 
 module Setenv = struct
-  type query = { name : string; value : string option } [@@deriving bin_io]
-  type response = unit Or_error.t [@@deriving bin_io]
+  module Stable = struct
+    open Core.Stable
+    module V1 = struct
+      type query = { name : string; value : string option } [@@deriving bin_io]
+      type response = unit Or_error.V2.t [@@deriving bin_io]
+    end
+  end
+  include Stable.V1
+
   let query name ~value = { name; value }
   let run {name;value} = Or_error.map (lookup name) ~f:(Entry.set ~value)
 end

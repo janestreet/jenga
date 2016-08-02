@@ -28,6 +28,9 @@ let db_save_span =
 let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
   Forker.init config;
   Fs.Ocaml_digest.init config;
+  let progress = Progress.create config in
+  Rpc_server.go config ~root_dir progress
+  >>= fun () ->
   Persist.create_saving_periodically db_save_span >>= function
   | Error e ->
     Message.error "can't load persistent database: %s" (Error.to_string_hum e);
@@ -35,9 +38,6 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
     Deferred.never()
   | Ok persist ->
   Fs.create config persist >>= fun fs ->
-  let progress = Progress.create config in
-  Rpc_server.go config ~root_dir progress
-  >>= fun () ->
   (match Config.demands config with
    | [] -> return [ Goal.Alias (Alias.default ~dir:(Path.of_relative start_dir)) ]
    | demands -> Deferred.List.map demands ~f:(Goal.parse_string ~dir:start_dir))

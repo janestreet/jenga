@@ -68,40 +68,49 @@ let%test_unit _ =
     ]
 ;;
 
-module Start = struct
+module Stable = struct
+  open! Core.Stable
+  module V1 = struct
 
-  type t = {
-    uid : int; (* to line up commands in .jenga/debug *)
-    need : string;
-    where : string;
-    prog : string;
-    args : string list;
-  } [@@deriving bin_io, fields, sexp_of]
+    module Start = struct
 
-  let create =
-    let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-    fun ~need ~where ~prog ~args ->
-      let uid = genU() in
-      { uid; need; where; prog; args }
+      type t = {
+        uid : int; (* to line up commands in .jenga/debug *)
+        need : string;
+        where : string;
+        prog : string;
+        args : string list;
+      } [@@deriving bin_io, fields, sexp_of]
 
+      let create =
+        let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
+        fun ~need ~where ~prog ~args ->
+          let uid = genU() in
+          { uid; need; where; prog; args }
+
+    end
+
+    module Finish = struct
+      type t = {
+        outcome : [`success | `error of string];
+        duration : Span.V2.t;
+      } [@@deriving bin_io, fields, sexp_of]
+    end
+
+    module Output = struct
+      type t = {
+        stdout : string list;
+        stderr : string list;
+      } [@@deriving bin_io, fields, sexp_of]
+    end
+
+    type t = Start.t * Finish.t * Output.t
+    [@@deriving bin_io, sexp_of]
+
+  end
 end
 
-module Finish = struct
-  type t = {
-    outcome : [`success | `error of string];
-    duration : Time.Span.t;
-  } [@@deriving bin_io, fields, sexp_of]
-end
-
-module Output = struct
-  type t = {
-    stdout : string list;
-    stderr : string list;
-  } [@@deriving bin_io, fields, sexp_of]
-end
-
-type t = Start.t * Finish.t * Output.t
-[@@deriving bin_io, sexp_of]
+include Stable.V1
 
 let split_string_into_lines s =
   match s with
@@ -124,25 +133,38 @@ let create start ~outcome ~duration ~stdout ~stderr =
 
 let outcome (_,f,_) = f.Finish.outcome
 
+let mk_build_message ~where ~need =
+  sprintf "- build %s %s" where need
+
+let mk_command_message ~prog ~args =
+  (* print out the command in a format suitable for cut&pasting into bash
+     (except for the leading "+") *)
+  let args = List.map args ~f:(fun arg -> Q.shell_escape arg) in
+  sprintf "+ %s %s" prog (String.concat ~sep:" " args)
+
+let mk_status_message ~outcome =
+  match outcome with
+  | `success -> "code 0"
+  | `error status_string -> status_string
+
+let build_message ({Start.where;need; _},_,_) = mk_build_message ~where ~need
+let command_message ({Start.prog; args; _},_,_) = mk_command_message ~prog ~args
+let status_message (_,{Finish.outcome; _},_) = mk_status_message ~outcome
+
+let to_stdout_lines (_,_,o) = o.Output.stdout
+let to_stderr_lines (_,_,o) = o.Output.stderr
+
 let iter_lines (
   {Start. where; need; prog; args; uid=_},
   {Finish. outcome; duration},
   {Output. stdout; stderr}
 ) ~f:put =
-  put (sprintf "- build %s %s" where need);
-    (* print out the command in a format suitable for cut&pasting into bash
-       (except for the leading "+")
-    *)
-  let args = List.map args ~f:(fun arg -> Q.shell_escape arg) in
-  put (sprintf "+ %s %s" prog (String.concat ~sep:" " args));
+  put (mk_build_message ~where ~need);
+  put (mk_command_message ~prog ~args);
   List.iter stdout ~f:put;
   List.iter stderr ~f:put;
   let duration_string = pretty_span duration in
-  let status_string =
-    match outcome with
-    | `success -> "code 0"
-    | `error status_string -> status_string
-  in
+  let status_string = mk_status_message ~outcome in
   put (sprintf "- exit %s %s, %s, %s" where need duration_string status_string)
 
 let to_lines t =

@@ -4,13 +4,14 @@ open Core.Std
 (* jenga -- Swahili 'to build' *)
 
 let toplevel_group =
-  [ "build", Jenga_lib.Cmd_build.command ~toplevel:false
-  ; "cat-api", Jenga_lib.Cmd_cat_api.command
-  ; "db", Jenga_lib.Cmd_db.command
-  ; "diagnostics", Jenga_lib.Cmd_diagnostics.command
-  ; "env", Jenga_lib.Cmd_env.command
-  ; "monitor", Jenga_lib.Cmd_monitor.command
-  ; "stop", Jenga_lib.Cmd_stop.command
+  [ "build"         , Jenga_lib.Cmd_build.command ~toplevel:false
+  ; "cat-api"       , Jenga_lib.Cmd_cat_api.command
+  ; "db"            , Jenga_lib.Cmd_db.command
+  ; "diagnostics"   , Jenga_lib.Cmd_diagnostics.command
+  ; "env"           , Jenga_lib.Cmd_env.command
+  ; "monitor"       , Jenga_lib.Cmd_monitor.command
+  ; "stop"          , Jenga_lib.Cmd_stop.command
+  ; "errors"        , Jenga_lib.Cmd_watch.watch_errors
   ]
 ;;
 

@@ -27,53 +27,160 @@ let act_metrics =
     actions_run;
   ]
 
-module Status = struct
+(* [the_reportable_errors : Reportable.t] tracks all errors in a running jenga.  Its value
+   is maintained by [set_status_*] and [clear_status].  It is exposed in the interface of
+   this module to allow errors to be reported over the [Error_pipe] RPC. *)
+let the_reportable_errors = Reportable.create ~name:"the_reportable_errors"
+
+module Status_classification = struct
+  type t =
+    | Todo
+    | Built
+    | Error
+    | Failure (* means the corresponding goal is not necessarily broken itself, but one of
+                 its transitive dependencies is, and so we cannot build the goal *)
+    | Unreachable_error_or_failure
+  [@@deriving sexp_of]
+end
+
+module Status : sig
+
+  (* [Status.t] is the state of an individual goal, held in the [Goal.Table.t] below.
+
+     [t.reachable] indicates that the goal with this state is reachable from the root of
+     the build graph. The reachability is determined periodically in build.ml *)
+
+  type t
+
+  val classification : t -> Status_classification.t
+
+  val todo : t
+  val built : t
+  val error : Goal.t -> Reason.t list -> t
+
+  val set_reachability : t -> bool -> unit
+
+  (* [unreport] is to be called when the [State] of a [Goal] is replaced in the
+     [Goal.Table] by [set_status] below *)
+  val unreport : t -> unit
+
+end = struct
+
+  type e = {
+    mutable reachable : bool;
+    reported : Reportable.Error.t list;
+  }
+
   type t =
   | Todo
   | Built
-  | Error of Reason.t list (* empty list means failure in deps *)
+  | Error of e
+
+  let classification : t -> Status_classification.t = function
+    | Todo -> Todo
+    | Built -> Built
+    | Error e ->
+      if e.reachable
+      then match e.reported with
+        | [] -> Failure
+        | _::_ -> Error
+      else Unreachable_error_or_failure
+
+  let todo = Todo
+  let built = Built
+
+  let error goal reasons =
+    let reported =
+      List.map reasons ~f:(fun reason ->
+        let e = Reportable.Error.create goal reason in
+        Reportable.add the_reportable_errors e;
+        e)
+    in
+    Error { reported; reachable = true; }
+
+  let unreport_errors er =
+    List.iter er.reported ~f:(fun e ->
+      Reportable.remove the_reportable_errors (Reportable.Error.id e))
+
+  let rereport_errors er =
+    List.iter er.reported ~f:(fun e ->
+      Reportable.add the_reportable_errors e)
+
+  let set_reachability t new_ =
+    match t with
+    | Todo | Built -> ()
+    | Error er ->
+      let old = er.reachable in
+      er.reachable <- new_;
+      match old, new_ with
+      | true, true  -> ()
+      | true, false -> unreport_errors er
+      | false,true  -> rereport_errors er
+      | false,false -> ()
+
+  let unreport t =
+    match t with
+    | Todo | Built -> ()
+    | Error er -> unreport_errors er
+
 end
 
+(* There will only ever be one [t] created *)
 type t = {
-  status : Status.t Goal.Table.t;
-  mutable is_reachable_error : (Goal.t -> bool);
-  job_throttle : unit Throttle.t
+  table : Status.t Goal.Table.t;
+  job_throttle : unit Throttle.t;
+}
+
+let create config = {
+  table = Goal.Table.create();
+  job_throttle = (
+    let max_concurrent_jobs = Config.j_number config in
+    Throttle.create ~continue_on_error:true ~max_concurrent_jobs );
 }
 
 let enqueue_job t f =
   Throttle.enqueue t.job_throttle f
 
-let all_reachable _ = true
+let unreport t goal =
+  Option.iter (Hashtbl.find t.table goal) ~f:(fun v -> Status.unreport v)
 
-let create config = {
-  status = Goal.Table.create();
-  is_reachable_error = all_reachable;
-  job_throttle =
-    let max_concurrent_jobs = Config.j_number config in
-    Throttle.create ~continue_on_error:true ~max_concurrent_jobs ;
-}
+let set_status t goal status =
+  unreport t goal;
+  Hashtbl.set t.table ~key:goal ~data:status
 
-let set_status t need = function
-  | None -> Hashtbl.remove t.status need
-  | Some status -> Hashtbl.set t.status ~key:need ~data:status
+let set_status_todo t goal = set_status t goal Status.todo
+let set_status_built t goal = set_status t goal Status.built
+let set_status_error t goal reasons = set_status t goal (Status.error goal reasons)
 
-let mask_unreachable t ~is_reachable_error = t.is_reachable_error <- is_reachable_error
+let clear_status t goal =
+  unreport t goal;
+  Hashtbl.remove t.table goal
 
-let iter_masked t ~f = (* don't apply f to unreachable errors *)
-  Hashtbl.iteri t.status ~f:(fun ~key ~data:status ->
-    match status with
-    | Status.Error _ -> if t.is_reachable_error key then f ~key ~data:status else ()
-    | _ -> f ~key ~data:status
+let mask_unreachable t ~is_reachable_error =
+  Hashtbl.iteri t.table ~f:(fun ~key ~data ->
+    Status.set_reachability data (is_reachable_error key))
+
+let iter_classification t ~f =
+  Hashtbl.iter t.table ~f:(fun state ->
+    f (Status.classification state)
   )
 
 module Counts = struct
 
-  type t = {
-    todo    : int;
-    built   : int;
-    error   : int;
-    failure : int; (* error in dep *)
-  } [@@deriving hash, compare, bin_io]
+  module Stable = struct
+    open Core.Stable
+
+    module V1 = struct
+      type t = {
+        todo    : int;
+        built   : int;
+        error   : int;
+        failure : int; (* error in dep *)
+      } [@@deriving hash, compare, bin_io]
+
+    end
+  end
+  include Stable.V1
 
   let total {todo;built;error;failure} = todo + built + error + failure
 
@@ -94,15 +201,12 @@ module Counts = struct
     let built = ref 0 in
     let error = ref 0 in
     let failure = ref 0 in
-    iter_masked t
-      ~f:(fun ~key:_ ~data:status ->
-        let x =
-          match status with
-          | Status.Todo       -> todo
-          | Status.Built      -> built
-          | Status.Error []   -> failure (* error in deps *)
-          | Status.Error _    -> error
-        in incr x
+    iter_classification t ~f:(function
+      | Todo                         -> incr todo
+      | Built                        -> incr built
+      | Failure                      -> incr failure
+      | Error                        -> incr error
+      | Unreachable_error_or_failure -> () (* not counted *)
       );
     {
      todo     = !todo;
@@ -119,17 +223,28 @@ let estimator =
 
 module Snap = struct
 
-  type t = {
-    counts : Counts.t;
-    running : int;
-    waiting : int;
-    fs_metrics : Metrics.Counters.Snap.t;
-    act_metrics : Metrics.Counters.Snap.t;
-  } [@@deriving bin_io, fields]
+  module Stable = struct
+    open Core.Stable
+    module V1 = struct
+      type t = {
+        counts : Counts.Stable.V1.t;
+        running : int;
+        waiting : int;
+        fs_metrics : Metrics.Counters.Snap.Stable.V1.t;
+        act_metrics : Metrics.Counters.Snap.Stable.V1.t;
+      } [@@deriving bin_io, fields]
+    end
+  end
+
+  include Stable.V1
 
   let no_errors t = Counts.no_errors t.counts
   let built t = Counts.built t.counts
   let fraction t = Counts.fraction t.counts
+  let todo t = Counts.todo t.counts
+
+  let to_act_string t =
+    Metrics.Counters.Snap.to_string t.act_metrics
 
   let to_effort_string t =
     Metrics.Counters.Snap.to_string t.fs_metrics

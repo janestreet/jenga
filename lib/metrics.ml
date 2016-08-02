@@ -39,10 +39,19 @@ module Counter = struct
 
   module Snap = struct
 
-    type t = {
-      name : string;
-      start : int;
-    } [@@deriving bin_io]
+    module Stable = struct
+      open Core.Stable
+      module V1 = struct
+
+        type t = {
+          name : string;
+          start : int;
+        } [@@deriving bin_io]
+
+      end
+    end
+
+    include Stable.V1
 
     let to_string t = sprintf "%s=%d" t.name t.start
 
@@ -73,9 +82,18 @@ module Counters = struct
 
   module Snap = struct
 
-    type t = {
-      counts : Counter.Snap.t list;
-    } [@@deriving bin_io]
+    module Stable = struct
+      open Core.Stable
+      module V1 = struct
+
+        type t = {
+          counts : Counter.Snap.Stable.V1.t list;
+        } [@@deriving bin_io]
+
+      end
+    end
+
+    include Stable.V1
 
     let to_string ?(sep = ", ") t =
       String.concat ~sep (List.map t.counts ~f:Counter.Snap.to_string)

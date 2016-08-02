@@ -22,7 +22,7 @@ module Start : sig
     t
 end
 
-type t [@@deriving sexp_of, bin_io]
+type t [@@deriving sexp_of]
 
 val create :
   Start.t ->
@@ -34,6 +34,19 @@ val create :
 
 val outcome : t -> [`success | `error of string]
 
+val build_message : t -> string (* - build WHERE WHAT *)
+val command_message : t -> string (* + PROG ARGS *)
+val status_message : t -> string (* exit code *)
+
+val to_stdout_lines : t -> string list
+val to_stderr_lines : t -> string list
+
 val to_lines : t -> string list
 
 val iter_lines : t -> f:(string -> unit) -> unit
+
+module Stable : sig
+  module V1 : sig
+    type nonrec t = t [@@deriving bin_io]
+  end
+end

@@ -26,9 +26,14 @@ module Counters : sig
   val reset_to_zero : t -> unit
 
   module Snap : sig
-    type t [@@deriving bin_io]
+    type t
     val to_string : ?sep:string -> t -> string
     val to_metrics : t -> metrics
+    module Stable : sig
+      module V1 : sig
+        type nonrec t = t [@@deriving bin_io]
+      end
+    end
   end
 
   val snap : t -> Snap.t

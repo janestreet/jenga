@@ -17,13 +17,15 @@ let message =
   else fun fmt -> ksprintf (fun s -> Core.Std.Printf.printf "\027[2K%s\r%!" s) fmt
 
 let run_once ~root_dir style =
-  Jenga_client.with_connection_with_detailed_error ~root_dir ~f:(fun conn ->
-    Rpc.Pipe_rpc.dispatch_exn Rpc_intf.Progress_stream.rpc conn ()
-    >>= fun (reader,_id) ->
-    Pipe.read reader >>| function
-    | `Eof -> failwith "read: end of file"
-    | `Ok snap ->
-      printf "%s\n" (Progress.Snap.to_string snap style);
+  Jenga_client.with_menu_connection_with_detailed_error ~root_dir ~f:(fun cwm ->
+    Rpc_intf.Progress_stream.dispatch_multi cwm () >>| ok_exn
+    >>= function
+    | Error x -> never_returns x
+    | Ok (reader,_id) ->
+      let reader = Pipe.map reader ~f:ok_exn in
+      Pipe.read reader >>| function
+      | `Eof -> failwith "read: end of file"
+      | `Ok snap -> printf "%s\n" (Progress.Snap.to_string snap style)
   ) >>= function
   | Ok () -> return 0
   | Error err ->
@@ -43,7 +45,7 @@ let run exit_on_finish ~root_dir style =
       if wait then Clock.after retry_span
       else Deferred.unit
     end >>= fun () ->
-    Jenga_client.with_connection_with_detailed_error ~root_dir ~f:(fun conn ->
+    Jenga_client.with_menu_connection_with_detailed_error ~root_dir ~f:(fun cwm ->
       let stop = ref false in
       let fresh = ref false in
       don't_wait_for (
@@ -59,25 +61,28 @@ let run exit_on_finish ~root_dir style =
           )
         in loop 1
       );
-      Rpc.Pipe_rpc.dispatch_exn Rpc_intf.Progress_stream.rpc conn ()
-      >>= fun (reader,_id) ->
-      Pipe.iter reader ~f:(fun snap ->
-        last_snap := Some snap;
-        fresh := true;
-        let message_string = (Progress.Snap.to_string snap style) in
-        message "%s" message_string;
-        if exit_on_finish then
-          match Progress.Snap.finished snap with
-          | None -> Deferred.unit
-          | Some res ->
-            printf "\n";
-            exit (match res with
-                  | `Success -> 0
-                  | `Failure -> 3)
-        else Deferred.unit
-      ) >>= fun () ->
-      stop := true;
-      return ()
+      Rpc_intf.Progress_stream.dispatch_multi cwm () >>| ok_exn
+      >>= function
+      | Error x -> never_returns x
+      | Ok (reader,_id) ->
+        let reader = Pipe.map reader ~f:ok_exn in
+        Pipe.iter reader ~f:(fun snap ->
+          last_snap := Some snap;
+          fresh := true;
+          let message_string = (Progress.Snap.to_string snap style) in
+          message "%s" message_string;
+          if exit_on_finish then
+            match Progress.Snap.finished snap with
+            | None -> Deferred.unit
+            | Some res ->
+              printf "\n";
+              exit (match res with
+                | `Success -> 0
+                | `Failure -> 3)
+          else Deferred.unit
+        ) >>= fun () ->
+        stop := true;
+        return ()
     ) >>= function
     | Ok () -> loop ~wait:true
     | Error err ->

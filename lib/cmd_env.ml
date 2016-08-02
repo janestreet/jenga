@@ -2,11 +2,10 @@ open Core.Std
 open Async.Std
 open Command.Let_syntax
 
-let send rpc q =
+let with_menu_connection ~f =
   return (Special_paths.discover_root ()) >>=? fun root_dir ->
-  Jenga_client.with_connection ~root_dir ~f:(fun conn ->
-    Rpc.Rpc.dispatch rpc conn q
-  ) >>| Or_error.join
+  Jenga_client.with_menu_connection ~root_dir ~f
+  >>| Or_error.join
 
 let print_info_line ~as_sexp info =
   if as_sexp then
@@ -41,7 +40,9 @@ let get =
       let name = anon ("NAME" %: string)
       and as_sexp = flag "sexp" no_arg ~doc:" print in sexp format" in
       fun () ->
-        send Rpc_intf.Getenv.rpc (Var.Getenv.query name)
+        with_menu_connection ~f:(fun cwm ->
+          Rpc_intf.Getenv.dispatch_multi cwm (Var.Getenv.query name)
+        )
         >>| Or_error.join
         >>|? print_info_line ~as_sexp
     ]
@@ -63,7 +64,10 @@ let set =
       and args = anon_strings "VALUE"
       in fun () ->
         let value = String.concat ~sep:" " args in
-        send Rpc_intf.Setenv.rpc (Var.Setenv.query name ~value:(Some value))
+        with_menu_connection ~f:(fun cwm ->
+          Rpc_intf.Setenv.dispatch_multi cwm
+            (Var.Setenv.query name ~value:(Some value))
+        )
         >>| Or_error.join]
 
 let unset =
@@ -71,7 +75,10 @@ let unset =
     [%map_open
       let name = anon ("NAME" %: string)
       in fun () ->
-        send Rpc_intf.Setenv.rpc (Var.Setenv.query name ~value:None)
+        with_menu_connection ~f:(fun cwm ->
+          Rpc_intf.Setenv.dispatch_multi cwm
+            (Var.Setenv.query name ~value:None)
+        )
         >>| Or_error.join
     ]
 
@@ -80,7 +87,9 @@ let print =
     [%map_open
       let as_sexp = flag "sexp" no_arg ~doc:" print in sexp format"
       in fun () ->
-        send Rpc_intf.Env_info.rpc ()
+        with_menu_connection ~f:(fun cwm ->
+          Rpc_intf.Env_info.dispatch_multi cwm ()
+        )
         >>|? fun infos -> List.iter infos ~f:(print_info_line ~as_sexp)
     ]
 

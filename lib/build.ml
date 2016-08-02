@@ -686,9 +686,6 @@ let run_action_for_stdout t rr env ~deps ~need action =
  report errors / record status
 ----------------------------------------------------------------------*)
 
-let set_status t need status =
-  Progress.set_status t.progress need status
-
 let report_error_for_need t need reason =
   let show_now =
     match reason with
@@ -708,13 +705,13 @@ let report_error_for_need t need reason =
 let report_status t need ore =
   match ore with
   | Ok _ ->
-    set_status t need (Some Progress.Status.Built)
+    Progress.set_status_built t.progress need
   | Error problem -> (
       let reasons = Problem.reasons_here problem in
     List.iter reasons ~f:(fun reason ->
       report_error_for_need t need reason
-    );
-    set_status t need (Some (Progress.Status.Error reasons))
+      );
+    Progress.set_status_error t.progress need reasons
     )
 
 let build_considering_needed : (t -> Goal.t -> 'a Builder.t -> 'a Builder.t) =
@@ -724,7 +721,7 @@ let build_considering_needed : (t -> Goal.t -> 'a Builder.t -> 'a Builder.t) =
       (* Report considering/re-considering; count as: check/recheck *)
       Builder.bracket builder
         ~running:(fun i ->
-          set_status t need (Some Progress.Status.Todo);
+          Progress.set_status_todo t.progress need;
           let first_time = i = 0 in
           if Config.show_considering t.config
           || (not first_time && Config.show_reconsidering t.config)
@@ -736,7 +733,7 @@ let build_considering_needed : (t -> Goal.t -> 'a Builder.t -> 'a Builder.t) =
           Metrics.Counter.incr Progress.considerations_run;
           report_status t need a)
         ~cancelled:(fun () ->
-          set_status t need None;
+          Progress.clear_status t.progress need;
           if Config.show_considering t.config
           then (
             Message.message !"Not considering anymore: %{Goal}" need

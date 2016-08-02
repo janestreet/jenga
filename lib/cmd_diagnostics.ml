@@ -48,8 +48,8 @@ module Tenacious_graph = struct
           | Error e -> return (Error e)
           | Ok root_dir ->
             Writer.behave_nicely_in_pipeline ();
-            Jenga_client.with_connection ~root_dir ~f:(fun conn ->
-              Rpc.Rpc.dispatch Rpc_intf.Dump_tenacious_graph.rpc conn ())
+            Jenga_client.with_menu_connection ~root_dir ~f:(fun cwm ->
+              Rpc_intf.Dump_tenacious_graph.dispatch_multi cwm ())
             >>| Or_error.join
             >>|? (fun dump ->
               if sexp
