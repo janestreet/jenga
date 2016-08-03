@@ -2,7 +2,7 @@
 open Core.Std
 
 let return = Dep.return
-let ( *>>= ) = Dep.bind
+let ( *>>= ) t f = Dep.bind t ~f
 let ( *>>| ) = Dep.map
 
 let putenv = Dep.Reflect_putenv

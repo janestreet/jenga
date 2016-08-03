@@ -31,7 +31,7 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
   module Heart = Tenacious.Heart
   module Glass = Heart.Glass
   module Var = Tenacious.Var
-  let ( *>>= ) = Tenacious.bind
+  let ( *>>= ) t f = Tenacious.bind t ~f
   let ( *>>| ) t f = Tenacious.map t ~f
   let return = Tenacious.return
 
@@ -212,7 +212,7 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
 
   let check_dependency_when_on_rhs_of_bind rhs =
     let lhs, break_lhs = make_counter () in
-    let bind = Tenacious.bind lhs (fun _ -> rhs) in
+    let bind = Tenacious.bind lhs ~f:(fun _ -> rhs) in
     let _v, heart =
       Thread_safe.block_on_async_exn (fun () ->
         Tenacious.exec ~name:(lazy "check") bind)

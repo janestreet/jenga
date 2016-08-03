@@ -4,7 +4,7 @@ open Async.Std
 open Jenga_lib.Api
 let return = Dep.return
 let ( *>>| ) = Dep.map
-let ( *>>= ) = Dep.bind
+let ( *>>= ) t f = Dep.bind t ~f
 
 let simple_rule ~targets ~deps ~action =
   Rule.create ~targets (

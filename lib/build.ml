@@ -165,7 +165,7 @@ module Builder : sig (* layer error monad within tenacious monad *)
   val of_tenacious : 'a Tenacious.t -> 'a t
 
   val return : 'a -> 'a t
-  val bind : 'a t -> ('a -> 'b t) -> 'b t
+  val bind : 'a t -> f:('a -> 'b t) -> 'b t
   val ( *>>| ) : 'a t -> ('a -> 'b) -> 'b t
 
   val cutoff : equal:('a -> 'a -> bool) -> 'a t -> 'a t
@@ -253,7 +253,7 @@ end = struct
     )
 
   let desensitize t =
-    Tenacious.bind (Tenacious.desensitize t) (function
+    Tenacious.bind (Tenacious.desensitize t) ~f:(function
     | (Ok x,heart) -> Tenacious.return (Ok (x,heart))
     | (Error e, heart) ->
       Tenacious.lift (fun () ->
@@ -296,7 +296,7 @@ end
 let _ = Builder.(return_result)
 let return   = Builder.return
 let ( *>>| ) = Builder.( *>>| )
-let ( *>>= ) = Builder.bind
+let ( *>>= ) t f = Builder.bind t ~f
 let ( *>>|= ) = Builder.bind_result
 let error    = Builder.error
 

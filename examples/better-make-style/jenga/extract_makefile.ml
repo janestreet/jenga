@@ -1,7 +1,7 @@
 open Core.Std
 open Jenga_lib.Api
 
-let ( *>>= ) = Dep.bind
+let ( *>>= ) t f = Dep.bind t ~f
 let ( *>>| ) = Dep.map
 
 module F(X : sig

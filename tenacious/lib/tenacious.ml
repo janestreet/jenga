@@ -107,15 +107,15 @@ let rec sample : type a . a t -> a semantics =
   fun t ~thread ~cancel ~dep ->
     match t with
     | Return x -> return x ~thread ~cancel ~dep
-    | Bind (t, f) -> bind t f ~thread ~cancel ~dep
+    | Bind (t, f) -> bind t ~f ~thread ~cancel ~dep
     | Map (t, f) -> map t f ~thread ~cancel ~dep
     | All ts -> all ts ~thread ~cancel ~dep
     | Reify (st, name, lazy t) -> reify st ~name t ~thread ~cancel ~dep
     | Lift f -> lift f ~thread ~cancel ~dep
     | Embed emb -> emb ~thread ~cancel ~dep
 
-and bind : 'a 'b. 'a t -> ('a -> 'b t) -> 'b semantics =
-  fun t1 f ~thread ~cancel ~dep ->
+and bind : 'a 'b. 'a t -> f:('a -> 'b t) -> 'b semantics =
+  fun t1 ~f ~thread ~cancel ~dep ->
     sample t1 ~thread ~cancel ~dep >>= function
     | None -> Deferred.return None
     | Some (v1, certificate1) ->
@@ -133,7 +133,7 @@ and bind : 'a 'b. 'a t -> ('a -> 'b t) -> 'b semantics =
                Cancellation of [t2] must be because [v1] has been invalidated.
                Must sample again. *)
             assert (Heart.is_broken certificate1);
-            bind t1 f ~thread ~cancel ~dep
+            bind t1 ~f ~thread ~cancel ~dep
           end
         | Some _ as res -> Deferred.return res
 
@@ -327,7 +327,7 @@ and lift : type a . (unit -> (a * Heart.t) Deferred.t) -> a semantics =
 
 let return x = Return x
 
-let bind t f = Bind(t, f)
+let bind t ~f = Bind(t, f)
 
 let map t ~f = Map(t, f)
 
@@ -664,7 +664,7 @@ module For_tests = struct
     let b = reify ~name:(lazy "race-error-b") b in
     bind
       (race (map ~f:(fun x -> `a x) a) (map ~f:(fun x -> `b x) b))
-      (function
+      ~f:(function
         | `a (Error e)
         | `b (Error e) -> return (Error e)
         | `a (Ok a) -> map ~f:(Result.map ~f:(fun b -> f a b)) b
@@ -694,10 +694,10 @@ module For_tests = struct
 end
 
 let all_ignore = all_unit
-let join x = bind x (fun x -> x)
+let join x = bind x ~f:(fun x -> x)
 let ignore_m = map ~f:ignore
 let (>>|) x f = map x ~f
-let (>>=) = bind
+let (>>=) t f = bind t ~f
 module Monad_infix = struct
   let (>>|) = (>>|)
   let (>>=) = (>>=)
@@ -732,8 +732,8 @@ module Result = struct
 
     let return a = Tenacious.return (Ok a)
 
-    let bind t f =
-      Tenacious.bind t (function
+    let bind t ~f =
+      Tenacious.bind t ~f:(function
         | Ok a -> f a
         | Error _ as error -> Tenacious.return error)
     ;;

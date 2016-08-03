@@ -26,7 +26,7 @@ let unbreakable x = x,Heart.unbreakable
    persist - persistent cache of values
 *)
 
-let ( *>>= ) = Tenacious.bind
+let ( *>>= ) t f = Tenacious.bind t ~f
 let ( *>>| ) t f = Tenacious.map t ~f
 
 module Kind = Db.Kind

@@ -8,7 +8,7 @@ module Dep = J.Dep
 let dirname = J.Path.dirname
 let relative = J.Path.relative
 let return = Dep.return
-let ( *>>= ) = Dep.bind
+let ( *>>= ) t f = Dep.bind t ~f
 let ( *>>| ) = Dep.map
 
 let simple_default ~dir paths =

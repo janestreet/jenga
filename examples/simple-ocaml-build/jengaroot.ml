@@ -3,7 +3,7 @@ open Core.Std
 open Async.Std
 open Jenga_lib.Api
 let ( *>>| ) = Dep.map
-let ( *>>= ) = Dep.bind
+let ( *>>= ) t f = Dep.bind t ~f
 let relative = Path.relative
 let basename = Path.basename
 let depend xs = Dep.all_unit (List.map xs ~f:Dep.path)

@@ -66,7 +66,7 @@ let take_one_head ls = List.rev (take_one_head ls)
 
 let rec all_interleavings ls = match take_one_head ls with
   | [] -> [[]]
-  | l -> List.bind l (fun (h, ls) ->
+  | l -> List.bind l ~f:(fun (h, ls) ->
     List.map (all_interleavings ls) ~f:(fun l -> h :: l))
 
 let%test_unit "all_interleavings" =

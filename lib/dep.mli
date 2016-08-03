@@ -7,7 +7,7 @@ open! Async.Std
 include module type of Dep_type
 
 val return : 'a -> 'a t
-val bind : 'a t -> ('a -> 'b t) -> 'b t
+val bind : 'a t -> f:('a -> 'b t) -> 'b t
 val map : 'a t -> ('a -> 'b) -> 'b t
 val both : 'a t -> 'b t -> ('a * 'b) t
 val all : 'a t list -> 'a list t

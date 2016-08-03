@@ -22,7 +22,7 @@ let message fmt = ksprintf (fun s -> printf "!!JengaRoot.ml : %s" s) fmt
 let message_verbose fmt = ksprintf (fun s -> printf_verbose "!!JengaRoot.ml : %s" s) fmt
 
 let return = Dep.return
-let ( *>>= ) = Dep.bind
+let ( *>>= ) t f = Dep.bind t ~f
 let ( *>>| ) = Dep.map
 
 module Rule = struct (* planned changes for API v3 *)

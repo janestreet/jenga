@@ -4,7 +4,7 @@ open Async.Std
 open Jenga_lib.Api
 let return = Dep.return
 let ( *>>| ) = Dep.map
-let ( *>>= ) = Dep.bind
+let ( *>>= ) t f = Dep.bind t ~f
 let relative = Path.relative
 
 let bash ~dir command =

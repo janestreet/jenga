@@ -9,7 +9,7 @@ include Dep_type
 module Glob = Fs.Glob
 
 let return x = Return x
-let bind t f = Bind (t, f)
+let bind t ~f = Bind (t, f)
 let map t f = Map (t, f)
 let all ts = All ts
 let cutoff ~equal x = Cutoff (equal, x)
