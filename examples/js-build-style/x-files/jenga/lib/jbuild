@@ -1,0 +1,10 @@
+(library
+ ((name jenga_lib)
+  (libraries (async
+              async_inotify
+              async_parallel_deprecated
+              core
+              fieldslib
+              ocaml_plugin
+              sexplib
+              tenacious_lib))))

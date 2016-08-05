@@ -4,7 +4,7 @@ open! Async.Std
 
 module Jr_spec : sig
 
-  type t = In_root_dir | Path of Path.t | Env of (unit -> Env.t)
+  type t = In_root_dir | Path of Path.t | Env of (unit -> Env.t Deferred.t)
 
 end
 

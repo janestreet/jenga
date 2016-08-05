@@ -1,0 +1,8 @@
+(embed
+ ((names (jenga))
+  (libraries (jenga_lib core core_kernel async async_kernel async_unix sexplib fieldslib))
+  (pps (JANE))))
+
+(executables
+ ((names (jenga jem jenga_offline))
+  (libraries (async core jenga_lib))))

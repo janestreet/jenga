@@ -1,0 +1,21 @@
+(library
+ ((name jenga_lib)
+  (public_name jenga)
+  (libraries (async
+              async_inotify
+              async_parallel_deprecated
+              core
+              fieldslib
+              ocaml_plugin
+              re
+              sexplib
+              str
+              tenacious_lib))
+  (includes (${ROOT}/lib/core/src)) ;; for nanosecond_stat.h
+  (c_names (digest_stubs batched_mtimes_stubs))))
+
+;; Embed the API into the library as a string
+(rule
+ ((targets (cat_api.ml))
+  (deps (gen-cat_api.sh api.mli))
+  (action "./${^} > ${@}")))

@@ -1,0 +1,4 @@
+(preprocessor
+ ((name pa_bin_prot)
+  (libraries (pa_type_conv))
+  (preprocess (((command "camlp4orf") (List (pa_bin_prot)))))))

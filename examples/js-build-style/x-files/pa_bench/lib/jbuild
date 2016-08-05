@@ -1,0 +1,4 @@
+(library
+ ((name ppx_bench_lib)
+  (modules (list (benchmark_accumulator)))
+  (preprocess (((pps ()) All)))))

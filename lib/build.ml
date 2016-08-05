@@ -348,7 +348,7 @@ end
 
 module Jr_spec = struct
 
-  type t = In_root_dir | Path of Path.t | Env of (unit -> Env.t)
+  type t = In_root_dir | Path of Path.t | Env of (unit -> Env.t Deferred.t)
 
 end
 
@@ -913,7 +913,7 @@ let jenga_load_spec : (t -> Jr_spec.t -> Env.t Builder.t) =
     in
     match jr_spec with
     | Env env ->
-      return (env ())
+      Builder.of_deferred env
     | Jr_spec.Path path ->
       let is_ml =
         match String.lsplit2 ~on:'.' (Path.basename path) with

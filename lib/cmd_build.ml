@@ -313,7 +313,7 @@ let config_param : Config.t Command.Param.t =
     ~sandbox_actions
     ~anon_demands
 
-let command ~toplevel =
+let command ~toplevel ~run () =
   Command.basic'
     ~summary:("build specified targets" ^
               if toplevel then "" else " (default subcommand)")
@@ -323,4 +323,4 @@ let command ~toplevel =
       in
       String.concat ~sep:"\n" ("By default building the .DEFAULT target." :: rest)
     )
-    (Command.Param.map config_param ~f:(fun config () -> Run.main config))
+    (Command.Param.map config_param ~f:(fun config () -> run config))

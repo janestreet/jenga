@@ -1,0 +1,4 @@
+(library
+ ((name ppx_assert_lib)
+  (libraries (sexplib))
+  (preprocess (((pps (pa_sexp_conv)) All)))))

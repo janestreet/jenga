@@ -1,0 +1,3 @@
+(library
+ ((name async)
+  (libraries (core async_extra async_kernel async_unix))

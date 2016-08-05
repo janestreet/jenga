@@ -1,0 +1,6 @@
+(library
+ ((name tenacious_lib)
+  (public_name jenga.tenacious)
+  (libraries (core async))))
+
+;(alias ((name lib_artifacts) (deps ((alias runtest)))))

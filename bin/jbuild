@@ -1,0 +1,20 @@
+(embed
+ ((names (jenga))
+  (code_style ppx)
+  (libraries (
+    async
+    async_kernel
+    async_unix
+    core
+    core_kernel
+    fieldslib
+    jenga_lib
+    re2
+    sexplib
+    ))
+  (pps (JANE))))
+
+(executables
+ ((names (jenga))
+  (public_release ((build_and_install ((jenga jenga)))))
+  (libraries (async core jenga_lib))))

@@ -1,0 +1,3 @@
+(library
+ ((name async_kernel)
+  (libraries (core))))

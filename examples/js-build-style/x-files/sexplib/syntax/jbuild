@@ -1,0 +1,4 @@
+(preprocessor
+ ((name pa_sexp_conv)
+  (libraries (pa_type_conv))
+  (preprocess (((command "camlp4orf") (List (pa_sexp_conv)))))))

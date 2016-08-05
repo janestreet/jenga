@@ -27,3 +27,6 @@ val jenga_conf : Path.Rel.t
     Can't be async because we need to call it before initializing Async.Parallel. *)
 val discover_root : unit -> Path.Abs.t Or_error.t
 val discover_and_set_root : unit -> unit Or_error.t
+
+(** Look for the closest ancestor directory containing one of the given files. *)
+val find_ancestor_directory_containing : one_of:Path.Rel.t list -> Path.Abs.t Or_error.t

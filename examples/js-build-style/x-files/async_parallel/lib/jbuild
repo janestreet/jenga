@@ -1,0 +1,3 @@
+(library
+ ((name async_parallel_deprecated)
+  (libraries (core async))))

@@ -1,0 +1,4 @@
+(library
+ ((name inotify_lib)
+  (modules (list (inotify)))
+  (c_names (inotify_stubs))))
