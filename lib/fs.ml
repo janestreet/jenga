@@ -159,10 +159,10 @@ let run_ls ~dir =
           (* catch all exns while processing so we can close in every case *)
         try_with (fun () ->
           let rec loop acc =
-            try_with (fun () -> Unix.readdir dir_handle) >>= function
-            | Ok "." -> loop acc
-            | Ok ".." -> loop acc
-            | Ok base ->
+            Unix.readdir_opt dir_handle >>= function
+            | Some "." -> loop acc
+            | Some ".." -> loop acc
+            | Some base ->
               begin
                 let path_string = Path.to_string dir ^ "/" ^ base in
                 unix_stat ~follow_symlinks:false path_string >>= function
@@ -174,14 +174,7 @@ let run_ls ~dir =
                   let kind = u.Unix.Stats.kind in
                   loop (Elem.create ~base ~kind :: acc)
               end
-            | Error exn ->
-              match Monitor.extract_exn exn with
-              | End_of_file ->
-                  (* no more filenames - normal; we are finished listing *)
-                return (create ~dir ~elems:acc)
-              | exn ->
-                  (* some other unexpected error; raise to outer handler *)
-                raise exn
+            | None -> return (create ~dir ~elems:acc)
           in
           loop []
 
