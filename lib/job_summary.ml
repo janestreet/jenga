@@ -108,6 +108,9 @@ module Stable = struct
     [@@deriving bin_io, sexp_of]
 
   end
+  let%expect_test _ =
+    print_endline [%bin_digest: V1.t];
+    [%expect {| 7b41a82c166551d32016599fffdd3994 |} ]
 end
 
 include Stable.V1

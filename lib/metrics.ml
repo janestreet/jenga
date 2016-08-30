@@ -49,6 +49,9 @@ module Counter = struct
         } [@@deriving bin_io]
 
       end
+      let%expect_test _ =
+        print_endline [%bin_digest: V1.t];
+        [%expect {| 9698f151fa21e5ebc4daca817fd5e0a1 |} ]
     end
 
     include Stable.V1
@@ -91,6 +94,9 @@ module Counters = struct
         } [@@deriving bin_io]
 
       end
+      let%expect_test _ =
+        print_endline [%bin_digest: V1.t];
+        [%expect {| fad3a0cc0c47d30c28221bb0c309e867 |} ]
     end
 
     include Stable.V1

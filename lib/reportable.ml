@@ -38,6 +38,9 @@ module Error = struct
 
     end
 
+    let%expect_test _ =
+      print_endline [%bin_digest: V1.t];
+      [%expect {| e4eff16a7561fba7224c6a1af6a51b54 |} ]
   end
 
   include Stable.V1
@@ -91,6 +94,14 @@ module Stable = struct
     end
 
   end
+
+  let%expect_test _ =
+    print_endline [%bin_digest: V1.Update.t];
+    [%expect {| bce425a7498eb811cee88a76ed7d3755 |} ]
+
+  let%expect_test _ =
+    print_endline [%bin_digest: V1.Snap.t];
+    [%expect {| 23db845eef46b5f2d2e5950526c94972 |} ]
 end
 
 include Stable.V1

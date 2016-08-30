@@ -13,6 +13,9 @@ module Info = struct
         peeked  : bool;
       } [@@deriving bin_io, sexp_of]
     end
+    let%expect_test _ =
+      print_endline [%bin_digest: V1.t];
+      [%expect {| 88decba6a920a0604e7e7f6327f9c5e9 |} ]
   end
   include Stable.V1
 end
@@ -91,6 +94,12 @@ module Getenv = struct
       type query = { name : string } [@@deriving bin_io]
       type response = I.Stable.V1.t Or_error.V2.t [@@deriving bin_io]
     end
+    let%expect_test _ =
+      print_endline [%bin_digest: V1.query];
+      [%expect {| 137c2a812d009a1896a37af0d21f83d8 |} ]
+    let%expect_test _ =
+      print_endline [%bin_digest: V1.response];
+      [%expect {| b0fd38f538e55d8e4433000b1812f29e |} ]
   end
   include Stable.V1
 
@@ -105,6 +114,12 @@ module Setenv = struct
       type query = { name : string; value : string option } [@@deriving bin_io]
       type response = unit Or_error.V2.t [@@deriving bin_io]
     end
+    let%expect_test _ =
+      print_endline [%bin_digest: V1.query];
+      [%expect {| ba6b4bcc295d0f28130ca887a2bae2b6 |} ]
+    let%expect_test _ =
+      print_endline [%bin_digest: V1.response];
+      [%expect {| 27f76252e5181aab209cd62aa6e42268 |} ]
   end
   include Stable.V1
 

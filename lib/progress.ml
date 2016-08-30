@@ -179,6 +179,9 @@ module Counts = struct
       } [@@deriving hash, compare, bin_io]
 
     end
+    let%expect_test _ =
+      print_endline [%bin_digest: V1.t];
+      [%expect {| 9e44ed1db4e5565de4edd72452409d8b |} ]
   end
   include Stable.V1
 
@@ -234,6 +237,9 @@ module Snap = struct
         act_metrics : Metrics.Counters.Snap.Stable.V1.t;
       } [@@deriving bin_io, fields]
     end
+    let%expect_test _ =
+      print_endline [%bin_digest: V1.t];
+      [%expect {| 0d0d8424b08b40a9f568b17042d17d0b |} ]
   end
 
   include Stable.V1

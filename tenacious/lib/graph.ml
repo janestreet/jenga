@@ -98,6 +98,9 @@ module Dump = struct
       [@@deriving bin_io, sexp]
 
     end
+    let%expect_test _ =
+      print_endline [%bin_digest: V1.t];
+      [%expect {| 8dad49afe85669cef2905bec97ec3347 |} ]
   end
 
   include Stable.V1
