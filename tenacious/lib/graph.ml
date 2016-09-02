@@ -87,7 +87,7 @@ module Dump = struct
     module V1 = struct
 
       type t = {
-        id : Int63.t;
+        id : Int63.V1.t;
         name : string;
         age : Span.V2.t;
         children : children;
