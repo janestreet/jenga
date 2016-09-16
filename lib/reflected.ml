@@ -10,6 +10,14 @@ module Action = struct
   let to_sh_ignoring_dir t = Job.to_sh_ignoring_dir t
 
   let escape_newlines_for_make s =
+    (* Newlines are interpreted by [make] as indicating the end of a command. Multiple
+       tab-indented lines are executed as a sequence of commands. Although [make] supports
+       escaping of newlines using a backslash, it does not allow a literal newline to be
+       quoted for interpretation by the shell.
+
+       The trick is to expand the literal newline into a sequence backslash-n, and then to
+       wrap the expanded command string with [bash -c], [echo -e] to recover the literal
+       newline. *)
     if not (String.contains s '\n') then s else
       let s =
         String.concat_map s ~f:(function
@@ -20,6 +28,8 @@ module Action = struct
       sprintf "bash -c \"$(echo -e %s)\"" (Job_summary.Q.shell_escape s)
 
   let escape_dollars_for_make s =
+    (* "$" is interpreted by [make] as a make-variable-reference, but can be escaped by
+       writing "$$" *)
     if not (String.contains s '$') then s else
       String.concat_map s ~f:(function
       | '$' -> "$$"
