@@ -3,6 +3,7 @@ open Async.Std
 
 open Tenacious_lib
 open Command.Let_syntax
+let return = Async.Std.return
 
 module Tenacious_graph = struct
   let colored color s =

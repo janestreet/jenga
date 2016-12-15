@@ -28,6 +28,8 @@ let filesystem_related = function
   | Rule_failed_to_generate_targets _
   | Usercode_raised _
   | Jengaroot_load_failed _
+  | Sandbox_error _
+  | Unexpected_targets _
     -> false
 
 let to_string_one_line = function
@@ -46,6 +48,10 @@ let to_string_one_line = function
   | Command_failed _                  -> "External command failed"
   | No_directory_for_target s         -> sprintf "No directory for target: %s" s
   | Running_job_raised _              -> "Running external job raised exception"
+  | Sandbox_error(`at_creation, _)    -> "Error creating sandbox"
+  | Sandbox_error(`at_close, _)       -> "Error closing sandbox"
+  | Unexpected_targets l ->
+    sprintf "Unexpected targets in sandbox: %s" (String.concat l ~sep:", ")
   | Rule_failed_to_generate_targets _ -> "Rule failed to generate targets"
 
   | Multiple_rules_for_path rel ->
@@ -79,6 +85,7 @@ let to_extra_lines = function
   | Inconsistent_proxies
   | Multiple_rules_for_path _
   | Mtimes_changed _
+  | Unexpected_targets _
     -> []
 
   | Jengaroot_load_failed error ->
@@ -96,6 +103,7 @@ let to_extra_lines = function
   | Usercode_raised sexp
   | File_read_error sexp
   | Digest_error sexp
+  | Sandbox_error (_, sexp)
     -> [Sexp.to_string sexp]
 
   | Rule_failed_to_generate_targets paths

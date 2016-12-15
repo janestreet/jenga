@@ -1,3 +1,6 @@
+(** The module that handles the jenga database, loading it on starting and saving it
+    periodically, assuming something needs to be saved.
+    Manipulation of the database is done in other places. *)
 
 open! Core.Std
 open! Async.Std

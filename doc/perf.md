@@ -25,9 +25,7 @@ Several difficulties with this problem are:
 Several potential ways of trying to go forward are:
 
 - give a shot at suspected problems
-  - fixpoint in schemes
-  - lack of sharing in the jengaroot. Certainly some of that
-    (libmap.sexp) is known to be problematic.
+  - lack of sharing in the jengaroot
   - too much tenacious in fs.ml
 - play with gc
   - reduce the gc overhead setting
@@ -35,13 +33,8 @@ Several potential ways of trying to go forward are:
   - make jenga dynamically adjust gc setting when it's starting to use too
     much memory
 - try to get a clue about what's going on
-  - more metrics, things that can stay in the code, even if they have
-    to turned on with JENGA_DEBUG, so we can measure them
-    continuously.
   - isolate high level systems, see what their impact is
     - fs: dummy implementation with no inotify, no tenacious
-    - cycle detection: just turn it off. Doesn't create tenacious, but
-      I suspect it makes minor allocations rather noisy
     - what about an implementation of tenacious that doesn't support
       retriggering, for comparison?
     - jengaroot: maybe we can precompute all the deps, marshal them to

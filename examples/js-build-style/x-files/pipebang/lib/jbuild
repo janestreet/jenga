@@ -1,3 +1,0 @@
-(preprocessor
- ((name pa_pipebang)
-  (preprocess (((command "camlp4orf") (List (pa_pipebang )))))))

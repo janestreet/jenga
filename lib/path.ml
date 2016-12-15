@@ -2,11 +2,9 @@
 open Core.Std
 open! Int.Replace_polymorphic_compare
 
-let empty_string = function "" -> true | _ -> false
-
 let starts_with_slash s =
-  not (empty_string s)
-  && (match (String.get s 0) with | '/' -> true | _-> false)
+  not (String.is_empty s)
+  && (match s.[0] with '/' -> true | _ -> false)
 
 module IPS = Interning.String(struct let who = "<path>" end)
 
@@ -326,6 +324,9 @@ let split t = Filename.split (extern t)
 
 let dirname t = intern (fst (split t))
 let basename t = snd (split t)
+let split t =
+  let a, b = split t in
+  intern a, b
 
 let to_string t =
   match (case t) with

@@ -1,7 +1,9 @@
-(** The rpcs in here are used by both jenga and build-manager. When called from jenga,
-    versioning doesn't matter as the same executable is used on both sides. When called
-    from build-manager, we expect build-manager to be ahead, and it should be rolled
-    before jengas that introduce new versions. *)
+(** All the rpcs exposed by the jenga server.
+
+    The rpcs in here are used by the jenga client and build-manager. When called from
+    jenga, versioning doesn't matter as the same executable is used on both sides. When
+    called from build-manager, we expect build-manager to be ahead, and it should be
+    rolled before jengas that introduce new versions. *)
 
 open Core.Std
 open Async.Std
@@ -28,7 +30,7 @@ module Progress_stream = struct
   include Register(V1)
 end
 
-module Error_pipe = struct (* snapshot of errors + updates *)
+module Error_pipe = struct (** Snapshot of errors + updates *)
   module V1 = struct
     let client_pushes_back = false
     let version = 1
@@ -39,6 +41,21 @@ module Error_pipe = struct (* snapshot of errors + updates *)
     type error = Nothing.t [@@deriving bin_io]
 
     let query_of_model = Fn.id
+    let model_of_state = Reportable.Stable.V1.Snap.upgrade
+    let model_of_error = Fn.id
+    let model_of_update = Reportable.Stable.V1.Update.upgrade
+  end
+
+  module V2 = struct
+    let client_pushes_back = false
+    let version = 2
+
+    type query = unit [@@deriving bin_io]
+    type state = Reportable.Stable.V2.Snap.t [@@deriving bin_io]
+    type update = Reportable.Stable.V2.Update.t [@@deriving bin_io]
+    type error = Nothing.t [@@deriving bin_io]
+
+    let query_of_model = Fn.id
     let model_of_state = Fn.id
     let model_of_error = Fn.id
     let model_of_update = Fn.id
@@ -46,10 +63,11 @@ module Error_pipe = struct (* snapshot of errors + updates *)
 
   include Versioned_rpc.Caller_converts.State_rpc.Make (struct
       let name = "error-pipe"
-      include V1
+      include V2
     end)
 
-  include Register(V1)
+  module Rpc_v1 = Register(V1)
+  include Register(V2)
 end
 
 module Getenv = struct

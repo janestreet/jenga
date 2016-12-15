@@ -41,14 +41,14 @@ module Counter = struct
 
     module Stable = struct
       open Core.Stable
-      module V1 = struct
 
+      module V1 = struct
         type t = {
           name : string;
           start : int;
         } [@@deriving bin_io]
-
       end
+
       let%expect_test _ =
         print_endline [%bin_digest: V1.t];
         [%expect {| 9698f151fa21e5ebc4daca817fd5e0a1 |} ]
@@ -87,13 +87,13 @@ module Counters = struct
 
     module Stable = struct
       open Core.Stable
-      module V1 = struct
 
+      module V1 = struct
         type t = {
           counts : Counter.Snap.Stable.V1.t list;
         } [@@deriving bin_io]
-
       end
+
       let%expect_test _ =
         print_endline [%bin_digest: V1.t];
         [%expect {| fad3a0cc0c47d30c28221bb0c309e867 |} ]

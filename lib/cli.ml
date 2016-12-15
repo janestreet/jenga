@@ -10,9 +10,10 @@ let main ?(argv=Array.to_list Sys.argv) ~run () =
     ; "db"            , Cmd_db.command
     ; "diagnostics"   , Cmd_diagnostics.command
     ; "env"           , Cmd_env.command
+    ; "errors"        , Cmd_errors.command
+    ; "internal"      , Cmd_internal.command
     ; "monitor"       , Cmd_monitor.command
     ; "stop"          , Cmd_stop.command
-    ; "errors"        , Cmd_watch.watch_errors
     ]
   in
 

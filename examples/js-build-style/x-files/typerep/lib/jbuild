@@ -1,3 +1,0 @@
-(library (
-  (name typerep_lib)
-  (preprocess (((pps ()) All)))))

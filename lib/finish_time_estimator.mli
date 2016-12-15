@@ -1,3 +1,7 @@
+(** This module implements the guessing of when the build will finished based on how the
+    amount of remaining work changes, which is shown in the output of [jenga monitor]
+    and [jenga --progress]. *)
+
 open! Core.Std
 
 type t

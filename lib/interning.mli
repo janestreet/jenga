@@ -1,3 +1,4 @@
+(** Hash consing of string, for space savings, both on disk and in memory. *)
 
 open! Core.Std
 

@@ -1,3 +1,8 @@
+(** Because forking is so expensive (even if memory is copied lazily, the page table is
+    copied eagerly, which makes it very costly when the forking process uses a lot of
+    memory), this module is used to hold a number of processed forked off the main jenga
+    process early on, when jenga uses little memory. Jenga can then ask these processes to
+    cheaply spawn commands. *)
 
 open! Core.Std
 open! Async.Std
@@ -9,6 +14,7 @@ module Reply : sig
     stdout : string;
     stderr : string;
     outcome : [`success | `error of string];
+    duration : Time.Span.t;
   }
 end
 

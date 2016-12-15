@@ -2,11 +2,11 @@
 open! Core.Std
 open! Async.Std
 
-(* [Goal.t] is a build goal, as demanded on the command line or requested by rules.
+(** [Goal.t] is a build goal, as demanded on the command line or requested by rules.
 
-   [Jengaroot] demands only that the jengaroot configuration is read
-   [Path path] demands the target at [path];
-   [Alias] demands the particular alias t;
+    [Jengaroot] demands only that the jengaroot configuration is read
+    [Path path] demands the target at [path]
+    [Alias] demands the particular alias t
 *)
 type t =
   | Jengaroot

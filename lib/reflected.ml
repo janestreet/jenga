@@ -3,11 +3,11 @@ open Core.Std
 
 module Action = struct
 
-  type t = Job.t [@@deriving sexp_of]
+  type t = Action.t [@@deriving sexp_of]
 
-  let dir t = Job.dir t
+  let dir t = Action.dir t
 
-  let to_sh_ignoring_dir t = Job.to_sh_ignoring_dir t
+  let to_sh_ignoring_dir t = Action.to_sh_ignoring_dir t
 
   let escape_newlines_for_make s =
     (* Newlines are interpreted by [make] as indicating the end of a command. Multiple

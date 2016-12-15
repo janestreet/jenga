@@ -16,6 +16,7 @@ module Proxy = Db.Proxy
 module Proxy_map = Db.Proxy_map
 module Rule_proxy = Db.Rule_proxy
 module Output_proxy = Db.Output_proxy
+module Action_proxy = Db.Action_proxy
 
 module PPs = struct (* list of path-tagged proxies *)
   type t = (Path.t * Proxy.t) list
@@ -496,20 +497,15 @@ let determine_and_remove_stale_artifacts : (
     match Path.case dir with
     | `absolute _ -> return ()
     | `relative rel ->
-      Builder.cutoff ~equal:Path.Set.equal (
-        on_filesystem t ~dir
-        *>>| fun files_on_disk ->
-        Set.diff files_on_disk targets
-      ) *>>= fun non_targets_on_disk ->
-      begin
-        if Set.is_empty non_targets_on_disk then return ()
-        else
-          t.delete_eagerly ~dir t *>>= fun delete ->
-          let stale_files =
-            Set.filter non_targets_on_disk ~f:(fun non_target -> delete ~non_target)
-          in
-          blow_stale_files_away t ~dir stale_files
-      end *>>| fun () ->
+      t.delete_eagerly ~dir t *>>= fun delete ->
+      Builder.cutoff ~equal:Path.Set.equal
+        (on_filesystem t ~dir
+         *>>| fun files_on_disk ->
+         let non_targets_on_disk = Set.diff files_on_disk targets in
+         Set.filter non_targets_on_disk ~f:(fun non_target -> delete ~non_target))
+      *>>= fun stale_files ->
+      blow_stale_files_away t ~dir stale_files
+      *>>| fun () ->
       let gen_key = Gen_key.create ~dir:rel in
       let prev_targets =
         match (Hashtbl.find (generated t) gen_key) with
@@ -612,15 +608,11 @@ let scheme_glob_fs_or_buildable t glob ~buildable =
 let run_action_with_message :
   (t -> Env.t -> Action.t -> message:(unit->unit) ->
    deps:Proxy_map.t -> targets:Path.Rel.t list ->
-   need:string -> output:'a Job.Output.t -> 'a Builder.t) =
+   need:string -> output:'a Action.Output.t -> 'a Builder.t) =
   fun t env action ~message ~deps ~targets ~need ~output ->
-    let action =
-      Action_sandbox.maybe_sandbox ~sandbox:t.config.sandbox_actions
-        action ~deps ~targets
-    in
     let progress = t.progress in
     let putenv = Env.putenv env in
-    let dir = Job.dir (Action.job action) in
+    let dir = Action.dir action in
     Builder.of_deferred (fun () ->
       (* We lock actions w.r.t targets to guard against overlapping the execution of
          external processes which write to the same target.
@@ -647,12 +639,21 @@ let run_action_with_message :
       *)
       Locking.lock_directory_for_action ~dir (fun () ->
         Fs.lock_targets_and_mask_updates t.fs ~targets (fun () ->
-          Action.run action ~message ~output ~putenv ~progress ~need
+          Action.run action ~message ~deps ~targets ~output ~putenv
+            ~progress ~need ~default_sandbox:t.config.sandbox_actions
         ))) *>>= function
-    | Ok x                                -> return x
-    | Error (`command_failed output)     -> error (Reason.Command_failed output)
-    | Error (`other_error Job.Shutdown)   -> error Reason.Shutdown
-    | Error (`other_error exn)            -> error (Reason.Running_job_raised (sexp_of_exn exn))
+    | Ok x                                 -> return x
+    | Error (`command_failed output)       -> error (Command_failed output)
+    | Error (`other_error Action.Shutdown) -> error Shutdown
+    | Error (`other_error exn)             -> error (Running_job_raised (sexp_of_exn exn))
+    | Error (`sandbox_error (Unexpected_targets names)) ->
+      error (Unexpected_targets names)
+    | Error (`sandbox_error (Missing_targets names)) ->
+      error (Rule_failed_to_generate_targets names)
+    | Error (`sandbox_error (Creation_failed exn)) ->
+      error (Sandbox_error (`at_creation, sexp_of_exn exn))
+    | Error (`sandbox_error (Closing_failed exn)) ->
+      error (Sandbox_error (`at_close, sexp_of_exn exn))
 
 let run_action_for_targets :
     (t -> RR.t -> Env.t -> Action.t ->
@@ -668,19 +669,18 @@ let run_action_for_targets :
           (RR.to_string t.config rr)
     in
     run_action_with_message t env action ~message ~deps ~targets ~need
-      ~output:Job.Output.ignore
+      ~output:Action.Output.ignore
 
 let run_action_for_stdout t rr env ~deps ~need action =
-  let job = Action.job action in
   let message() =
     if Config.show_actions_run t.config then
       Message.message "Action(%s): %s [%s]"
-        (Path.to_string (Job.dir job))
-        (Job.to_sh_ignoring_dir job)
+        (Path.to_string (Action.dir action))
+        (Action.to_sh_ignoring_dir action)
         (RR.to_string t.config rr)
   in
   run_action_with_message t env action ~message ~deps ~targets:[] ~need
-    ~output:Job.Output.stdout
+    ~output:Action.Output.stdout
 
 (*----------------------------------------------------------------------
  report errors / record status
@@ -1080,18 +1080,18 @@ let check_mtimes_unchanged : (t -> Mtimes.t -> unit Builder.t) =
 
 let run_action_for_stdout_if_necessary t ~deps ~need action =
   jenga_root t *>>= fun env ->
-  let job = Action.job action in
+  let action_proxy = Action.proxy ~default_sandbox:t.config.sandbox_actions action in
   let run_and_cache rr =
     mtimes_of_proxy_map t deps *>>= fun mtimes ->
     Builder.uncancellable (
       run_action_for_stdout t rr env action ~deps ~need *>>= fun stdout ->
       check_mtimes_unchanged t mtimes *>>= fun () ->
       let output_proxy = {Output_proxy. deps; stdout;} in
-      Hashtbl.set (Persist.modify "actioned" (actioned t)) ~key:job ~data:output_proxy;
+      Hashtbl.set (Persist.modify "actioned" (actioned t)) ~key:action_proxy ~data:output_proxy;
       return stdout
     )
   in
-  match (Hashtbl.find (actioned t) job) with
+  match (Hashtbl.find (actioned t) action_proxy) with
   | None -> run_and_cache RR.No_record_of_being_run_before
   | Some prev ->
     match (Proxy_map_op.diff ~before:prev.Output_proxy.deps ~after:deps) with
@@ -1671,7 +1671,7 @@ let build_target_rule :
     build_depends t (Target_rule.action_depends tr) ~need:("rule of " ^ need)
     *>>= fun (action,deps_proxy_map) ->
     jenga_root t *>>= fun env ->
-    let job = Action.job action in
+    let action_proxy = Action.proxy ~default_sandbox:t.config.sandbox_actions action in
     let run_and_cache rr =
       mtimes_of_proxy_map t deps_proxy_map *>>= fun mtimes ->
       Builder.uncancellable (
@@ -1693,7 +1693,7 @@ let build_target_rule :
               Rule_proxy.
               targets = targets_proxy_map;
               deps = deps_proxy_map;
-              action = job;
+              action = action_proxy;
             }
             in
             Hashtbl.set (Persist.modify "ruled" (ruled t)) ~key:head_target ~data:rule_proxy;
@@ -1706,7 +1706,8 @@ let build_target_rule :
     match (Hashtbl.find (ruled t) head_target) with
     | None -> run_and_cache RR.No_record_of_being_run_before
     | Some prev ->
-      match (equal_using_compare Job.compare prev.Rule_proxy.action job) with
+      match (equal_using_compare
+               Action_proxy.compare prev.Rule_proxy.action action_proxy) with
       | false -> run_and_cache RR.Action_changed
       | true ->
         match (Proxy_map_op.diff ~before:prev.Rule_proxy.deps ~after:deps_proxy_map) with
@@ -1729,7 +1730,7 @@ let build_target_rule :
               | None ->
                 (* Everything is as it should be! re-sensitize to the targets. *)
                 if Config.show_checked t.config then  (
-                  Message.message "NOT RUNNING: %s" (Job.to_sh_ignoring_dir job);
+                  Message.message "NOT RUNNING: %s" (Action.to_sh_ignoring_dir action);
                 );
                 Builder.sensitize heart *>>= fun () ->
                 return path_tagged_proxys
@@ -1864,7 +1865,6 @@ let reflect_path : (t -> Path.t -> Reflected.Trip.t option Builder.t) =
         reflect_depends t (Target_rule.action_depends tr)
           ~need:("rule of " ^ Path.Rel.basename rel)
         *>>| fun (action,deps) ->
-        let action = Action.job action in
         let deps = Path.Set.to_list deps in
         Some { Reflected.Trip. targets; deps; action; }
 
@@ -1938,7 +1938,8 @@ let delete_if_depended_upon =
         jenga_root t
         *>>= fun env ->
         build_depends ~need:name t (Env.delete_if_depended_upon env)
-        *>>| fst
+        *>>| fun (f, _proxy_map) ->
+        fun ~non_target -> not (Path.is_absolute non_target) && f ~non_target
       )
 ;;
 

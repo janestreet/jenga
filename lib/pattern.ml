@@ -45,14 +45,10 @@ let to_re_string t =
 let to_anchored_re_string t = "^" ^ to_re_string t ^ "$"
 
 let create pat =
-  let () =
-    match (Hashtbl.find the_pat_cache pat) with
-    | Some _ -> ()
-    | None ->
-      let re_string = to_anchored_re_string pat in
-      (*Message.message "Pattern.create: %s -> %s" (to_string pat) re_string;*)
-      Hashtbl.add_exn the_pat_cache ~key:pat ~data:(Regexp.regexp re_string)
-  in
+  if not (Hashtbl.mem the_pat_cache pat) then begin
+    let re_string = to_anchored_re_string pat in
+    Hashtbl.add_exn the_pat_cache ~key:pat ~data:(Regexp.regexp re_string)
+  end;
   pat
 
 let create_from_literal_string x = create (Literal x)
@@ -62,12 +58,8 @@ let create_from_regexp_string r = create (Regexp r)
 let t_of_sexp sexp = create (t_of_sexp sexp)
 
 let to_regexp t =
-  match (Hashtbl.find the_pat_cache t) with
-  | Some regexp -> regexp
-  | None -> assert false
+  match Hashtbl.find_exn the_pat_cache t with
+  | regexp -> regexp
+  | exception Not_found -> assert false
 
-let matches t string =
-  let res = Regexp.pmatch ~rex:(to_regexp t) string in
-  (*Message.message "matches: %s ~ %s -> %s" (to_string t) string
-    (if res then "YES" else "no");*)
-  res
+let matches t string = Regexp.pmatch ~rex:(to_regexp t) string

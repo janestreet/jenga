@@ -1,8 +1,7 @@
-
-(* Jenga API - Monadic Style.
-   This signature provides the interface between the `user-code' which
-   describes the build rules etc for a specific instatnce of jenga,
-   and the core jenga build system. *)
+(** Jenga API - Monadic Style.
+    This signature provides the interface between the `user-code' which describes the
+    build rules etc for a specific instance of jenga, and the core jenga build system.
+    What is ultimately the main entry point of this module is [Env], at the bottom. *)
 
 open! Core.Std
 open! Async.Std
@@ -92,19 +91,53 @@ module Glob : sig
   val create_from_path : kinds:Fs.Kind.t list option -> Path.t -> t
 end
 
+(** An [Alias] is the name of a symbolic target.
+    [Alias.create ~dir:"a" "foo"] is what you get on the command line by writing [jenga
+    a/.foo].
+    When no arguments are given at the command line, jenga interprets it as building
+    the alias "DEFAULT" in the current directory. *)
 module Alias : sig
   type t [@@deriving sexp]
   val create : dir: Path.t -> string -> t
 end
 
+(** Sandboxing in the act of running a compilation into a separate directory, for the
+    purpose of enforcing that dependencies and targets be properly specified (instead
+    of trusting the user to get them right). *)
+module Sandbox : sig
+
+  type t [@@deriving sexp]
+
+  (** Do not sandbox an action. *)
+  val none : t
+
+  (** Sandbox an action by hard-linking dependencies. *)
+  val hardlink : t
+
+  (** Sandbox an action by copying dependencies. *)
+  val copy : t
+
+  (** Sandbox an action by hard-linking dependencies. Ignore misspecified targets. *)
+  val hardlink_ignore_targets : t
+
+  (** Sandbox an action by copying dependencies. Ignore misspecified targets. *)
+  val copy_ignore_targets : t
+
+  (** Equivalent to [none] unless the --sandbox-actions command-line flag is active, in
+      which case it is equivalent to [hardlink]. *)
+  val default : t
+
+end
+
 module Action : sig
   type t [@@deriving sexp_of]
-  (** [process ?ignore_stderr ~dir ~prog ~args] - constructs an action, that when run
+  (** [process ?ignore_stderr ~dir ~prog ~args] constructs an action, that when run
       causes a new process to be created to run [prog], passing [args], in [dir].
       The process fails if its exit code is not zero, or if print things on stderr
-      (unless ~ignore_stderr:true is passed).*)
+      (unless ~ignore_stderr:true is passed). The process is not sandboxed by default. *)
   val process
     : ?ignore_stderr:bool
+    -> ?sandbox:Sandbox.t
     -> dir:Path.t
     -> prog:string
     -> args:string list
@@ -115,28 +148,28 @@ end
 
 module Shell : sig
 
-  (* [Shell.escape arg] quotes a string (if necessary) to avoid interpretation of
-     characters which are special to the shell.
+  (** [Shell.escape arg] quotes a string (if necessary) to avoid interpretation of
+      characters which are special to the shell.
 
-     [Shell.escape] is used internally by jenga when displaying the "+" output lines,
+      [Shell.escape] is used internally by jenga when displaying the "+" output lines,
      which show what commands are run; seen by the user when running [jenga -verbose] or
-     if the command results in a non-zero exit code. It is exposed in the API since it is
-     useful when constructing actions such as: [Action.progress ~dir ~prog:"bash" ~args],
-     which should ensure [args] are suitably quoted.
+      if the command results in a non-zero exit code. It is exposed in the API since it is
+      useful when constructing actions such as: [Action.progress ~dir ~prog:"bash" ~args],
+      which should ensure [args] are suitably quoted.
 
-     Examples:
-     (1) escape "hello" -> "hello"
-     (2) escape "foo bar" -> "'foo bar'"
-     (3) escape "foo'bar" -> "'foo'\\''bar'"
+      Examples:
+      (1) escape "hello" -> "hello"
+      (2) escape "foo bar" -> "'foo bar'"
+      (3) escape "foo'bar" -> "'foo'\\''bar'"
 
-     Note the [arg] and result strings in the above examples are expressed using ocaml
-     string literal syntax; in particular, there is only single backslash in the result of
-     example 3.
+      Note the [arg] and result strings in the above examples are expressed using ocaml
+      string literal syntax; in particular, there is only single backslash in the result of
+      example 3.
 
-     Example (1): No quoting is necessary.  Example (2): simple single quoting is used,
-     since [arg] contains a space, which is special to the shell.  Example (3): the result
-     is single quoted; the embedded single quote is handled by: un-quoting, quoting using
-     a bashslash, then re-quoting.
+      Example (1): No quoting is necessary.  Example (2): simple single quoting is used,
+      since [arg] contains a space, which is special to the shell.  Example (3): the result
+      is single quoted; the embedded single quote is handled by: un-quoting, quoting using
+      a bashslash, then re-quoting.
   *)
   val escape : string -> string
 
@@ -171,7 +204,30 @@ module Var : sig
 
 end
 
-module Dep : sig (* The jenga monad *)
+(** The jenga monad. It has two pieces to it:
+    - an implicit accumulator of dependencies, that [Dep.path] and all the functions that
+      return a [unit t] add to. The final value of this accumulator is the dependencies of
+      the action in [Rule.create] and [Dep.action], and what gets built in the case of
+      [Rule.alias]
+    - a monad and other usual combinators, which allows to write computation that ask
+      jenga to build something and wait for the result (and to rebuild if that input
+      changes). Because of this, functions should not be side-effecting.
+
+   To make clear the distinction between the two, take:
+
+   val path : Path.t -> unit t
+   val contents : Path.t -> string t
+
+   [path] simply says that the surrounding [Rule.create] (for instance)
+   will read the contents of that file.
+   [contents] allows to create different action depending on the contents
+   of the file.
+
+   It's highly recommended to use parallel combinators like [both] and [all]
+   in preference to [bind]. Using [bind] is inherently sequential, whereas
+   usually work in a build system can be done in parallel.
+*)
+module Dep : sig
 
   type 'a t [@@deriving sexp_of]
   val return : 'a -> 'a t
@@ -197,19 +253,19 @@ module Dep : sig (* The jenga monad *)
       an alias, as the alias will allow to share the computation as well. *)
   val group_dependencies : 'a t -> 'a t
 
-  (* [source_if_it_exists] Dont treat path as a goal (i.e. don't force it to be built)
-     Just depend on its contents, if it exists. It's ok if it doesn't exist. *)
+  (** [source_if_it_exists] Dont treat path as a goal (i.e. don't force it to be built)
+      Just depend on its contents, if it exists. It's ok if it doesn't exist. *)
   val source_if_it_exists : Path.t -> unit t
 
   val contents : Path.t -> string t
   val contents_cutoff : Path.t -> string t
 
-  (* The semantics of [glob_listing] and [glob_change] includes files which exist on the
-     file-system AND files which are buildable by some jenga rule *)
+  (** The semantics of [glob_listing] and [glob_change] includes files which exist on the
+      file-system AND files which are buildable by some jenga rule *)
   val glob_listing : Glob.t -> Path.t list t
   val glob_change : Glob.t -> unit t
 
-  (* Versions with old semantics: only includes files on the file-system. *)
+  (** Versions with old semantics: only includes files on the file-system. *)
   val fs_glob_listing : Glob.t -> Path.t list t
   val fs_glob_change : Glob.t -> unit t
 
@@ -228,12 +284,20 @@ module Dep : sig (* The jenga monad *)
 
   val buildable_targets : dir:Path.t -> Path.t list t
 
-  (* [source_files ~dir]
-     files_on_filesystem ~dir \ buildable_targets ~dir
-  *)
+  (** [source_files ~dir] is files_on_filesystem ~dir \ buildable_targets ~dir *)
   val source_files : dir:Path.t -> Path.t list t
 
 end
+
+(** [Reflected] and [Reflect] are the two parts of the reflection api of jenga, ie the api
+    that allows the jenga rules to ask about the structure of the dependency graph.
+    There have been two uses of this api so far:
+    - generating the input to an other build system, for bootstrapping purpose.
+      Given a target, you can ask what action builds it and what dependencies it has,
+      and write a makefile rule that does that.
+    - checking the sanity of dependencies. If you have systems that can only use
+      vetted libraries, this can be used to get all the dependencies of such a system,
+      and check that they are only vetted libraries. *)
 
 module Reflected : sig
   module Action : sig
@@ -242,8 +306,8 @@ module Reflected : sig
     val to_sh_ignoring_dir : t -> string
     val string_for_one_line_make_recipe_ignoring_dir : t -> string
   end
-  (* simple make-style rule triple, named [Trip.t] to distinguish from
-     Jenga's more powerful rules [Rule.t] below. *)
+  (** simple make-style rule triple, named [Trip.t] to distinguish from
+      Jenga's more powerful rules [Rule.t] below. *)
   module Trip : sig
     type t = {
       targets: Path.t list;
@@ -269,14 +333,49 @@ module Reflect : sig
 
 end
 
+(** A rule specifies how to build a [Goal.t]. There is no nothing of scoping or
+    permissions, so all rules can be referred to at the command line, and by any [Dep.t].
+*)
 module Rule : sig
   type t [@@deriving sexp_of]
+
+  (** [create ~targets action_dep] specifies that the given static list of targets
+      can be built by the action in the dep, and that action depends on the implicit
+      dependencies (see [Dep]).
+      A given file can only be the target of a single rule. A rule can only declare
+      targets in the directories of the scheme that declares it (required so schemes
+      can be evaluated lazily).
+      The action must not depend on the filesystem other than how the given dependencies,
+      and must create all the specified targets. These properties are assumed, or checked
+      when using [Sandbox].
+      The dep itself can do arbitrary computation like reading generated files, but these
+      do not become dependencies of running the action, only dependencies of figuring out
+      what the action is.
+      If you need a dynamic set of targets, you have two choices:
+      - use [Scheme.dep] before building this rule (which is not a panacea, as it means
+        building any alias in that directory will run that dep, so that's only reasonable
+        for cheap computations)
+      - create a tar ball instead of many targets
+      If some of these targets are symlink, then the rule must depend on the target
+      of the symlink. *)
   val create : targets:Path.t list -> Action.t Dep.t -> t
+
+  (** [alias a] means that requesting the build of the alias [a] must executing all the
+      corresponding. This is not like phony targets in make, as these computations are
+      cached and only run as needed.
+      Same as for rules, the directory of the alias must be the directory on the scheme
+      that contains the alias.
+      Unlike rules, multiple definitions can be given for an alias. Building the alias
+      then builds all the definitions. *)
   val alias : Alias.t -> unit Dep.t list -> t
   val default : dir:Path.t -> unit Dep.t list -> t
   val simple : targets:Path.t list -> deps:unit Dep.t list -> action:Action.t -> t
 end
 
+(** A scheme describes, for a given directory, what rules are available in that
+    directory. A scheme can include computation (in the form of [Scheme.dep]) but
+    there are limits to what can be done, because jenga will reject anything that
+    looks like a dependency cycle. *)
 module Scheme : sig
   type t [@@deriving sexp_of]
   val empty : t
@@ -300,7 +399,9 @@ end
 module Env : sig
   type t = Env.t
   val create :
+    (** Env variable for the execution of actions, not for jenga itself. *)
     ?putenv:(string * string option) list ->
+    (** Same as the previous option, for the PATH. *)
     ?command_lookup_path:[`Replace of string list | `Extend of string list] ->
     ?build_begin : (unit -> unit Deferred.t) ->
     ?build_end : (unit -> unit Deferred.t) ->
@@ -335,24 +436,25 @@ module Env : sig
     ?delete_eagerly:((non_target:Path.t -> bool) Dep.t) ->
     ?delete_if_depended_upon:((non_target:Path.t -> bool) Dep.t) ->
 
-    (* [create f] - Mandatory argument [f] specifies, per-directory, the rule-scheme. *)
+    (** Specifies for a given directory, its rule-scheme, ie a specification of what rules
+        are available in that directory. *)
     (dir:Path.t -> Scheme.t) ->
     t
 
 end
 
-(* The jenga API intentionally shadows printf, so that if opened in jenga/root.ml the
-   default behaviour is for [printf] to print via jenga's message system, and not
-   directly to stdout. Sending to stdout makes no sense for a dameonized jenga server.
+(** The jenga API intentionally shadows printf, so that if opened in jenga/root.ml the
+    default behaviour is for [printf] to print via jenga's message system, and not
+    directly to stdout. Sending to stdout makes no sense for a dameonized jenga server.
 
-   [printf] sends messages via jenga's own message system, (i.e. not directly to stdout).
-   Messages are logged, transmitted to jenga [trace] clients, and displayed to stdout if
-   the jenga server is not running as a daemon.
+    [printf] sends messages via jenga's own message system, (i.e. not directly to stdout).
+    Messages are logged, transmitted to jenga [trace] clients, and displayed to stdout if
+    the jenga server is not running as a daemon.
 
-   [printf_verbose] is like [printf], except the message are tagged as `verbose', so
-   allowing non-verbose clients to mask the message
+    [printf_verbose] is like [printf], except the message are tagged as `verbose', so
+    allowing non-verbose clients to mask the message
 
-   There is no need to append a \n to the string passed to [printf] or [printf_verbose].
+    There is no need to append a \n to the string passed to [printf] or [printf_verbose].
 *)
 
 val printf : ('a, unit, string, unit) format4 -> 'a

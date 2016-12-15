@@ -1,3 +1,11 @@
+(** This module is used to track performance.
+    [Counter] are used to keep track of events such as "ran an action", and [Memory] keeps
+    track of allocation rates, and global properties like the amount of live memory.
+    jenga writes the collected information to .jenga/metrics everytime jenga is done
+    building (and then quits, or waits for filesystem changes).
+    [../benchmarking/bench.exe] can be used to build and gather these metrics files,
+    and compare various versions of jenga or the jenga rules against one another. *)
+
 open! Core.Std
 
 module Unit : sig

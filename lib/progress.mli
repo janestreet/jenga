@@ -1,3 +1,11 @@
+(** This module keeps tracks of different things for progress reporting:
+    - the amount of work performed, in the form on the counters below
+    - for every goal, whether it needs to be built/is built/is in error (along with the
+      error)
+    This information is what is displayed periodically in the output of
+    [jenga --progress], and the second kind of information is available in a typed
+    way to rpc clients through the [Reportable.t].
+*)
 
 open! Core.Std
 open! Async.Std

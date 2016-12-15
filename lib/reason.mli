@@ -1,3 +1,5 @@
+(** A type representing the various errors that can happen in jenga. Compared to simply
+    using [Error.t], we have control over the display. *)
 
 open! Core.Std
 

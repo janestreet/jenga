@@ -6,7 +6,7 @@ open Async.Std
 module Digest = Db.Digest
 
 module Version = struct
-  let current = "4"
+  let current = "5"
 end
 
 let jenga_show_persist =

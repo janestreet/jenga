@@ -1,3 +1,6 @@
+(** [S] is the interface that a jengaroot must provide to jenga. This interface is not
+    used when the rules are statically linked in (see build.mli). *)
+
 open Core.Std
 open Async.Std
 open! Int.Replace_polymorphic_compare

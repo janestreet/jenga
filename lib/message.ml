@@ -52,7 +52,7 @@ module Event = struct
   type t =
   | Tagged_message of Tag.t * string
   | Transient of string
-  | Load_jenga_root of Path.t * string list
+  | Load_jenga_root of Path.t
   | Load_jenga_root_done of Path.t * Time.Span.t
   | Errors_for_omake_server of Path.t * Err.t list
   | Job_started of Job_summary.Start.t
@@ -122,8 +122,8 @@ let transient fmt =
 let clear_transient () = last_transient_message := None
 
 
-let load_jenga_root path ~modules =
-  T.dispatch the_log (Event.Load_jenga_root (path,modules))
+let load_jenga_root path =
+  T.dispatch the_log (Event.Load_jenga_root path)
 
 let load_jenga_root_done path span =
   T.dispatch the_log (Event.Load_jenga_root_done (path,span))
@@ -131,8 +131,8 @@ let load_jenga_root_done path span =
 let errors_for_omake_server path errs =
   T.dispatch the_log (Event.Errors_for_omake_server (path,errs))
 
-let job_started ~need ~where ~prog ~args =
-  let started = Job_summary.Start.create ~need ~where ~prog ~args in
+let job_started ~need ~where ~prog ~args ~sandboxed =
+  let started = Job_summary.Start.create ~need ~where ~prog ~args ~sandboxed in
   let event = Event.Job_started started in
   T.dispatch the_log event;
   started
@@ -235,18 +235,13 @@ let omake_style_logger config event =
   (* progress style message - wll be overwritten by next transient or normal message *)
   | Event.Transient s -> put_trans s
 
-  | Event.Load_jenga_root (path,modules) ->
+  | Event.Load_jenga_root path ->
     if verbose then (
       let where = Path.to_string (Path.dirname path) in
       let need = Path.basename path in
       put (sprintf "- build %s %s" where need);
     );
-    let modules_string =
-      match modules with
-      | [] -> ""
-      | _ -> sprintf " (%s)" (String.concat ~sep:" " modules)
-    in
-    jput (sprintf "reading %s%s" (Path.to_string path) modules_string)
+    jput (sprintf !"reading %{Path}" path)
 
   | Event.Load_jenga_root_done (path,duration) ->
     jput (sprintf "finished reading %s (%s)"

@@ -96,19 +96,24 @@ let run exit_on_finish ~root_dir style =
   in
   loop ~wait:false
 
+open Command.Let_syntax
+let return = Async.Std.return
+
 let command =
-  Command.async_or_error
-    Command.Spec.(
-      empty
-      +> flag "exit-on-finish" no_arg
-           ~doc:" exit with appropriate code when the compile is finished"
-      +> flag "snapshot" no_arg
-           ~doc:" display only a single snapshot of jenga's state"
-      +> flag "progress-fraction" no_arg
-           ~doc:" display only the built/total fraction")
+  Command.async_or_error'
     ~summary:"monitor jenga running in the current repo."
     ~readme:Progress.readme
-    (fun exit_on_finish snapshot progress_fraction () ->
+    [%map_open
+      let exit_on_finish =
+        flag "exit-on-finish" no_arg
+          ~doc:" exit with appropriate code when the compile is finished"
+      and snapshot =
+        flag "snapshot" no_arg
+          ~doc:" display only a single snapshot of jenga's state"
+      and progress_fraction =
+        flag "progress-fraction" no_arg
+          ~doc:" display only the built/total fraction"
+      in fun () ->
        match Special_paths.discover_root () with
        | Error e -> return (Error e)
        | Ok root_dir ->
@@ -117,4 +122,4 @@ let command =
          (if snapshot then run_once ~root_dir style
           else run exit_on_finish ~root_dir style)
          >>= Shutdown.exit
-    )
+    ]

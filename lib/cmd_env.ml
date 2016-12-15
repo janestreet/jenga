@@ -1,6 +1,7 @@
 open Core.Std
 open Async.Std
 open Command.Let_syntax
+let return = Async.Std.return
 
 let with_menu_connection ~f =
   return (Special_paths.discover_root ()) >>=? fun root_dir ->

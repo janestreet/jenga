@@ -1,6 +1,5 @@
 
 open Core.Std
-open Async.Std
 open! Int.Replace_polymorphic_compare
 
 module Path = Path
@@ -8,10 +7,20 @@ module Kind = Fs.Kind
 module Glob = Fs.Glob
 module Alias = Alias
 
+module Sandbox = struct
+  type t = Sandbox.kind option [@@deriving sexp]
+  let none = Some Sandbox.No_sandbox
+  let hardlink = Some Sandbox.Hardlink
+  let hardlink_ignore_targets = Some Sandbox.Hardlink_ignore_targets
+  let copy = Some Sandbox.Copy
+  let copy_ignore_targets = Some Sandbox.Copy_ignore_targets
+  let default = None
+end
+
 module Action = struct
   include Action
-  let process ?(ignore_stderr = false) ~dir ~prog ~args () =
-    process ~dir ~prog ~args ~ignore_stderr
+  let process ?(ignore_stderr = false) ?(sandbox = Sandbox.default) ~dir ~prog ~args () =
+    process ~dir ~prog ~args ~sandbox ~ignore_stderr
   ;;
 end
 
@@ -35,19 +44,8 @@ end
 let printf = Message.printf
 let printf_verbose = Message.printf_verbose
 
-exception Action_run_now_failed
-
-let run_action_now_output ~output action =
-  let job = Action.job action in
-  let need = "run_now" in
-  let putenv = [] in
-  Job.run job ~need ~putenv ~output >>= function
-  | Error (`command_failed _) -> raise (Action_run_now_failed)
-  | Error (`other_error exn)   -> raise exn
-  | Ok x                       -> Deferred.return x
-
 let run_action_now =
-  run_action_now_output ~output:Job.Output.ignore
+  Action.run_now ~output:Action.Output.ignore
 
 let run_action_now_stdout =
-  run_action_now_output ~output:Job.Output.stdout
+  Action.run_now ~output:Action.Output.stdout

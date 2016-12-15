@@ -1,9 +1,12 @@
 
 open! Core.Std
 
-(* [Alias.t] is a build-goal which is not associated with any generated files.  The user
-   indicates an alias when running jenga by a leading period.  So for example ".DEFAULT"
-   or ".runtest". Aliases are directory relative. *)
+(** [Alias.t] is a build-goal which is not associated with any generated files. It is used
+    as a way of asking jenga to do an arbitrary [Dep] computation, for instance build a
+    set of files ("all the libraries in the tree" for instance) and run actions that
+    produce no target, like tests.
+    The user indicates an alias on the command line with a leading period.  So for example
+    ".DEFAULT" or ".runtest". Aliases are directory relative. *)
 
 type t [@@deriving hash, sexp, bin_io]
 include Comparable with type t := t

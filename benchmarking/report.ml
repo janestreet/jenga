@@ -148,53 +148,57 @@ let display (inputs : t list) ~show_dispersion =
 
 open Command.Let_syntax
 
-let () =
-  Command.run
-    (Command.basic'
-       ~summary:" report bench result by analysing .jenga/metrics files"
-       ~readme:(fun () ->
-         "Takes input files with lines of the form VERSION%BENCH%METRICS, where\n\
-          - VERSION is the version of jenga you're testing (rev of jenga + rev of \
-            jengaroot for instance)\n\
-          - BENCH is what you're benching (\"core_kernel from scratch\" for instance)\n\
-          - METRICS is the line from .jenga/metrics resulting from building BENCH at \
-            VERSION. If several lines are given for the same VERSION/BENCH, they are \
-            consolidated by averaging them.\n\n\
-           The report shows the metrics for all the versions relative to the \
-           first version in the file (ie the first version is expected to be the \
-           baseline).\n\n\
-           Background color represents variance:\n\
-           - no background color: little variance\n\
-           - yellow: slightly high variance\n\
-           - red: really high variance\n\
-           - purple: so much variance the data is nonsensical\n\n\
-           There is no accompanying executable to create input files matching this \
-           format.\
-       ")
-       [%map_open
-         let metrics_files = anon (sequence ("METRICS" %: file))
-         and show_dispersion =
-           flag "-dispersion" no_arg ~doc: " show the average relative distance between the values and their mean"
-         in fun () ->
-           let lines =
-             match metrics_files with
-             | [] -> String.split_lines (In_channel.input_all In_channel.stdin)
-             | _ :: _ as l ->
-               List.concat_map l ~f:(fun file ->
-                 String.split_lines (In_channel.read_all file))
-           in
-           let inputs =
-             List.map lines ~f:(fun line ->
-               match String.split line ~on:'%' with
-               | version :: bench :: rest ->
-                 let metrics =
-                   Sexp.of_string_conv_exn (String.concat rest ~sep:"%")
-                     [%of_sexp: Jenga_lib.Metrics.Disk_format.t]
-                 in
-                 { version; bench; metrics }
-               | _ -> failwithf "parse error on line: %s" line ())
-           in
-           display ~show_dispersion inputs
-       ]
-    )
+let command =
+  Command.basic'
+    ~summary:" report bench result by analysing .jenga/metrics files"
+    ~readme:(fun () ->
+      "Takes input files with lines of the form VERSION%BENCH%METRICS, where\n\
+       - VERSION is the version of jenga you're testing (rev of jenga + rev of \
+         jengaroot for instance)\n\
+       - BENCH is what you're benching (\"core_kernel from scratch\" for instance)\n\
+       - METRICS is the line from .jenga/metrics resulting from building BENCH at \
+         VERSION. If several lines are given for the same VERSION/BENCH, they are \
+         consolidated by averaging them.\n\n\
+        The report shows the metrics for all the versions relative to the \
+        first version in the file (ie the first version is expected to be the \
+        baseline).\n\n\
+        Background color represents variance:\n\
+        - no background color: little variance\n\
+        - yellow: slightly high variance\n\
+        - red: really high variance\n\
+        - purple: so much variance the data is nonsensical\n\n\
+        There is no accompanying executable to create input files matching this \
+        format.\
+    ")
+    [%map_open
+      let metrics_files = anon (sequence ("METRICS" %: file))
+      and show_dispersion =
+        flag "-dispersion" no_arg ~doc: " show the average relative distance between the values and their mean"
+      in fun () ->
+        let lines =
+          match metrics_files with
+          | [] -> String.split_lines (In_channel.input_all In_channel.stdin)
+          | _ :: _ as l ->
+            List.concat_map l ~f:(fun file ->
+              String.split_lines (In_channel.read_all file))
+        in
+        let inputs =
+          List.filter_mapi lines ~f:(fun line_number line ->
+            match String.split line ~on:'%' with
+            | version :: bench :: rest ->
+              begin
+                match
+                  Sexp.of_string_conv_exn (String.concat rest ~sep:"%")
+                  [%of_sexp: Jenga_lib.Metrics.Disk_format.t]
+                with
+                | exception e ->
+                  printf !"Ignoring line %d due to parse error:\n%{Sexp#hum}\n"
+                    line_number [%sexp ~~(line : string), (e : exn)];
+                  None
+                | metrics -> Some { version; bench; metrics }
+              end
+            | _ -> failwithf "parse error on line: %s" line ())
+        in
+        display ~show_dispersion inputs
+    ]
 ;;

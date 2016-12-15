@@ -1,6 +1,0 @@
-(library
- ((name oUnit) (wrapped false)
-  (flags (:standard \ -strict-sequence))
-  (extra_disabled_warnings (32))
-  (modules (list (oUnit)))
-  (preprocess (((pps ()) All)))))

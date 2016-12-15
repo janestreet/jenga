@@ -807,7 +807,7 @@ module Glob = struct
         dir : Path.t;
         pat : Pattern.t;
         kinds : Kind.t list option;
-      } [@@deriving sexp, bin_io, hash, compare]
+      } [@@deriving sexp, hash, compare]
     end
     include T
     include Hashable.Make(T)

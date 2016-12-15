@@ -1,3 +1,7 @@
+(** This module prevents running multiple jengas in the same directory, as that would
+    not work.
+    It also writes to disk where the jenga server is listening, which can be queried
+    by anything that needs to find the server. *)
 
 open! Core.Std
 open! Async.Std

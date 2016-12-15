@@ -1,5 +1,5 @@
 (executables
- ((names (report))
+ ((names (bench))
   (libraries (core async jenga_lib textutils))
   (modules (:standard \ analyze))))
 

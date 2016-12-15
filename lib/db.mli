@@ -1,35 +1,31 @@
+(** [Db] contains types which will be stored persistently, so jenga doesn't need to rerun
+    all the actions on restart.
+    This is different from [make] which does not need persistent state, because instead
+    of storing the knowledge that dependencies+action produced targets, it uses timestamps
+    dependencies > timestamps of targets to claim that targets need to be recreated, and
+    it doesn't even make record the dependency on the action.
+    Most types do not expose bin_ios because there is some sharing in the serialized
+    format across values (see With_index), and so they cannot be serialized
+    independently. *)
 
 open! Core.Std
 
-(* [Db] contains types which will be stored persistently. *)
-
-module Job : sig
-  type t
-  [@@deriving sexp_of, hash, compare]
-  include Hashable_binable with type t := t
-  val create : dir:Path.t -> prog:string -> args:string list -> ignore_stderr:bool -> t
-  val dir : t -> Path.t
-  val prog : t -> string
-  val args : t -> string list
-  val ignore_stderr : t -> bool
-end
-
 module Kind : sig
   type t = [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
-  [@@deriving sexp, bin_io, hash, compare]
+  [@@deriving sexp, hash, compare]
   val to_string : t -> string
 end
 
 module Mtime : sig
   type t
-  [@@deriving sexp_of, bin_io, hash, compare]
+  [@@deriving sexp_of, hash, compare]
   val of_float : float -> t
   val equal : t -> t -> bool
 end
 
-module Stats : sig  (* reduced stat info *)
+module Stats : sig  (** reduced stat info *)
   type t
-  [@@deriving sexp, bin_io, hash, compare]
+  [@@deriving sexp, hash, compare]
   val of_unix_stats : Async.Std.Unix.Stats.t -> t
   val equal : t -> t -> bool
   val kind : t -> Kind.t
@@ -38,7 +34,7 @@ module Stats : sig  (* reduced stat info *)
   val ino : t -> int
 end
 
-module Digest : sig  (* proxy for the contents of a file in the file-system *)
+module Digest : sig  (** proxy for the contents of a file in the file-system *)
 
   type t
   [@@deriving sexp_of, hash, compare]
@@ -52,7 +48,7 @@ module Digest : sig  (* proxy for the contents of a file in the file-system *)
 
 end
 
-module Listing : sig (* result of globbing *)
+module Listing : sig (** result of globbing *)
   type t [@@deriving sexp, compare]
   module Elem : sig
     type t
@@ -63,7 +59,7 @@ module Listing : sig (* result of globbing *)
   val equal : t -> t -> bool
   val paths : t -> Path.Set.t
   module Restriction : sig
-    type t [@@deriving sexp_of, bin_io]
+    type t [@@deriving sexp_of]
     val create : kinds:Kind.t list option -> Pattern.t -> t
     val to_string : t -> string
     val pattern : t -> Pattern.t
@@ -82,7 +78,7 @@ module Glob : sig
   val to_string : t -> string
 end
 
-module Pm_key : sig  (* Pm_key - path or glob *)
+module Pm_key : sig  (** Pm_key - path or glob *)
   type t [@@deriving sexp_of, hash, compare]
   include Comparable.S_plain with type t := t
   val equal : t -> t -> bool
@@ -110,8 +106,8 @@ module Proxy_map : sig
   val of_alist : (Pm_key.t * Proxy.t) list -> (t, (Pm_key.t * Proxy.t list) list) Result.t
   val equal_or_witness : t -> t -> (unit, Pm_key.t list) Result.t
 
-  (* [Error] means the proxy map is inconsistent. However, some inconsistent proxy maps
-     are [Ok]. *)
+  (** [Error] means the proxy map is inconsistent. However, some inconsistent proxy maps
+      are [Ok]. *)
   val merge : t list -> (t, (Pm_key.t * Proxy.t list) list) Result.t
 
   (** The size of the dependencies, excluding the shared parts. Used to build profiling
@@ -128,9 +124,9 @@ module Proxy_map : sig
   *)
   val filesystem_assumptions
     :  t
-    -> [> `Dirs of Path.Hash_set.t ]
-       * [> `Files of Path.Hash_set.t ]
-       * [> `Arbitrary_files of Path.Hash_set.t ]
+    -> [> `Dirs of Path.Rel.Hash_set.t ]
+       * [> `Files of Path.Rel.Hash_set.t ]
+       * [> `Arbitrary_files of Path.Rel.Hash_set.t ]
 
   module Group : sig
     type t
@@ -152,11 +148,52 @@ module Proxy_map : sig
   val to_paths_for_mtimes_check : t -> Path.t list * Group.t list
 end
 
+module Sandbox_kind : sig
+ type t =
+   | No_sandbox
+   | Hardlink
+   | Copy
+   | Hardlink_ignore_targets
+   | Copy_ignore_targets
+ [@@deriving sexp_of, compare]
+end
+
+module Save_proxy : sig
+  type t
+  [@@deriving sexp_of, compare]
+  val create :
+    contents:string -> target:Path.t -> chmod_x:bool -> t
+  val contents : t -> string
+  val target : t -> Path.t
+  val chmod_x : t -> bool
+end
+
+module Process_proxy : sig
+  type t
+  [@@deriving sexp_of, compare]
+  val create :
+    dir:Path.t -> prog:string -> args:string list ->
+    ignore_stderr:bool -> sandbox:Sandbox_kind.t -> t
+  val dir : t -> Path.t
+  val prog : t -> string
+  val args : t -> string list
+  val ignore_stderr : t -> bool
+  val sandbox : t -> Sandbox_kind.t
+end
+
+module Action_proxy : sig
+  type t =
+    | Process of Process_proxy.t
+    | Save of Save_proxy.t
+  [@@deriving sexp_of, compare]
+  include Hashable_binable with type t := t
+end
+
 module Rule_proxy : sig
   type t = {
     targets : Proxy_map.t;
     deps : Proxy_map.t;
-    action : Job.t
+    action : Action_proxy.t
   } [@@deriving hash, compare, fields]
 end
 
@@ -174,7 +211,7 @@ val create : unit -> t
 val digest_cache : t -> (Stats.t * Digest.t) Path.Table.t
 val generated : t -> Path.Set.t Gen_key.Table.t
 val ruled : t -> Rule_proxy.t Path.Rel.Table.t (* actions run for target-rules *)
-val actioned : t -> Output_proxy.t Job.Table.t (* actions run for their stdout *)
+val actioned : t -> Output_proxy.t Action_proxy.Table.t (* actions run for their stdout *)
 
 module With_index : sig
   type outer_t

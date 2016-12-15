@@ -1,3 +1,6 @@
+(** [Env.t] is the value that contains all the configuration related to build rules
+    that a user of the jenga library can provide to jenga.
+    See api.mli for documentation of the various fields. *)
 
 open! Core.Std
 open! Async.Std

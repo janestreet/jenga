@@ -5,24 +5,6 @@ module Unix = Async.Std.Unix
 
 let equal_using_compare compare = fun x1 x2 -> 0 = compare x1 x2
 
-module Job = struct
-
-  module T = struct
-    type t = {
-      dir : Path.t;
-      prog : string;
-      args : string list;
-      ignore_stderr : bool;
-    }
-[@@deriving sexp, bin_io, hash, compare, fields]
-  end
-  include T
-  include Hashable.Make_binable(T)
-
-  let create ~dir ~prog ~args ~ignore_stderr = { dir ; prog; args; ignore_stderr; }
-
-end
-
 module Kind = struct
   type t =
   [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
@@ -490,12 +472,13 @@ module Proxy_map = struct
   ;;
 
   let filesystem_assumptions (t : t) =
-    let dirs = Path.Hash_set.create () in
-    let files = Path.Hash_set.create () in
-    let arbitrary_files = Path.Hash_set.create () in
+    let dirs = Path.Rel.Hash_set.create () in
+    let files = Path.Rel.Hash_set.create () in
+    let arbitrary_files = Path.Rel.Hash_set.create () in
     let add_if_relative set path =
-      if Path.is_absolute path then ()
-      else Hash_set.add set path
+      match Path.case path with
+      | `absolute _ -> ()
+      | `relative path -> Hash_set.add set path
     in
     iter_bindings t ~f:(fun ~key ~data ->
       match key with
@@ -555,12 +538,65 @@ module Proxy_map = struct
 
 end
 
+module Sandbox_kind = struct
+
+ type t =
+   | No_sandbox
+   | Hardlink
+   | Copy
+   | Hardlink_ignore_targets
+   | Copy_ignore_targets
+ [@@deriving hash, sexp, bin_io, compare]
+
+end
+
+module Process_proxy = struct
+
+  type t = {
+    dir : Path.t;
+    prog : string;
+    args : string list;
+    ignore_stderr : bool;
+    sandbox : Sandbox_kind.t;
+  } [@@deriving hash, sexp, bin_io, compare, fields]
+
+  let create ~dir ~prog ~args ~ignore_stderr ~sandbox =
+    { dir ; prog; args; ignore_stderr; sandbox }
+
+end
+
+module Save_proxy = struct
+
+  type t = {
+    contents : string;
+    target : Path.t;
+    chmod_x : bool;
+  } [@@deriving hash, sexp, bin_io, compare, fields]
+
+  let create ~contents ~target ~chmod_x =
+    { contents; target; chmod_x }
+
+end
+
+module Action_proxy = struct
+
+  module T = struct
+    type t =
+      | Process of Process_proxy.t
+      | Save of Save_proxy.t
+    [@@deriving hash, sexp, bin_io, compare]
+  end
+  include T
+  include Hashable.Make_binable(T)
+
+end
+
 module Rule_proxy = struct
 
   type t = {
     targets : Proxy_map.t;
     deps : Proxy_map.t;
-    action : Job.t
+    action : Action_proxy.t
   } [@@deriving hash, compare, fields]
 
   let build_index acc { targets; deps; action = _ } =
@@ -573,7 +609,7 @@ module Rule_proxy = struct
     type nonrec t = t = {
       targets : Proxy_map.t;
       deps : Proxy_map.t;
-      action : Job.t
+      action : Action_proxy.t
     } [@@deriving bin_io, sexp_of]
   end
 
@@ -603,7 +639,7 @@ module T = struct
     digest_cache : (Stats.t * Digest.t) Path.Table.t;
     generated : Path.Set.t Gen_key.Table.t;
     ruled : Rule_proxy.t Path.Rel.Table.t;
-    actioned : Output_proxy.t Job.Table.t;
+    actioned : Output_proxy.t Action_proxy.Table.t;
   } [@@deriving fields]
 end
 include T
@@ -620,7 +656,7 @@ module T_with_serialization(X : Proxy_map.Serialization_param) = struct
     digest_cache : (Stats.t * Digest.t) Path.Table.t;
     generated : Path.Set.t Gen_key.Table.t;
     ruled : Rule_proxy.t Path.Rel.Table.t;
-    actioned : Output_proxy.t Job.Table.t;
+    actioned : Output_proxy.t Action_proxy.Table.t;
   } [@@deriving sexp_of, bin_io]
 end
 
@@ -628,7 +664,7 @@ let create () = {
   digest_cache = Path.Table.create ();
   generated = Gen_key.Table.create();
   ruled = Path.Rel.Table.create();
-  actioned = Job.Table.create();
+  actioned = Action_proxy.Table.create();
 }
 
 module With_index = struct

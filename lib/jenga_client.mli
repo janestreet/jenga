@@ -1,3 +1,10 @@
+(** This module is the normal way to write ocaml code that talks to the jenga server. See
+    [rpc_intf.ml] for what kind of information can be exchanged between client and server.
+
+    The server is not specified with a host and port, but with a filesystem path to the
+    root directory of the server (usually where the .hg/.git directory is). This implies
+    one can only connect to jenga servers on the local machine. *)
+
 open Core.Std
 open Async.Std
 

@@ -27,12 +27,6 @@ simple-ocaml-build
     Compiles and links a directory of .ml/i, using ocamldep for dependency discovery
 
     
-js-build-style
-
-    Build JS released packages using a jengaroot.ml based on JS's
-    internal build rules.
-
-    
 better-make-style
 
     Example to show the new fixpoint based discovery of buildable_targets
@@ -48,3 +42,8 @@ better-make-style
 
     jenga Makefile.extracted-from-jenga
     make -f Makefile.extracted-from-jenga
+
+    
+js-build-style
+
+    See https://github.com/janestreet/jenga-rules.

@@ -1,3 +1,7 @@
+(** This module contains types that represents either running jobs, or finished jobs, for
+    the purpose of displaying them to the user. None of this is saved persistently.
+    The actual displaying is done in message.ml though. *)
+
 open Core.Std
 
 module Q : sig
@@ -19,6 +23,7 @@ module Start : sig
     where:string ->
     prog:string ->
     args:string list ->
+    sandboxed:bool ->
     t
 end
 
@@ -46,7 +51,13 @@ val to_lines : t -> string list
 val iter_lines : t -> f:(string -> unit) -> unit
 
 module Stable : sig
+  type model = t
   module V1 : sig
-    type nonrec t = t [@@deriving bin_io]
+    type t [@@deriving bin_io]
+    val upgrade : t -> model
+    val downgrade : model -> t
+  end
+  module V2 : sig
+    type t = model [@@deriving bin_io]
   end
 end

@@ -17,6 +17,7 @@ module Reply = struct
     stdout : string;
     stderr : string;
     outcome : [`success | `error of string];
+    duration : Time.Span.t;
   }
 end
 
@@ -27,6 +28,7 @@ end
 module Fork_process : Fork_process_sig = struct
 
   let run {Request. putenv; dir; prog; args} =
+    let start = Time.now () in
     List.iter putenv ~f:(fun (key, data) ->
       match data with
       | None -> Core.Std.Unix.unsetenv key
@@ -38,7 +40,7 @@ module Fork_process : Fork_process_sig = struct
       let outcome = `error (Exn.to_string exn) in
       let stdout = "" in
       let stderr = "" in
-      return { Reply. stdout; stderr; outcome }
+      return { Reply. stdout; stderr; outcome; duration = Time.diff (Time.now ()) start }
     | Ok process ->
       let stdout = Process.stdout process in
       let stderr = Process.stderr process in
@@ -68,7 +70,7 @@ module Fork_process : Fork_process_sig = struct
             `error (sprintf !"stdout or stderr wasn't closed %{Time.Span} after process \
                               exited (due to a stray process perhaps?)" timeout)
       in
-      return { Reply. stdout; stderr; outcome }
+      return { Reply. stdout; stderr; outcome; duration = Time.diff (Time.now ()) start }
 
 end
 

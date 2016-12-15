@@ -1,3 +1,4 @@
+(** The main entry points of jenga. *)
 
 open! Core.Std
 

@@ -1,3 +1,5 @@
+(** The representation of the various command line options. Further configuration
+    (not exposed to casual users) is in jenga_options.ml. *)
 
 open Core.Std
 open! Int.Replace_polymorphic_compare
@@ -37,7 +39,7 @@ type t = {
   demands : string list;
   no_notifiers : bool;
   no_fs_triggers : bool;
-  sandbox_actions : bool;
+  sandbox_actions : Db.Sandbox_kind.t;
   buildable_targets_fixpoint_max : int;
   gc : Gc.t
 } [@@deriving fields]

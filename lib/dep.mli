@@ -1,8 +1,8 @@
+(** [Dep.t] is the central type of jenga's API, supporting both the description of
+    dependencies and computing dependencies with arbitrary dependencies.
+    See documentation for individual items in api.mli. *)
 
 open! Async.Std
-
-(* [Dep.t] is the type central to jenga's API, supporting the description of dependencies
-   in monadic style *)
 
 include module type of Dep_type
 

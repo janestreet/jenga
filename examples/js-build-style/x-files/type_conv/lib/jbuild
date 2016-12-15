@@ -1,3 +1,0 @@
-(preprocessor
- ((name pa_type_conv)
-  (preprocess (((command "camlp4orf") (List (pa_type_conv)))))))

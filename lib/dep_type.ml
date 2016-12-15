@@ -1,8 +1,8 @@
 open Core.Std
 open Async.Std
 
-(* [Dep_type.t] is the GADT implementation behind [Dep.t]. Values of this type are
-   interpreted by jenga's build algorithm.*)
+(** [Dep_type.t] is the GADT implementation behind [Dep.t]. Values of this type are
+    interpreted by jenga's build algorithm.*)
 
 type _ t =
 | Return : 'a -> 'a t

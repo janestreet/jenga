@@ -70,7 +70,8 @@ let%test_unit _ =
 
 module Stable = struct
   open! Core.Stable
-  module V1 = struct
+
+  module V2 = struct
 
     module Start = struct
 
@@ -80,20 +81,15 @@ module Stable = struct
         where : string;
         prog : string;
         args : string list;
+        sandboxed : bool;
       } [@@deriving bin_io, fields, sexp_of]
-
-      let create =
-        let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
-        fun ~need ~where ~prog ~args ->
-          let uid = genU() in
-          { uid; need; where; prog; args }
 
     end
 
     module Finish = struct
       type t = {
         outcome : [`success | `error of string];
-        duration : Span.V2.t;
+        duration : Time.Span.V2.t;
       } [@@deriving bin_io, fields, sexp_of]
     end
 
@@ -108,12 +104,72 @@ module Stable = struct
     [@@deriving bin_io, sexp_of]
 
   end
+
+  module V1 = struct
+
+    module Start = struct
+
+      type t = {
+        uid : int; (* to line up commands in .jenga/debug *)
+        need : string;
+        where : string;
+        prog : string;
+        args : string list;
+      } [@@deriving bin_io, fields, sexp_of]
+
+      let upgrade { uid; need; where; prog; args } =
+        let sandboxed = false in
+        { V2.Start.uid; need; where; prog; args; sandboxed }
+
+      let downgrade { V2.Start. uid; need; where; prog; args; sandboxed = _ } =
+        { uid; need; where; prog; args }
+    end
+
+    module Finish = V2.Finish
+
+    module Output = V2.Output
+
+    type t = Start.t * Finish.t * Output.t
+    [@@deriving bin_io, sexp_of]
+
+    let upgrade (start, finish, output) =
+      let start = Start.upgrade start in
+      (start, finish, output)
+
+    let downgrade (start, finish, output) =
+      let start = Start.downgrade start in
+      (start, finish, output)
+
+  end
+
   let%expect_test _ =
     print_endline [%bin_digest: V1.t];
     [%expect {| 7b41a82c166551d32016599fffdd3994 |} ]
+
+  let%expect_test _ =
+    print_endline [%bin_digest: V2.t];
+    [%expect {| 33cc6bf41461f1ef020cb4680125893c |} ]
+
+  type model = V2.t
+
 end
 
-include Stable.V1
+module Start = struct
+  include Stable.V2.Start
+
+  let create =
+    let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u) in
+    fun ~need ~where ~prog ~args ~sandboxed ->
+      let uid = genU() in
+      { uid; need; where; prog; args; sandboxed }
+end
+
+module Finish = Stable.V2.Finish
+
+module Output = Stable.V2.Output
+
+type t = Stable.V2.t
+[@@deriving sexp_of]
 
 let split_string_into_lines s =
   match s with
@@ -136,8 +192,9 @@ let create start ~outcome ~duration ~stdout ~stderr =
 
 let outcome (_,f,_) = f.Finish.outcome
 
-let mk_build_message ~where ~need =
-  sprintf "- build %s %s" where need
+let mk_build_message ~where ~need ~sandboxed =
+  let sandboxed = if sandboxed then " (sandboxed)" else "" in
+  sprintf "- build %s %s%s" where need sandboxed
 
 let mk_command_message ~prog ~args =
   (* print out the command in a format suitable for cut&pasting into bash
@@ -150,7 +207,8 @@ let mk_status_message ~outcome =
   | `success -> "code 0"
   | `error status_string -> status_string
 
-let build_message ({Start.where;need; _},_,_) = mk_build_message ~where ~need
+let build_message ({Start.where;need; sandboxed; _},_,_) =
+  mk_build_message ~where ~need ~sandboxed
 let command_message ({Start.prog; args; _},_,_) = mk_command_message ~prog ~args
 let status_message (_,{Finish.outcome; _},_) = mk_status_message ~outcome
 
@@ -158,11 +216,11 @@ let to_stdout_lines (_,_,o) = o.Output.stdout
 let to_stderr_lines (_,_,o) = o.Output.stderr
 
 let iter_lines (
-  {Start. where; need; prog; args; uid=_},
+  {Start. where; need; prog; args; sandboxed; uid=_},
   {Finish. outcome; duration},
   {Output. stdout; stderr}
 ) ~f:put =
-  put (mk_build_message ~where ~need);
+  put (mk_build_message ~where ~need ~sandboxed);
   put (mk_command_message ~prog ~args);
   List.iter stdout ~f:put;
   List.iter stderr ~f:put;

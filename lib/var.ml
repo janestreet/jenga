@@ -3,6 +3,7 @@ open! Int.Replace_polymorphic_compare
 
 module Info = struct
   open Core.Stable
+
   module Stable = struct
     module V1 = struct
       type t = {
@@ -13,6 +14,7 @@ module Info = struct
         peeked  : bool;
       } [@@deriving bin_io, sexp_of]
     end
+
     let%expect_test _ =
       print_endline [%bin_digest: V1.t];
       [%expect {| 88decba6a920a0604e7e7f6327f9c5e9 |} ]

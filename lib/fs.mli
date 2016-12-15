@@ -1,3 +1,5 @@
+(** Module supporting interface to file-system -- stat, digest, glob.
+    Services: Digest caching & inotify wrapping (as hearts). *)
 
 open! Core.Std
 open! Async.Std
@@ -5,10 +7,6 @@ open! Async.Std
 module Ocaml_digest : sig
   val init : Config.t -> unit (* just once *)
 end
-
-(* Module supporting interface to file-system -- stat, digest, glob.
-   Services: Digest caching & inotify wrapping (as hearts).
-*)
 
 module Digest = Db.Digest
 module Kind = Db.Kind

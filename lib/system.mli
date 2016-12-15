@@ -1,3 +1,4 @@
+(** Module for OS specific configuration. *)
 
 open! Core.Std
 

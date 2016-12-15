@@ -1,4 +1,0 @@
-(preprocessor
- ((name pa_enumerate)
-  (libraries (pa_type_conv))
-  (preprocess (((command "camlp4orf -loc loc") (List (pa_enumerate)))))))

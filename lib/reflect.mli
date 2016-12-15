@@ -1,3 +1,4 @@
+(** The main entry point to the reflection api, which is documented in [api.mli]. *)
 
 val alias : Alias.t -> Path.t list Dep.t
 val path : Path.t -> Reflected.Trip.t option Dep.t

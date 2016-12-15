@@ -2,18 +2,18 @@ open Core.Std
 open! Int.Replace_polymorphic_compare
 open Async.Std
 
-module Spec = Command.Spec
+open Command.Let_syntax
+let return = Async.Std.return
 
 let to_sexp =
-  Command.async_or_error
-    Spec.(
-      empty
-      (* This flag is meant so in the test, we can print some subset of the data without
-         relying on the sexp tool, whose output could change over time. *)
-      +> flag "-path" ~doc:" which subsexp to print" (optional string)
-    )
+  Command.async_or_error'
     ~summary:"cat .jenga/db in sexp format (big!)"
-    (fun path () ->
+    [%map_open
+      let path =
+        (* This flag is meant so in the test, we can print some subset of the data without
+           relying on the sexp tool, whose output could change over time. *)
+        flag "-path" ~doc:" which subsexp to print" (optional string)
+      in fun () ->
        Writer.behave_nicely_in_pipeline ();
        match Special_paths.discover_and_set_root () with
        | Error _ as e -> return e
@@ -23,7 +23,7 @@ let to_sexp =
          let sexp = Db.With_index.sexp_of_t (Db.With_index.snapshot db) in
          let sexp = Sexplib.Path.get ?str:path sexp in
          Print.printf !"%{Sexp#hum}\n%!" sexp
-    )
+    ]
 
 let memory_use_of_result_of =
   let live_words_now () =
@@ -36,9 +36,11 @@ let memory_use_of_result_of =
     res, Byte_units.create `Words (Float.of_int (after - before))
 
 let stats =
-  Command.async_or_error Spec.empty
+  Command.async_or_error'
     ~summary:"print various stats to stdout"
-    (fun () ->
+    [%map_open
+      let () = return ()
+      in fun () ->
        Writer.behave_nicely_in_pipeline ();
        match Special_paths.discover_and_set_root () with
        | Error _ as e -> return e
@@ -75,7 +77,7 @@ let stats =
          in
          Print.printf !"%{Sexp#hum}\n%!" sexp;
          return (Ok ())
-    )
+    ]
 
 
 let command =

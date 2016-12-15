@@ -1,3 +1,7 @@
+(** This module implements the two forms of logging in jenga:
+    - logging to .jenga/debug
+    - printing on stdout
+*)
 
 open! Core.Std
 open! Async.Std
@@ -32,6 +36,7 @@ val job_started :
   where:string ->
   prog:string ->
   args:string list ->
+  sandboxed:bool ->
   Job_summary.Start.t (* returned for use in call to job_finished *)
 
 val job_finished :
@@ -44,7 +49,7 @@ val job_finished :
 
 val repeat_job_summary : Job_summary.t -> unit
 
-val load_jenga_root : Path.t -> modules:string list -> unit
+val load_jenga_root : Path.t -> unit
 val load_jenga_root_done : Path.t -> Time.Span.t -> unit
 
 module Err : sig

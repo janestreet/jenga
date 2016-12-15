@@ -1,3 +1,4 @@
+(** The type and operations on filesystem paths. *)
 
 open! Core.Std
 
@@ -70,6 +71,7 @@ val unix_root : t
 val root_relative : string -> t
 val absolute : string -> t
 val relative : dir:t -> string -> t
+val split : t -> t * string
 val dirname : t -> t
 val basename : t -> string
 val to_string : t -> string (** leading / for absolute; not for relative *)

@@ -1,3 +1,6 @@
+(** This module allows the jenga server to incrementally send updates about
+    build errors in a typed way to clients (see the errors rpc). *)
+
 open Core.Std
 open Async.Std
 
@@ -51,32 +54,51 @@ val iter : t -> f:(Error.t -> unit) -> unit
 (** [to_list t] is the list of errors in [t]. *)
 val to_list : t -> Error.t list
 
+module Snap : sig
+  type t
+end
+
+module Update : sig
+  type t
+end
+
 module Stable : sig
+
   module V1 : sig
 
     (** [Snap.t] facilitates transport over RPC *)
     module Snap : sig
       type t [@@deriving bin_io]
+      val upgrade : t -> Snap.t
+      val downgrade : Snap.t -> t
     end
 
     (** [Update.t] facilitates transport over RPC *)
     module Update : sig
       type t [@@deriving bin_io]
+      val upgrade : t -> Update.t
+      val downgrade : Update.t -> t
     end
   end
+
+  module V2 : sig
+
+    (** [Snap.t] facilitates transport over RPC *)
+    module Snap : sig
+      type t = Snap.t [@@deriving bin_io]
+    end
+
+    (** [Update.t] facilitates transport over RPC *)
+    module Update : sig
+      type t = Update.t [@@deriving bin_io]
+    end
+  end
+
 end
 
 (** Drop all clients attached to the [Reportable.t].  Useful for testing the reconnection
     logic of clients. *)
 val drop_clients : t -> unit
-
-module Snap : sig
-  type t = Stable.V1.Snap.t
-end
-
-module Update : sig
-  type t = Stable.V1.Update.t
-end
 
 (** [snap_with_updates ~trace t] attaches a new client, returning the snapshot & update
     pipe. The client is detached when the caller closes the returned pipe-reader.

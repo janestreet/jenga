@@ -1,3 +1,6 @@
+(** Various configuration options for jenga meant for development or debugging, not for
+    casual users. These are specified as an sexp in the env var "JENGA_OPTIONS". *)
+
 open! Core.Std
 
 type t =

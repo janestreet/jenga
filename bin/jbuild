@@ -9,12 +9,16 @@
     core_kernel
     fieldslib
     jenga_lib
-    re2
+    re
+    re.pcre
     sexplib
     ))
-  (pps (JANE))))
+  (pps (ppx_jane))))
 
 (executables
  ((names (jenga))
-  (public_release ((build_and_install ((jenga jenga)))))
   (libraries (async core jenga_lib))))
+
+(install
+ ((section bin)
+  (files ((jenga.exe as jenga)))))

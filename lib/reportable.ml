@@ -1,4 +1,3 @@
-
 open Core.Std
 open Async.Std
 
@@ -7,11 +6,11 @@ module Error = struct
   module Stable = struct
     open! Core.Stable
 
-    module V1 = struct
+    module V2 = struct
 
       (** An error when running an external command *)
       type command_failed = {
-        job_summary : Job_summary.Stable.V1.t;
+        job_summary : Job_summary.Stable.V2.t;
       } [@@deriving bin_io]
 
       (** Any other error *)
@@ -38,12 +37,67 @@ module Error = struct
 
     end
 
+    module V1 = struct
+
+      (** An error when running an external command *)
+      type command_failed = {
+        job_summary : Job_summary.Stable.V1.t;
+      } [@@deriving bin_io]
+
+      (** Any other error *)
+      type internal = V2.internal
+      [@@deriving bin_io]
+
+      type kind =
+        | Command_failed of command_failed
+        | Internal of internal
+      [@@deriving bin_io]
+
+      module Id = V2.Id
+
+      type t = {
+        (* We cant use [Goal.t] here because it contains a [Db] type (Path.t) *)
+        goal_string : string;
+        dir_string : string;
+        (* Instead of [kind] we would have prefered to use [Reason.t], but again this makes
+           use of [Db] types such as path. *)
+        kind : kind;
+        id : Id.t;
+      } [@@deriving bin_io]
+
+      let upgrade_kind : kind -> V2.kind = function
+        | Command_failed { job_summary } ->
+          let job_summary = Job_summary.Stable.V1.upgrade job_summary in
+          Command_failed { job_summary }
+        | Internal i -> Internal i
+
+      let downgrade_kind : V2.kind -> kind = function
+        | Internal i -> Internal i
+        | Command_failed { job_summary } ->
+          let job_summary = Job_summary.Stable.V1.downgrade job_summary in
+          Command_failed { job_summary }
+
+      let upgrade { goal_string; dir_string; kind; id; } =
+        let kind = upgrade_kind kind in
+        { V2.goal_string; dir_string; kind; id }
+
+      let downgrade { V2.goal_string; dir_string; kind; id; } =
+        let kind = downgrade_kind kind in
+        { goal_string; dir_string; kind; id }
+
+    end
+
     let%expect_test _ =
       print_endline [%bin_digest: V1.t];
       [%expect {| e4eff16a7561fba7224c6a1af6a51b54 |} ]
+
+    let%expect_test _ =
+      print_endline [%bin_digest: V2.t];
+      [%expect {| 0b55e9a45719d49f6bae9358b13869b6 |} ]
+
   end
 
-  include Stable.V1
+  include Stable.V2
 
   let id t = t.id
 
@@ -78,6 +132,24 @@ module Stable = struct
   module E = Error
   open Core.Stable
   module Error = E.Stable
+
+  module V2 = struct
+
+    module Update = struct
+      type t =
+        | Add of Error.V2.t
+        | Remove of Error.V2.Id.t
+      [@@deriving bin_io]
+    end
+
+    module Snap = struct
+      type t = {
+        data : Error.V2.t list;
+      } [@@deriving bin_io]
+    end
+
+  end
+
   module V1 = struct
 
     module Update = struct
@@ -85,12 +157,32 @@ module Stable = struct
         | Add of Error.V1.t
         | Remove of Error.V1.Id.t
       [@@deriving bin_io]
+
+      let upgrade : t -> V2.Update.t = function
+        | Add err ->
+          let err = Error.V1.upgrade err in
+          Add err
+        | Remove id -> Remove id
+
+      let downgrade : V2.Update.t -> t = function
+        | Add err ->
+          let err = Error.V1.downgrade err in
+          Add err
+        | Remove id -> Remove id
     end
 
     module Snap = struct
       type t = {
         data : Error.V1.t list;
       } [@@deriving bin_io]
+
+      let upgrade { data } =
+        let data = List.map ~f:Error.V1.upgrade data in
+        { V2.Snap.data }
+
+      let downgrade { V2.Snap.data } =
+        let data = List.map ~f:Error.V1.downgrade data in
+        { data }
     end
 
   end
@@ -102,9 +194,18 @@ module Stable = struct
   let%expect_test _ =
     print_endline [%bin_digest: V1.Snap.t];
     [%expect {| 23db845eef46b5f2d2e5950526c94972 |} ]
+
+  let%expect_test _ =
+    print_endline [%bin_digest: V2.Update.t];
+    [%expect {| e4d60a5018bc6e458a0507f33abda300 |} ]
+
+  let%expect_test _ =
+    print_endline [%bin_digest: V2.Snap.t];
+    [%expect {| dfb9d9b77beb54f89a50611844961e98 |} ]
+
 end
 
-include Stable.V1
+include Stable.V2
 
 (* Each [Error.t] has a unique handle. This is used to key the hashtable representing an
    error-bag.  We dont use [Bag.t] because updates must be communicated via the RPC. *)

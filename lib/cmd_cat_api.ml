@@ -1,7 +1,12 @@
 open Core.Std
+open Command.Let_syntax
 
 let command =
-  Command.basic Command.Spec.empty
+  Command.basic'
     ~summary:"Print the API supported by this version of jenga"
-    (fun () -> Printf.printf "%s\n%!" Cat_api.string)
+    [%map_open
+      let () = return ()
+      in fun () ->
+        Printf.printf "%s\n%!" Cat_api.string
+    ]
 ;;

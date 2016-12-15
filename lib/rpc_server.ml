@@ -27,21 +27,24 @@ let make_periodic_pipe_writer span ~f =
   in
   return (Ok r)
 
-(* [State.t] is a place holder until the time we really need some connection state. *)
-module State : sig
-  type t
-  val create : unit -> t
-end = struct
-  type t = unit
-  let create () = ()
+module State = struct
+  type t = { progress : Progress.t }
 end
 
+let error_pipe_handler (_ : State.t) () =
+  let trace = Message.trace "%s" in
+  Reportable.snap_with_updates ~trace Progress.the_reportable_errors
+;;
+
 let error_pipe =
-  let module R = Rpc_intf.Error_pipe in
-  Rpc.State_rpc.implement R.rpc (fun (_:State.t) () ->
-    let trace = Message.trace "%s" in
-    let (snap,updates) = Reportable.snap_with_updates ~trace Progress.the_reportable_errors in
-    return (Ok (snap,updates)))
+  Rpc.State_rpc.implement Rpc_intf.Error_pipe.rpc (fun state () ->
+    return (Ok (error_pipe_handler state ())))
+
+let error_pipe_v1 =
+  Rpc.State_rpc.implement Rpc_intf.Error_pipe.Rpc_v1.rpc (fun state () ->
+    let snap, updates = error_pipe_handler state () in
+    return (Ok (Reportable.Stable.V1.Snap.downgrade snap,
+                Pipe.map ~f:Reportable.Stable.V1.Update.downgrade updates)))
 
 let getenv =
   Rpc.Rpc.implement Rpc_intf.Getenv.rpc (fun _state q -> return (Var.Getenv.run q))
@@ -52,30 +55,42 @@ let setenv =
 let env_info =
   Rpc.Rpc.implement Rpc_intf.Env_info.rpc (fun _state () -> return (Var.all_registered ()))
 
-let really_go ~root_dir progress =
+let progress_stream =
   let progress_report_span = sec (0.3) in
-  let progress_stream =
-    Rpc.Pipe_rpc.implement Rpc_intf.Progress_stream.rpc
-      (fun (_ : State.t) () ->
-         make_periodic_pipe_writer progress_report_span ~f:(fun () ->
-           Progress.snap progress
-         )
-      )
-  in
-  let dump_tenacious_graph =
-    Rpc.Rpc.implement Rpc_intf.Dump_tenacious_graph.rpc
-      (fun _state () -> return (Tenacious_lib.Graph.Dump.collect ()))
-  in
+  Rpc.Pipe_rpc.implement Rpc_intf.Progress_stream.rpc
+    (fun (state : State.t) () ->
+       make_periodic_pipe_writer progress_report_span ~f:(fun () ->
+         Progress.snap state.progress
+       )
+    )
+
+let dump_tenacious_graph =
+  Rpc.Rpc.implement Rpc_intf.Dump_tenacious_graph.rpc
+    (fun _state () -> return (Tenacious_lib.Graph.Dump.collect ()))
+
+let all_rpcs =
+  Versioned_rpc.Menu.add
+    [
+      progress_stream;
+      error_pipe;
+      error_pipe_v1;
+      dump_tenacious_graph;
+      getenv;
+      setenv;
+      env_info;
+    ]
+
+let versions =
+  List.map all_rpcs ~f:Rpc.Implementation.description
+  |> List.map ~f:(fun { name; version } -> name, version)
+  |> String.Map.of_alist_multi
+  |> Map.map ~f:Int.Set.of_list
+
+let really_go ~root_dir progress =
   let implementations =
-    Rpc.Implementations.create ~on_unknown_rpc:`Close_connection ~implementations:(
-      Versioned_rpc.Menu.add [
-        progress_stream;
-        error_pipe;
-        dump_tenacious_graph;
-        getenv;
-        setenv;
-        env_info;
-      ])
+    Rpc.Implementations.create
+      ~on_unknown_rpc:`Close_connection
+      ~implementations:all_rpcs
   in
   match implementations with
   | Error (`Duplicate_implementations _descrs) -> assert false
@@ -85,7 +100,7 @@ let really_go ~root_dir progress =
         (fun _addr reader writer ->
            Rpc.Connection.server_with_close reader writer ~implementations
              ~heartbeat_config
-             ~connection_state:(fun (_ : Rpc.Connection.t) -> State.create ())
+             ~connection_state:(fun (_ : Rpc.Connection.t) -> { progress })
              ~on_handshake_error:`Ignore)
     in
     start_server () >>= fun inet ->

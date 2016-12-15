@@ -84,20 +84,20 @@ module Dump = struct
 
   module Stable = struct
     open Core.Stable
-    module V1 = struct
 
+    module V1 = struct
       type t = {
         id : Int63.V1.t;
         name : string;
-        age : Span.V2.t;
+        age : Time.Span.V2.t;
         children : children;
       }
       and children =
         | See_above
         | Here of t list
       [@@deriving bin_io, sexp]
-
     end
+
     let%expect_test _ =
       print_endline [%bin_digest: V1.t];
       [%expect {| 8dad49afe85669cef2905bec97ec3347 |} ]

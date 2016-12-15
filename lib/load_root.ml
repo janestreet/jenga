@@ -45,15 +45,6 @@ module Spec = struct
   let path_for_message = function
     | SingleML ml -> ml
     | Conf (conf,_) -> conf
-
-  let modules_for_message = function
-    | SingleML _ -> []
-    | Conf (_,mls) ->
-      List.map mls ~f:(fun ml ->
-        let s = Path.basename ml in
-        match String.lsplit2 ~on:'.' s with | Some (s,_) -> s | None -> s
-      )
-
 end
 
 let get_env spec =
@@ -67,9 +58,8 @@ let get_env spec =
       ()
   in
   let path_for_message = Spec.path_for_message spec in
-  Message.load_jenga_root path_for_message ~modules:(Spec.modules_for_message spec);
+  Message.load_jenga_root path_for_message;
   let start_time = Time.now() in
-  (*Ocaml_plugin.Shell.set_defaults ~echo:true ~verbose:true ();*)
   track_loading (fun () ->
     Var.clear_all_registrations ();
     Plugin.load_ocaml_src_files

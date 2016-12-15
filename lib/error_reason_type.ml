@@ -22,3 +22,5 @@ type t =
   | Usercode_raised                   of Sexp.t
   | Jengaroot_load_failed             of Error.t
   | Mtimes_changed                    of Path.t list
+  | Sandbox_error                     of [ `at_creation | `at_close ] * Sexp.t
+  | Unexpected_targets                of string list
