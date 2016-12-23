@@ -1,4 +1,5 @@
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 (* [Scheme_type.t] is the variant implementation behind [Scheme.t].  Values of this type
    are interpreted by jenga's build algorithm.*)

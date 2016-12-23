@@ -3,6 +3,7 @@
    the API, allowing the GADT representation to be hidden. *)
 
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 include Dep_type
 

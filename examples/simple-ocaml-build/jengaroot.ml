@@ -12,7 +12,7 @@ let bash ~dir command_string = Action.process ~dir ~prog:"bash" ~args:["-c"; com
 let bashf ~dir fmt = ksprintf (fun str -> bash ~dir str) fmt
 
 let read_sexp ~t_of_sexp string =
-  Sexp.of_string_conv_exn (String.rstrip string) t_of_sexp
+  Sexp.of_string_conv_exn string t_of_sexp
 
 let recusive_default_scheme ~dir =
   Scheme.rules [

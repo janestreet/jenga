@@ -41,7 +41,7 @@ let push_todo t todo =
   )
 
 let to_min_string_no_date time =
-  let ofday = Time.to_ofday ~zone:Time.Zone.local time in
+  let ofday = Time.to_ofday ~zone:(force Time.Zone.local) time in
   let span = Time.Ofday.to_span_since_start_of_day ofday in
   let parts = Time.Span.to_parts span in
   let module P = Time.Span.Parts in

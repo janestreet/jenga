@@ -1,4 +1,5 @@
 open! Core.Std
+open! Int.Replace_polymorphic_compare
 
 type t =
   { sigstop_on_thread_pool_stuck : bool [@default false]

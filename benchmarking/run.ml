@@ -117,22 +117,21 @@ let run_jenga ~exe ~args ~env ~log =
       }]
 ;;
 
-let run_jenga_and_save_metrics ~jenga_jengaroot_version ~bench_name ~exe ~targets ~env ~dst ~log =
+let run_jenga_and_save_metrics ~jenga_jengaroot_version ~bench_name ~exe ~targets ~env ~flags ~dst ~log =
   delete_metrics_file ()
   >>= fun () ->
-  run_jenga ~exe ~args:targets ~env ~log
+  run_jenga ~exe ~args:(targets @ flags) ~env ~log
   >>= function
   | Ok () -> save_metrics ~jenga_jengaroot_version ~bench_name ~dst
   | Error e ->
     eprintf_progress "skipping failed build: %s\n" (Error.to_string_hum e);
     delete_metrics_file ()
-
 ;;
 
-let run_polling_jenga_and_wait ~exe ~targets ~env ~log =
+let run_polling_jenga_and_wait ~exe ~targets ~env ~flags ~log =
   delete_metrics_file ()
   >>= fun () ->
-  let def = run_jenga ~exe ~args:("-P" :: targets) ~env ~log in
+  let def = run_jenga ~exe ~args:("-P" :: targets @ flags) ~env ~log in
   save_metrics ~jenga_jengaroot_version:"" ~bench_name:"" ~dst:"/dev/null"
   >>| fun () ->
   (def >>| ok_exn) (* we don't care about this error, as it doesn't say
@@ -185,31 +184,42 @@ let repeat n f =
   loop 0 f
 ;;
 
-let non_polling_builds ~rev ~jenga_exe ~dst ~log =
+let non_polling_builds ~rev ~jenga_exe ~env ~flags ~dst ~log =
   setup_repository ~rev ~jenga_exe ~log
   >>= fun (jenga_jengaroot_version, jenga_exe) ->
+  let jenga_jengaroot_version =
+    jenga_jengaroot_version
+    ^ (String.concat (List.map env ~f:(fun (a, b) -> sprintf " %s=%s" a b)))
+    ^ (String.concat (List.map flags ~f:(sprintf " %s")))
+  in
   Deferred.List.iter
     [ "core_kernel", ["lib/core_kernel/src/core_kernel.cmxa"], []
     ; "lib", ["lib"], []
-    ; "full tree", [".DEFAULT"], ["X_LIBRARY_INLINING", "true"]
+    ; "full tree", [".DEFAULT"], [("X_LIBRARY_INLINING", "true")]
     ]
-    ~f:(fun (bench_name, targets, env) ->
+    ~f:(fun (bench_name, targets, bench_env) ->
+      let env = env @ bench_env in
       let total = 2 in
       repeat total (fun i ->
         eprintf_progress "bench of non-polling mode %s %d/%d\n" bench_name (i + 1) total;
         from_scrach ()
         >>= fun () ->
-        run_jenga_and_save_metrics ~exe:jenga_exe ~jenga_jengaroot_version ~env ~dst ~log
+        run_jenga_and_save_metrics ~exe:jenga_exe ~jenga_jengaroot_version ~env ~flags ~dst ~log
           ~bench_name:(bench_name ^ " from scratch") ~targets
         >>= fun () ->
         repeat 2 (fun _ ->
-          run_jenga_and_save_metrics ~exe:jenga_exe ~jenga_jengaroot_version ~env ~dst ~log
+          run_jenga_and_save_metrics ~exe:jenga_exe ~jenga_jengaroot_version ~env ~flags ~dst ~log
             ~bench_name:(bench_name ^ " null build") ~targets)))
 ;;
 
-let polling_builds ~rev ~jenga_exe ~dst ~log =
+let polling_builds ~rev ~jenga_exe ~env ~flags ~dst ~log =
   setup_repository ~rev ~jenga_exe ~log
   >>= fun (jenga_jengaroot_version, jenga_exe) ->
+  let jenga_jengaroot_version =
+    jenga_jengaroot_version
+    ^ (String.concat (List.map env ~f:(fun (a, b) -> sprintf " %s=%s" a b)))
+    ^ (String.concat (List.map flags ~f:(sprintf " %s")))
+  in
   from_scrach ()
   >>= fun () ->
   Deferred.List.iter
@@ -224,10 +234,11 @@ let polling_builds ~rev ~jenga_exe ~dst ~log =
     ; "full tree",
       [".DEFAULT"],
       ["lib/core_kernel/src/core_list.ml"; "app/hydra/bin/hydra.ml"],
-      ["X_LIBRARY_INLINING", "true"]
-    ] ~f:(fun (bench_name, targets, files, env) ->
+      [("X_LIBRARY_INLINING", "true")]
+    ] ~f:(fun (bench_name, targets, files, bench_env) ->
+      let env = env @ bench_env in
       eprintf_progress "bench of polling mode %s\n" bench_name;
-      run_polling_jenga_and_wait ~exe:jenga_exe ~targets ~env ~log
+      run_polling_jenga_and_wait ~exe:jenga_exe ~targets ~env ~flags ~log
       >>= fun jenga_is_dead ->
       Deferred.List.iter files ~f:(fun file ->
         let total = 4 in
@@ -255,15 +266,23 @@ let polling_builds ~rev ~jenga_exe ~dst ~log =
     )
 ;;
 
-type revision =
+type jenga_invocation_syntax =
   { revision : string
   ; exe : string sexp_option
+  ; env : (string * string) sexp_list
+  ; flags : string sexp_list
   } [@@deriving of_sexp]
+
+type jenga_invocation =
+  { revision : string
+  ; exe : [ `From_rev | `This of string ]
+  ; env : (string * string) sexp_list
+  ; flags : string sexp_list
+  }
 
 type config =
   { feature : string sexp_option
-  ; base : revision sexp_option
-  ; tip : revision sexp_option
+  ; jengas : jenga_invocation_syntax sexp_list
   ; mode : [ `polling | `non_polling ]
   ; exe : string sexp_option
   } [@@deriving of_sexp]
@@ -278,30 +297,28 @@ let feature_and_exe feature exe =
     | None -> `From_rev
     | Some path -> `This path
   in
-  String.strip base, exe, String.strip tip, exe
+  { revision = String.strip base; exe; env = []; flags = [] },
+  { revision = String.strip tip; exe; env = []; flags = [] }
 ;;
 
-let base_tip_and_exe (base : revision) (tip : revision) exe =
+let jenga_invocation (jenga_invocation_syntax : jenga_invocation_syntax) exe =
   let default_exe =
     match exe with
     | None -> `From_rev
     | Some path -> `This path
   in
-  let base_exe =
-    match base.exe with
-    | Some path -> `This path
-    | None -> default_exe
-  in
-  let tip_exe =
-    match tip.exe with
-    | Some path -> `This path
-    | None -> default_exe
-  in
-  return (base.revision, base_exe, tip.revision, tip_exe)
+  { revision = jenga_invocation_syntax.revision
+  ; exe = (match jenga_invocation_syntax.exe with
+      | None -> default_exe
+      | Some path -> `This path)
+  ; env = jenga_invocation_syntax.env
+  ; flags = jenga_invocation_syntax.flags
+  }
 ;;
 
 let command =
   let open Command.Let_syntax in
+  let return = Async.Std.return in
   Command.async'
     ~summary:"Runs benches and outputs the result on stdout"
     [%map_open
@@ -312,7 +329,9 @@ let command =
         anon ("((feature ..)(mode (polling|non_polling))(exe (some a.exe)))" %: string)
       in fun () ->
         let config = Sexp.of_string_conv_exn config [%of_sexp: config] in
-        let log = "/tmp/jenga-bench.log" in
+        Unix.getlogin ()
+        >>= fun user ->
+        let log = sprintf "/tmp/jenga-bench-%s.log" user in
         Sys.getcwd ()
         >>= fun cwd ->
         Sys.file_exists_exn ".hg"
@@ -332,32 +351,26 @@ let command =
             setup_limits ()
             >>= fun () ->
             let dst = "/dev/stdout" in
-            let base_and_tip =
-              match config.base, config.tip with
-              | None, None -> None
-              | Some _, None -> failwith "base option provided but tip option is missing"
-              | None, Some _ -> failwith "tip option provided but base option is missing"
-              | Some base, Some tip -> Some (base, tip)
-            in
-            begin match config.feature, base_and_tip with
-            | Some _, Some _ ->
-              failwith "feature option is not compatible with the base and tip options"
-            | Some feature, None ->
-              feature_and_exe feature config.exe
-            | None, None ->
+            begin match config.feature, config.jengas with
+            | Some _, _ :: _ ->
+              failwith "feature option is not compatible with the jengas options"
+            | Some feature, [] ->
+              (feature_and_exe feature config.exe
+               >>| fun (jenga1, jenga2) -> [ jenga1; jenga2 ])
+            | None, [] ->
               failwith "missing feature option"
-            | None, Some (base, tip) ->
-              base_tip_and_exe base tip config.exe
+            | None, (_ :: _ as jengas) ->
+              return (List.map jengas ~f:(fun x -> jenga_invocation x config.exe))
             end
-            >>= fun (base, base_exe, tip, tip_exe) ->
+            >>= fun jengas ->
             let builds =
               match config.mode with
               | `polling -> polling_builds
               | `non_polling -> non_polling_builds
             in
-            builds ~dst ~log ~rev:base ~jenga_exe:base_exe
-            >>= fun () ->
-            builds ~dst ~log ~rev:tip ~jenga_exe:tip_exe
+            Deferred.List.iter jengas ~f:(fun { revision; exe; env; flags } ->
+              builds ~dst ~log ~rev:revision ~env ~flags ~jenga_exe:exe
+            )
           )
     ]
 ;;

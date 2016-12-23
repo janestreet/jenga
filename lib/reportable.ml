@@ -1,5 +1,6 @@
 open Core.Std
 open Async.Std
+open! Int.Replace_polymorphic_compare
 
 module Error = struct
 
@@ -119,7 +120,8 @@ module Error = struct
   let create goal reason =
     match reason with
     | Reason.Command_failed job_summary -> command_failed goal job_summary
-    | r -> internal goal ~lines:(Reason.to_string_one_line r :: Reason.to_extra_lines r)
+    | r -> internal goal ~lines:(Reason.to_string_one_line r
+                                 :: Reason.to_extra_lines r ~dir:(Goal.directory goal))
 
   let contents t =
     match t.kind with

@@ -1,7 +1,7 @@
-
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
-include Error_reason_type
+include Reason_type
 
 let filesystem_related = function
   (* filesystem related errors which might resolve, and so we choose not to count as
@@ -27,7 +27,8 @@ let filesystem_related = function
   | Multiple_rules_for_path _
   | Rule_failed_to_generate_targets _
   | Usercode_raised _
-  | Jengaroot_load_failed _
+  | Usercode_error _
+  | Rules_load_failed _
   | Sandbox_error _
   | Unexpected_targets _
     -> false
@@ -59,8 +60,12 @@ let to_string_one_line = function
 
   | Usercode_raised _ ->
     "User-code raised exception"
-  | Jengaroot_load_failed _ ->
-    "User-code load failed"
+  | Usercode_error _ ->
+    "User-code produced error"
+  | Rules_load_failed (`Before_loading_rules _) ->
+    "Error before loading rules"
+  | Rules_load_failed (`Located_error_while_loading _ | `Error_while_loading _)
+    -> "Error while loading rules"
   | Undigestable k                    ->
     sprintf "undigestable file kind: %s" (Db.Kind.to_string k)
   | Inconsistent_proxies ->
@@ -70,7 +75,8 @@ let to_string_one_line = function
       (String.concat ~sep:" " (List.map paths ~f:Path.to_string))
 
 
-let to_extra_lines = function
+let to_extra_lines t ~dir =
+  match t with
   | Misc _
   | Shutdown
   | Error_in_deps
@@ -88,7 +94,7 @@ let to_extra_lines = function
   | Unexpected_targets _
     -> []
 
-  | Jengaroot_load_failed error ->
+  | Rules_load_failed (`Error_while_loading error) ->
     let lines = String.split_lines (Error.to_string_hum error) in
      (* If the error looks like a normal compilation error, remove the noise from
         ocaml_plugin *)
@@ -106,16 +112,23 @@ let to_extra_lines = function
   | Sandbox_error (_, sexp)
     -> [Sexp.to_string sexp]
 
+  | Usercode_error located_error
+  | Rules_load_failed ( `Before_loading_rules located_error
+                      | `Located_error_while_loading located_error)
+    -> Located_error.to_lines ~dir located_error
+
   | Rule_failed_to_generate_targets paths
-    -> List.map paths ~f:(fun path -> "- " ^ Path.Rel.to_string path)
+    -> List.map paths ~f:(fun path -> "- " ^ Path.Rel.reach_from ~dir path)
 
 let messages ~need t =
-  Message.error "%s: %s" need (to_string_one_line t);
-  List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s)
+  Message.error !"%{Goal}: %s" need (to_string_one_line t);
+  let dir = Goal.directory need in
+  List.iter (to_extra_lines t ~dir) ~f:(fun s -> Message.message "%s" s)
 
 let message_summary config ~need t =
-  Message.error "(summary) %s: %s" need (to_string_one_line t);
-  List.iter (to_extra_lines t) ~f:(fun s -> Message.message "%s" s);
+  Message.error !"(summary) %{Goal}: %s" need (to_string_one_line t);
+  let dir = Goal.directory need in
+  List.iter (to_extra_lines t ~dir) ~f:(fun s -> Message.message "%s" s);
   if not (Config.brief_error_summary config) then (
     match t with
     | Command_failed summary -> Message.repeat_job_summary summary

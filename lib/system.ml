@@ -1,5 +1,5 @@
-
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 type t = Linux | Darwin | Dumb | Unexpected of string
 

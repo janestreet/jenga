@@ -1,8 +1,5 @@
-
 open Core.Std
-
-(* An [Alias.t] is a user-defined symbolic name which will be associated to a set of build
-   dependencies. Similar to a `phony' target in omake/make phony; but with no action *)
+open! Int.Replace_polymorphic_compare
 
 module T = struct
   type t = {

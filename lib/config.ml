@@ -23,7 +23,6 @@ type t = {
   show_actions_run : bool;
   show_actions_run_verbose : bool;
   show_checked : bool;
-  show_buildable_discovery : bool;
   show_reflecting : bool;
   show_considering : bool;
   show_reconsidering : bool;
@@ -31,7 +30,7 @@ type t = {
   show_error_dependency_paths : bool;
   prefix_time : bool;
   report_long_cycle_times : Time.Span.t option;
-  progress : [`omake_style | `jem_style] option;
+  progress : bool;
   dont_emit_kill_line : bool;
   path_to_jenga_conf : string option;
   brief_error_summary : bool;
@@ -40,6 +39,5 @@ type t = {
   no_notifiers : bool;
   no_fs_triggers : bool;
   sandbox_actions : Db.Sandbox_kind.t;
-  buildable_targets_fixpoint_max : int;
   gc : Gc.t
 } [@@deriving fields]

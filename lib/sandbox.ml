@@ -1,5 +1,6 @@
 open! Core.Std
 open! Async.Std
+open! Int.Replace_polymorphic_compare
 
 type kind = Db.Sandbox_kind.t =
   | No_sandbox
@@ -28,14 +29,25 @@ let rec remove_existing_file_recursively name =
   in
   Unix.remove name
 
+(* With hardlinks around, [Unix.rename] can succeed without actually unlinking the source
+   file. This function ensures that the source file is unlinked. *)
+let safe_rename ~src ~dst =
+  let%bind () = Unix.rename ~src ~dst in
+  match%bind Sys.file_exists src with
+  | `Yes | `Unknown -> Unix.remove src
+  | `No -> return ()
+
 let rec move_existing_file_recursively src_name dest_name =
   let%bind stats = Unix.lstat src_name in
   match stats.kind with
   | `Directory -> begin
       let%bind () =
-        match%bind Sys.is_directory dest_name with
-        | `Yes -> return ()
-        | `No | `Unknown -> Unix.mkdir dest_name
+        match%map Monitor.try_with (fun () -> Unix.mkdir dest_name) with
+        | Ok () -> ()
+        | Error e ->
+          match Monitor.extract_exn e with
+          | Unix.Unix_error (EEXIST, _, _) -> ()
+          | _ -> raise e
       in
       let%bind children = Sys.ls_dir src_name in
       let%bind () =
@@ -47,8 +59,7 @@ let rec move_existing_file_recursively src_name dest_name =
       in
       Unix.remove src_name
     end
-  | _ ->
-    Unix.rename ~src:src_name ~dst:dest_name
+  | _ -> safe_rename ~src:src_name ~dst:dest_name
 
 let move_existing_file_recursively root =
   move_existing_file_recursively (Path.to_string root) (Path.to_string Path.the_root)
@@ -161,7 +172,7 @@ let restore_targets ~root ~paths =
           let dest = Path.relative ~dir:Path.the_root from_root in
           let src_name = Path.to_string src in
           let dest_name = Path.to_string dest in
-          Monitor.try_with (fun () -> Unix.rename ~src:src_name ~dst:dest_name)
+          Monitor.try_with (fun () -> safe_rename ~src:src_name ~dst:dest_name)
           >>| function
           | Ok () -> Ok ()
           | Error exn ->

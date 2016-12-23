@@ -67,6 +67,28 @@ module Path : sig
 
 end
 
+module Located_error : sig
+  module Loc : sig
+    module Source : sig
+      type t =
+        | File of Path.t
+        | Other of string (** When the location is not a file on disk, such as [Var.t] *)
+    end
+
+    type t =
+      { source    : Source.t
+      ; line      : int
+      ; start_col : int
+      ; end_col   : int
+      }
+  end
+
+  (** Raise an error. Jenga will transfer the location and error message to the build
+      manager so that it is properly displayed in emacs/vim/... *)
+  val raise : loc:Loc.t -> string -> _
+  val raisef : loc:Loc.t -> ('a, unit, string, unit -> _) format4 -> 'a
+end
+
 module Kind : sig
   type t = [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
   [@@deriving sexp_of]

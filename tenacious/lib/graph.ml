@@ -1,6 +1,5 @@
 open Core.Std
 open Async.Std
-
 open Int.Replace_polymorphic_compare
 
 module Id = Unique_id.Int63 ()

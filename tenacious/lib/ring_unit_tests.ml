@@ -1,5 +1,5 @@
-
 open! Core.Std
+open! Int.Replace_polymorphic_compare
 
 module Slow_ring = struct
   type 'a t = (Uuid.t * 'a) list ref
@@ -7,14 +7,14 @@ module Slow_ring = struct
 
   let create () = ref []
   let add l x = let uid = Uuid.create () in (l := !l @ [uid, x]); l, uid
-  let detach (l, uid) = l := List.filter ~f:(fun (u,_) -> not (u = uid)) !l
+  let detach ((l, uid) : _ elem) = l := List.filter ~f:(fun (u,_) -> not (Uuid.(=) u uid)) !l
   let iter l ~f = List.iter ~f:(fun (_u, x) -> f x) !l
 end
 
 module Verifying_ring = struct
   type 'a t = 'a Slow_ring.t * 'a Ring.t
   type 'a elem = 'a Slow_ring.elem * 'a Ring.elem
-  let iter ((r1, r2) : _ t) ~f =
+  let iter ((r1, r2) : _ t) ~f ~(test_a_list : [%test_eq: 'a list]) =
     let iter_to_list iter =
       let l = ref [] in
       iter ~f:(fun x -> l := x :: !l);
@@ -22,9 +22,9 @@ module Verifying_ring = struct
     in
     let l1 = iter_to_list (Slow_ring.iter r1) in
     let l2 = iter_to_list (Ring.iter r2) in
-    assert (l1 = l2);
+    test_a_list l1 l2;
     List.iter l1 ~f
-  let verify x = ignore (iter x ~f:ignore)
+  let verify ~test_a_list x = ignore (iter x ~f:ignore ~test_a_list)
   let create () = Slow_ring.create (), Ring.create ()
   let add (r1, r2) x : _ elem = Slow_ring.add r1 x, Ring.add r2 x
   let detach (r1, r2) = Slow_ring.detach r1; Ring.detach r2
@@ -88,11 +88,11 @@ let%test_unit "all_small_tests" = (
           List.iter interleaving ~f:(function
             | `add i ->
               Array.set arr i (Some (Verifying_ring.add ring i));
-              Verifying_ring.verify ring
+              Verifying_ring.verify ring ~test_a_list:[%test_eq: int list]
             | `del i ->
               let x = Option.value_exn (Array.get arr i) in
               Verifying_ring.detach x;
-              Verifying_ring.verify ring)
+              Verifying_ring.verify ring ~test_a_list:[%test_eq: int list])
         )
     )
 )
@@ -100,20 +100,20 @@ let%test_unit "all_small_tests" = (
 (* zero elements *)
 let%test_unit _ = (
   let r = Ring.create() in
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 
 (* one element *)
 let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
-  assert (ring_to_list r = [1])
+  [%test_result: int list] (ring_to_list r) ~expect:[1]
 )
 let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   Ring.detach e1;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 
 
@@ -122,28 +122,28 @@ let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
-  assert (ring_to_list r = [1;2])
+  [%test_result: int list] (ring_to_list r) ~expect:[1;2]
 )
 let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
   Ring.detach e1;
-  assert (ring_to_list r = [2])
+  [%test_result: int list] (ring_to_list r) ~expect:[2]
 )
 let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   Ring.detach e1;
   let _e2 = Ring.add r 2 in
-  assert (ring_to_list r = [2])
+  [%test_result: int list] (ring_to_list r) ~expect:[2]
 )
 let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
   Ring.detach e2;
-  assert (ring_to_list r = [1])
+  [%test_result: int list] (ring_to_list r) ~expect:[1]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -151,7 +151,7 @@ let%test_unit _ = (
   let e2 = Ring.add r 2 in
   Ring.detach e1;
   Ring.detach e2;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -159,7 +159,7 @@ let%test_unit _ = (
   Ring.detach e1;
   let e2 = Ring.add r 2 in
   Ring.detach e2;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -167,7 +167,7 @@ let%test_unit _ = (
   let e2 = Ring.add r 2 in
   Ring.detach e2;
   Ring.detach e1;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 
 (* three elements *)
@@ -176,7 +176,7 @@ let%test_unit _ = (
   let _e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
   let _e3 = Ring.add r 3 in
-  assert (ring_to_list r = [1;2;3])
+  [%test_result: int list] (ring_to_list r) ~expect:[1;2;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -184,7 +184,7 @@ let%test_unit _ = (
   Ring.detach e1;
   let _e2 = Ring.add r 2 in
   let _e3 = Ring.add r 3 in
-  assert (ring_to_list r = [2;3])
+  [%test_result: int list] (ring_to_list r) ~expect:[2;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -192,7 +192,7 @@ let%test_unit _ = (
   let _e2 = Ring.add r 2 in
   Ring.detach e1;
   let _e3 = Ring.add r 3 in
-  assert (ring_to_list r = [2;3])
+  [%test_result: int list] (ring_to_list r) ~expect:[2;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -200,7 +200,7 @@ let%test_unit _ = (
   let _e2 = Ring.add r 2 in
   let _e3 = Ring.add r 3 in
   Ring.detach e1;
-  assert (ring_to_list r = [2;3])
+  [%test_result: int list] (ring_to_list r) ~expect:[2;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -208,7 +208,7 @@ let%test_unit _ = (
   let e2 = Ring.add r 2 in
   Ring.detach e2;
   let _e3 = Ring.add r 3 in
-  assert (ring_to_list r = [1;3])
+  [%test_result: int list] (ring_to_list r) ~expect:[1;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -216,7 +216,7 @@ let%test_unit _ = (
   let e2 = Ring.add r 2 in
   let _e3 = Ring.add r 3 in
   Ring.detach e2;
-  assert (ring_to_list r = [1;3])
+  [%test_result: int list] (ring_to_list r) ~expect:[1;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -224,15 +224,16 @@ let%test_unit _ = (
   let _e2 = Ring.add r 2 in
   let e3 = Ring.add r 3 in
   Ring.detach e3;
-  assert (ring_to_list r = [1;2])
+  [%test_result: int list] (ring_to_list r) ~expect:[1;2]
 )
 
 (* [detach] during [iter] *)
 
 let check_ring_to_list_and_iter ring ~f expect_before expect_during expect_after =
-  (ring_to_list ring = expect_before) &&
-  (ring_to_list_and_iter ring ~f = expect_during) &&
-  (ring_to_list ring = expect_after)
+  [%test_result: int list] (ring_to_list ring) ~expect:expect_before;
+  [%test_result: int list] (ring_to_list_and_iter ring ~f) ~expect:expect_during;
+  [%test_result: int list] (ring_to_list ring) ~expect:expect_after;
+;;
 
 let%test_unit _ = (
   let r = Ring.create() in
@@ -242,7 +243,7 @@ let%test_unit _ = (
   let f = function
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;2;3])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;2;3]
 )
 let%test_unit _ = (
   (* First testcase which fails on a buggy [detach] which changes [t.next] so the
@@ -255,7 +256,7 @@ let%test_unit _ = (
     | 1 -> Ring.detach e1
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [2;3])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [2;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -266,7 +267,7 @@ let%test_unit _ = (
     | 2 -> Ring.detach e1
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [2;3])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [2;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -277,7 +278,7 @@ let%test_unit _ = (
     | 3 -> Ring.detach e1
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [2;3])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [2;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -288,7 +289,7 @@ let%test_unit _ = (
     | 1 -> Ring.detach e2
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;3] [1;3])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;3] [1;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -299,7 +300,7 @@ let%test_unit _ = (
     | 2 -> Ring.detach e2
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;3])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -310,7 +311,7 @@ let%test_unit _ = (
     | 3 -> Ring.detach e2
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;3])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -321,7 +322,7 @@ let%test_unit _ = (
     | 1 -> Ring.detach e3
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [1;2])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [1;2]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -332,7 +333,7 @@ let%test_unit _ = (
     | 2 -> Ring.detach e3
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [1;2])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [1;2]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -343,7 +344,7 @@ let%test_unit _ = (
     | 3 -> Ring.detach e3
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;2])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1;2]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -354,7 +355,7 @@ let%test_unit _ = (
     | 1 -> (Ring.detach e1; Ring.detach e2)
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -365,7 +366,7 @@ let%test_unit _ = (
     | 1 -> (Ring.detach e1; Ring.detach e2)
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -376,7 +377,7 @@ let%test_unit _ = (
     | 2 -> (Ring.detach e1; Ring.detach e2)
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -387,7 +388,7 @@ let%test_unit _ = (
     | 3 -> (Ring.detach e1; Ring.detach e2)
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -398,7 +399,7 @@ let%test_unit _ = (
     | 1 -> (Ring.detach e2; Ring.detach e3)
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1] [1])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1] [1]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -409,7 +410,7 @@ let%test_unit _ = (
     | 2 -> (Ring.detach e2; Ring.detach e3)
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -420,7 +421,7 @@ let%test_unit _ = (
     | 3 -> (Ring.detach e2; Ring.detach e3)
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [1]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -431,7 +432,7 @@ let%test_unit _ = (
     | 1 -> (Ring.detach e1; Ring.detach e3)
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [2])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [2]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -442,7 +443,7 @@ let%test_unit _ = (
     | 2 -> (Ring.detach e1; Ring.detach e3)
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [2])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2] [2]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -453,7 +454,7 @@ let%test_unit _ = (
     | 3 -> (Ring.detach e1; Ring.detach e3)
     | _ -> ()
   in
-  assert (check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [2])
+  check_ring_to_list_and_iter r ~f [1;2;3] [1;2;3] [2]
 )
 
 (* [detach] during [add] *)
@@ -462,14 +463,14 @@ let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = add_detaching r 2 [e1] in
-  assert (ring_to_list r = [2])
+  [%test_result: int list] (ring_to_list r) ~expect:[2]
 )
 let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = add_detaching r 2 [e1] in
   let _e3 = Ring.add r 3 in
-  assert (ring_to_list r = [2;3])
+  [%test_result: int list] (ring_to_list r) ~expect:[2;3]
 )
 let%test_unit _ = (
   (* This is the simplest test case which fails on a buggy [add] which fails to (re)assign
@@ -478,28 +479,28 @@ let%test_unit _ = (
   let e1 = Ring.add r 1 in
   let e2 = add_detaching r 2 [e1] in
   Ring.detach e2;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let _e2 = Ring.add r 2 in
   let _e3 = add_detaching r 3 [e1] in
-  assert (ring_to_list r = [2;3])
+  [%test_result: int list] (ring_to_list r) ~expect:[2;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
   let _e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
   let _e3 = add_detaching r 3 [e2] in
-  assert (ring_to_list r = [1;3])
+  [%test_result: int list] (ring_to_list r) ~expect:[1;3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
   let e1 = Ring.add r 1 in
   let e2 = Ring.add r 2 in
   let _e3 = add_detaching r 3 [e1;e2] in
-  assert (ring_to_list r = [3])
+  [%test_result: int list] (ring_to_list r) ~expect:[3]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -507,7 +508,7 @@ let%test_unit _ = (
   let _e2 = Ring.add r 2 in
   let _e3 = add_detaching r 3 [e1] in
   let _e4 = Ring.add r 4 in
-  assert (ring_to_list r = [2;3;4])
+  [%test_result: int list] (ring_to_list r) ~expect:[2;3;4]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -515,7 +516,7 @@ let%test_unit _ = (
   let e2 = Ring.add r 2 in
   let _e3 = add_detaching r 3 [e2] in
   let _e4 = Ring.add r 4 in
-  assert (ring_to_list r = [1;3;4])
+  [%test_result: int list] (ring_to_list r) ~expect:[1;3;4]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -523,7 +524,7 @@ let%test_unit _ = (
   let e2 = Ring.add r 2 in
   let _e3 = add_detaching r 3 [e1;e2] in
   let _e4 = Ring.add r 4 in
-  assert (ring_to_list r = [3;4])
+  [%test_result: int list] (ring_to_list r) ~expect:[3;4]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -531,7 +532,7 @@ let%test_unit _ = (
   let _e2 = Ring.add r 2 in
   let e3 = add_detaching r 3 [e1] in
   Ring.detach e3;
-  assert (ring_to_list r = [2])
+  [%test_result: int list] (ring_to_list r) ~expect:[2]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -539,7 +540,7 @@ let%test_unit _ = (
   let e2 = Ring.add r 2 in
   let e3 = add_detaching r 3 [e2] in
   Ring.detach e3;
-  assert (ring_to_list r = [1])
+  [%test_result: int list] (ring_to_list r) ~expect:[1]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -547,7 +548,7 @@ let%test_unit _ = (
   let e2 = Ring.add r 2 in
   let e3 = add_detaching r 3 [e1;e2] in
   Ring.detach e3;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 
 (* double detach *)
@@ -557,7 +558,7 @@ let%test_unit _ = (
   let e1 = Ring.add r 1 in
   Ring.detach e1;
   Ring.detach e1;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -565,7 +566,7 @@ let%test_unit _ = (
   let _e2 = Ring.add r 2 in
   Ring.detach e1;
   Ring.detach e1;
-  assert (ring_to_list r = [2])
+  [%test_result: int list] (ring_to_list r) ~expect:[2]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -573,7 +574,7 @@ let%test_unit _ = (
   let e2 = Ring.add r 2 in
   Ring.detach e2;
   Ring.detach e2;
-  assert (ring_to_list r = [1])
+  [%test_result: int list] (ring_to_list r) ~expect:[1]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -582,7 +583,7 @@ let%test_unit _ = (
   Ring.detach e1;
   Ring.detach e1;
   Ring.detach e2;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   (* This test break if the code fails to guard against double [detach]ing. *)
@@ -592,7 +593,7 @@ let%test_unit _ = (
   Ring.detach e1;
   Ring.detach e2;
   Ring.detach e1; (* Must not accidentally re-attach e2 ! *)
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -601,7 +602,7 @@ let%test_unit _ = (
   Ring.detach e2;
   Ring.detach e1;
   Ring.detach e1;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -610,7 +611,7 @@ let%test_unit _ = (
   Ring.detach e1;
   Ring.detach e2;
   Ring.detach e2;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -619,7 +620,7 @@ let%test_unit _ = (
   Ring.detach e2;
   Ring.detach e1;
   Ring.detach e2;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -628,7 +629,7 @@ let%test_unit _ = (
   Ring.detach e2;
   Ring.detach e2;
   Ring.detach e1;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 
 let%test_unit _ = (
@@ -639,7 +640,7 @@ let%test_unit _ = (
   Ring.detach e1;
   Ring.detach e2;
   Ring.detach e2;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -649,7 +650,7 @@ let%test_unit _ = (
   Ring.detach e2;
   Ring.detach e1;
   Ring.detach e2;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -659,7 +660,7 @@ let%test_unit _ = (
   Ring.detach e2;
   Ring.detach e2;
   Ring.detach e1;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -669,7 +670,7 @@ let%test_unit _ = (
   Ring.detach e1;
   Ring.detach e1;
   Ring.detach e2;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -679,7 +680,7 @@ let%test_unit _ = (
   Ring.detach e1;
   Ring.detach e2;
   Ring.detach e1;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 let%test_unit _ = (
   let r = Ring.create() in
@@ -689,6 +690,6 @@ let%test_unit _ = (
   Ring.detach e2;
   Ring.detach e1;
   Ring.detach e1;
-  assert (ring_to_list r = [])
+  [%test_result: int list] (ring_to_list r) ~expect:[]
 )
 

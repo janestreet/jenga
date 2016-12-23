@@ -45,7 +45,7 @@ module Snap : sig
   (** [todo] and [to_act_string] are provided for display by build-manager *)
   val todo : t -> int
   val to_act_string : t -> string
-  val to_string : t -> [< `omake_style | `jem_style | `fraction ] -> string
+  val to_string : t -> [< `monitor_style | `fraction ] -> string
   val to_effort_string : t -> string
   val finished: t -> [ `Success | `Failure ] option
   val to_metrics : t -> Metrics.t

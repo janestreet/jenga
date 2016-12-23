@@ -1,6 +1,7 @@
 
 open! Core.Std
 open Async.Std
+open! Int.Replace_polymorphic_compare
 
 let is_quitting_ivar = Ivar.create ()
 

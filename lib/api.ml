@@ -2,6 +2,7 @@
 open Core.Std
 open! Int.Replace_polymorphic_compare
 
+module Located_error = Located_error
 module Path = Path
 module Kind = Fs.Kind
 module Glob = Fs.Glob

@@ -1,5 +1,5 @@
-
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 let return = Dep.return
 let ( *>>= ) t f = Dep.bind t ~f

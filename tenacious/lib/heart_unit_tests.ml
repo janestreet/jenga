@@ -1,6 +1,6 @@
-
 open Core.Std
 open Async.Std
+open Int.Replace_polymorphic_compare
 
 module Heart = Heart
 module Glass = Heart.Glass

@@ -1,5 +1,5 @@
-
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 module Weak_ref = Tenacious_lib.Weak_ref
 

@@ -1,4 +1,5 @@
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 type t =
 | No_record_of_being_run_before

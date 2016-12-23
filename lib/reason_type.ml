@@ -1,5 +1,6 @@
 
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 type t =
   | Misc                              of string
@@ -20,7 +21,11 @@ type t =
   | Multiple_rules_for_path           of Path.Rel.t
   | Rule_failed_to_generate_targets   of Path.Rel.t list
   | Usercode_raised                   of Sexp.t
-  | Jengaroot_load_failed             of Error.t
+  | Usercode_error                    of Located_error.t
+  | Rules_load_failed                 of [ `Before_loading_rules of Located_error.t
+                                         | `Located_error_while_loading of Located_error.t
+                                         | `Error_while_loading of Error.t
+                                         ]
   | Mtimes_changed                    of Path.t list
   | Sandbox_error                     of [ `at_creation | `at_close ] * Sexp.t
   | Unexpected_targets                of string list

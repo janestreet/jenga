@@ -118,7 +118,7 @@ let command =
        | Error e -> return (Error e)
        | Ok root_dir ->
          Path.Repo.set_root root_dir;
-         let style = if progress_fraction then `fraction else `jem_style in
+         let style = if progress_fraction then `fraction else `monitor_style in
          (if snapshot then run_once ~root_dir style
           else run exit_on_finish ~root_dir style)
          >>= Shutdown.exit

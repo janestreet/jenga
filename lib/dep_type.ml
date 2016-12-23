@@ -1,5 +1,6 @@
 open Core.Std
 open Async.Std
+open! Int.Replace_polymorphic_compare
 
 (** [Dep_type.t] is the GADT implementation behind [Dep.t]. Values of this type are
     interpreted by jenga's build algorithm.*)

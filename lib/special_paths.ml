@@ -1,4 +1,5 @@
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 module Rel = Path.Rel
 

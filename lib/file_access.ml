@@ -1,6 +1,7 @@
 
 open! Core.Std
 open Async.Std
+open! Int.Replace_polymorphic_compare
 
 let the_open_file_throttle =
   (* There is no point having this as anything other than a global because

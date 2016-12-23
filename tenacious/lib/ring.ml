@@ -1,5 +1,5 @@
-
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 (* A [Ring.t] is represented as a cyclic doubly-linked list. The same representation is
    used for the ring itself, and for it elements; the ring being represented as a sentinel

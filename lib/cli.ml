@@ -1,4 +1,5 @@
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 (* jenga -- Swahili 'to build' *)
 
@@ -22,7 +23,7 @@ let main ?(argv=Array.to_list Sys.argv) ~run () =
   in
 
   match argv with
-  | _ :: s :: _ when List.mem toplevel_group_names s ->
+  | _ :: s :: _ when List.mem ~equal:String.(=) toplevel_group_names s ->
     Command.run (Command.group ~summary:"Generic build system" toplevel_group)
       ~argv
   | _ ->
@@ -31,7 +32,8 @@ let main ?(argv=Array.to_list Sys.argv) ~run () =
        Command wants to exit instead of returning even when completing. So we create the
        completion ourselves, which is easy enough, even though it's a bit ugly. *)
     begin match argv with
-    | _ :: s :: _ when Sys.getenv "COMP_CWORD" = Some "1" ->
+    | _ :: s :: _
+      when (match Sys.getenv "COMP_CWORD" with Some "1" -> true | _ -> false) ->
       List.iter toplevel_group_names ~f:(fun group_name ->
         if String.is_prefix ~prefix:s group_name then print_endline group_name)
     | _ -> ()

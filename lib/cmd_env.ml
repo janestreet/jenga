@@ -1,5 +1,6 @@
 open Core.Std
 open Async.Std
+open! Int.Replace_polymorphic_compare
 open Command.Let_syntax
 let return = Async.Std.return
 

@@ -62,16 +62,18 @@ let get_env spec =
   let start_time = Time.now() in
   track_loading (fun () ->
     Var.clear_all_registrations ();
-    Plugin.load_ocaml_src_files
+    Plugin.load_ocaml_src_files_without_running_them
       ~persistent_archive_dirpath:plugin_cache_dir
       ~use_cache:plugin_cache
       (List.map ~f:Path.to_absolute_string (Spec.ml_paths_to_load spec))
     >>= function
     | Error _ as e -> return e
-    | Ok plugin ->
-      let module M = (val plugin : Jenga_root_interface.S) in
-      M.setup() >>= fun env ->
-      let duration = Time.diff (Time.now()) start_time in
-      Message.load_jenga_root_done path_for_message duration;
-      return (Ok env)
+    | Ok run_plugin ->
+      match Result.try_with run_plugin with
+      | Error e -> return (Ok (`Toplevel_exn e))
+      | Ok (module M : Jenga_root_interface.S) ->
+        M.setup() >>= fun env ->
+        let duration = Time.diff (Time.now()) start_time in
+        Message.load_jenga_root_done path_for_message duration;
+        return (Ok (`Env env))
   )

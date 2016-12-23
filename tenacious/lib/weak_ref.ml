@@ -1,5 +1,5 @@
-
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 (* [Core.Std.Weak] provides support for an array of weak references (to heap blocks).
    Specialize this to support individual weak-refs, by always using arrays of length 1 *)

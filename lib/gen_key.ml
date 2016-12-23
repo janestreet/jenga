@@ -1,5 +1,6 @@
 
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 module T = struct
   type t = {

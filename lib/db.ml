@@ -135,7 +135,7 @@ module Listing = struct
     let kind_allows_file t =
       match t.kinds with
       | None -> true
-      | Some kinds -> List.mem kinds `File
+      | Some kinds -> List.mem kinds `File ~equal:[%compare.equal: Kind.t]
 
     let to_string t =
       sprintf "%s %s"
@@ -151,7 +151,7 @@ module Listing = struct
     let match_kind =
       match r.Restriction.kinds with
       | None -> (fun _ -> true)
-      | Some kinds -> List.mem kinds
+      | Some kinds -> List.mem kinds ~equal:[%compare.equal: Kind.t]
     in
     {
       dir = t.dir;

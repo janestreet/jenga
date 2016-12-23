@@ -13,4 +13,4 @@ module Spec : sig
   val config_file : conf:Path.t -> mls:Path.t list -> t
 end
 
-val get_env : Spec.t -> Env.t Or_error.t Deferred.t
+val get_env : Spec.t -> [ `Env of Env.t | `Toplevel_exn of Exn.t ] Or_error.t Deferred.t

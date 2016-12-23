@@ -9,6 +9,7 @@
     core_kernel
     fieldslib
     jenga_lib
+    parsexp
     re
     re.pcre
     sexplib

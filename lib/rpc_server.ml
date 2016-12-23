@@ -1,6 +1,6 @@
-
 open Core.Std
 open Async.Std
+open! Int.Replace_polymorphic_compare
 
 let heartbeat_config =
   Rpc.Connection.Heartbeat_config.create

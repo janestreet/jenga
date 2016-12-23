@@ -1,5 +1,6 @@
 
 open Core.Std
+open! Int.Replace_polymorphic_compare
 
 (* copied from some old code -- dev/repo_utils/lib/glob.ml *)
 
@@ -18,7 +19,7 @@ let convert_unanchored s =
             res ^= (quote (s.[pos+1]));
             aux (pos+2)
       | '*' ->
-          if (pos+1) < len &&s.[pos+1] = '*' then begin
+          if (pos+1) < len && Char.(=) s.[pos+1] '*' then begin
             res ^= ".*";
             aux (pos+2)
           end else begin
@@ -81,9 +82,8 @@ let convert_unanchored s =
   Buffer.contents res
 
 let%test_unit _ =
-  assert (convert_unanchored "{a,b}" = "\\(a\\|b\\)")
+  [%test_result: string] (convert_unanchored "{a,b}") ~expect:"\\(a\\|b\\)"
 
 let%test_unit _ =
-  assert (
-    convert_unanchored "{*.[ch],*.cpp,*.hh}"
-    = "\\([^/]*\\.[ch]\\|[^/]*\\.cpp\\|[^/]*\\.hh\\)")
+  [%test_result: string] (convert_unanchored "{*.[ch],*.cpp,*.hh}")
+    ~expect:"\\([^/]*\\.[ch]\\|[^/]*\\.cpp\\|[^/]*\\.hh\\)"

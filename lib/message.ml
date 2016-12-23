@@ -5,14 +5,6 @@ module Log = Async.Std.Log
 
 let parse_pretty_span = Job_summary.parse_pretty_span
 
-let pretend_to_be_omake =
-  match Core.Std.Sys.getenv "JENGA_PRETEND_TO_BE_OMAKE" with
-  | None -> false
-  | Some _ -> true
-
-let build_system_message_tag =
-  if pretend_to_be_omake then "*** omake" else "*** jenga"
-
 module Tag = struct
   type t =
   (* with triple leading stars *)
@@ -36,25 +28,12 @@ module Tag = struct
     | Printf_verbose -> "PV"
 end
 
-module Err = struct
-  type t = {
-    line : int;
-    col : int;
-    short : string;
-    extra : string option;
-  } [@@deriving sexp]
-  let create ?(pos=(1,1)) ?extra short =
-    let line,col = pos in
-    {line;col;short;extra}
-end
-
 module Event = struct
   type t =
   | Tagged_message of Tag.t * string
   | Transient of string
   | Load_jenga_root of Path.t
   | Load_jenga_root_done of Path.t * Time.Span.t
-  | Errors_for_omake_server of Path.t * Err.t list
   | Job_started of Job_summary.Start.t
   | Job_completed of Job_summary.t
   | Job_summary of Job_summary.t
@@ -128,9 +107,6 @@ let load_jenga_root path =
 let load_jenga_root_done path span =
   T.dispatch the_log (Event.Load_jenga_root_done (path,span))
 
-let errors_for_omake_server path errs =
-  T.dispatch the_log (Event.Errors_for_omake_server (path,errs))
-
 let job_started ~need ~where ~prog ~args ~sandboxed =
   let started = Job_summary.Start.create ~need ~where ~prog ~args ~sandboxed in
   let event = Event.Job_started started in
@@ -184,7 +160,7 @@ let pretty_mem_usage (config : Config.t) (m : Metrics.Memory.t) =
   sprintf !"heap=%{Byte_units}%s%s" m.heap top_heap gc_details
 ;;
 
-let omake_style_logger config event =
+let stdout_logger config event =
 
   let verbose = Config.verbose config in
   let show_trace_messages = Config.show_trace_messages config in
@@ -217,8 +193,8 @@ let omake_style_logger config event =
   in
   let jput s =
     (if dont_emit_kill_line()
-    then Core.Std.Printf.printf "%s%s: %s\n%!" elapsed build_system_message_tag s
-    else Core.Std.Printf.printf "\027[K%s%s: %s\n%!" elapsed build_system_message_tag s);
+    then Core.Std.Printf.printf "%s*** jenga: %s\n%!" elapsed s
+    else Core.Std.Printf.printf "\027[K%s*** jenga: %s\n%!" elapsed s);
     redisplay_transient()
   in
 
@@ -248,23 +224,6 @@ let omake_style_logger config event =
       (Path.to_string path)
       (Job_summary.pretty_span duration))
 
-  | Event.Errors_for_omake_server (path,errs) ->
-    let where = Path.to_string (Path.dirname path) in
-    let file = Path.basename path in
-    if verbose then (
-      put (sprintf "- build %s %s" where file);
-    );
-    List.iter errs ~f:(fun err ->
-      let {Err. line;col;short;extra} = err in
-      put (sprintf "File \"%s\", line %d, characters %d-%d:" file line col col);
-      put (sprintf "Error: %s" short);
-      (match extra with | None -> () | Some text -> put text);
-    );
-    if verbose then (
-      put (sprintf "- exit %s %s" where file);
-    );
-    redisplay_transient()
-
   | Event.Job_started _ -> () (* used to print the "- build" line here *)
 
   | Event.Job_completed summary ->
@@ -279,7 +238,7 @@ let omake_style_logger config event =
 
   | Event.Job_summary summary ->
     Job_summary.iter_lines summary
-      ~f:(fun line -> put (sprintf "      %s" line)) (* six spaces matches omake *)
+      ~f:(fun line -> put (sprintf "      %s" line))
 
   | Event.Build_done (duration, `u u, total, s, memory_metrics) ->
     jput (sprintf "%d/%d targets are up to date" total total);
@@ -385,7 +344,7 @@ let make_log ~log_filename =
 let init_logging config ~log_filename =
   let log = make_log ~log_filename in
   install_logger ~f:(to_log_full_logger log) ~flushed:(fun () -> Log.flushed log);
-  install_logger ~f:(omake_style_logger config) ~flushed:(fun () -> Deferred.unit)
+  install_logger ~f:(stdout_logger config) ~flushed:(fun () -> Deferred.unit)
 
 
 let flushed = T.flushed the_log

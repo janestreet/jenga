@@ -390,9 +390,11 @@ let build_sub_goal : (t ->  Goal.t -> Proxy_map.t Builder.t) =
 
 let apply_user_function' f =
   try Ok (f ()) with
+  | Located_error.E err -> Error (Reason.Usercode_error err)
   | exn -> Error (Reason.Usercode_raised (sexp_of_exn exn))
 let apply_user_function f =
   try return (f ()) with
+  | Located_error.E err -> error (Reason.Usercode_error err)
   | exn -> error (Reason.Usercode_raised (sexp_of_exn exn))
 
 let run_user_async_code : ((unit -> 'a Deferred.t) -> 'a Builder.t) =
@@ -695,8 +697,7 @@ let report_error_for_need t need reason =
     | _
       -> true
   in
-  if show_now then (
-    Reason.messages ~need:(Goal.to_string need) reason);
+  if show_now then Reason.messages ~need reason;
   if Config.stop_on_first_error t.config && not (Reason.filesystem_related reason) then (
     Quit.quit Exit_code.build_failed;
   )
@@ -793,13 +794,6 @@ let expand_module_string_dollar_vars =
   jenga.conf
 ----------------------------------------------------------------------*)
 
-let errors_for_omake_server ~within errs short =
-  Message.errors_for_omake_server within errs;
-  error (Reason.Misc (sprintf "%s: %s" (Path.to_string within) short))
-
-let one_error_for_omake_server ~within ?extra short =
-  errors_for_omake_server ~within [Message.Err.create ?extra short] short
-
 module Jenga_conf_rep : sig
   type t [@@deriving of_sexp]
   val modules : t -> string list
@@ -808,16 +802,19 @@ end = struct
   let modules (`modules xs) = xs
 end
 
+let error_before_loading_rules ~path message =
+  error (Rules_load_failed
+           (`Before_loading_rules (Located_error.create' ~source:(File path) message)))
+;;
+
 let read_jenga_conf : (t -> conf:Path.t -> Jenga_conf_rep.t Builder.t) =
   fun t ~conf:path ->
     get_contents t path
     *>>= fun contents ->
-    match Sexp.of_string_conv_exn (String.rstrip contents)
+    match Sexp.of_string_conv_exn contents
             [%of_sexp: Jenga_conf_rep.t]
     with
-    | exception exn ->
-      one_error_for_omake_server ~within:path
-        ~extra:(Exn.to_string exn) "failed sexp conversion"
+    | exception exn -> error_before_loading_rules ~path (Exn.to_string exn)
     | x -> return x
 ;;
 
@@ -828,10 +825,7 @@ let path_exists : (t -> Path.t -> bool Builder.t) =
     not (Path.Set.is_empty paths)
 
 let check_path_is_digestable t path =
-  let err prob =
-    let short = sprintf "%s: %s" (Path.to_string path) prob in
-    Some (Message.Err.create short)
-  in
+  let err prob = Some (sprintf !"%{Path}: %s" path prob) in
   digest_path t path *>>| function
   | `missing -> err "unreadable/missing file"
   | `is_a_dir -> err "is-a-directory"
@@ -848,11 +842,11 @@ let jenga_conf_load_spec : (t -> conf:Path.t -> Load_root.Spec.t Builder.t) =
         | None -> None (* .ml will be added *)
         | Some (_,"ml") -> None
         | Some (_,suf) ->
-          let short = sprintf "%s: module with unexpected suffix: .%s" m suf in
-          Some (Message.Err.create short))
+          Some (sprintf "%s: module with unexpected suffix: .%s" m suf))
     in
     match badly_suffixed_modules with
-    | _::_ as errs -> errors_for_omake_server ~within:conf errs "badly suffixed modules"
+    | _::_ as errs ->
+      error_before_loading_rules ~path:conf (String.concat errs ~sep:"\n")
     | [] ->
       let modules = (* path, but no suffix *)
         List.map module_strings ~f:(fun s ->
@@ -863,8 +857,9 @@ let jenga_conf_load_spec : (t -> conf:Path.t -> Load_root.Spec.t Builder.t) =
           match String.rsplit2 ~on:'/' s with | Some (_,s) -> s | None -> s)
       in
       (* duplicates checked w.r..t basenames *)
-      match List.find_a_dup basenames with | Some dup ->
-        one_error_for_omake_server ~within:conf (sprintf "duplicate module name: %s" dup)
+      match List.find_a_dup basenames with
+      | Some dup ->
+        error_before_loading_rules ~path:conf (sprintf "duplicate module name: %s" dup)
       | None ->
         (* .ml/.mli paths re-constructed w.r.t path of config file *)
         let mls,mlis =
@@ -874,8 +869,8 @@ let jenga_conf_load_spec : (t -> conf:Path.t -> Load_root.Spec.t Builder.t) =
           in re_suffix ".ml", re_suffix ".mli"
         in
         match mls with
-        | [] -> one_error_for_omake_server ~within:conf "no modules configured"
-        | _::_  ->
+        | [] -> error_before_loading_rules ~path:conf "no modules configured"
+        | _ :: _  ->
           begin
             Builder.all (
               List.map mlis ~f:(fun mli ->
@@ -885,11 +880,11 @@ let jenga_conf_load_spec : (t -> conf:Path.t -> Load_root.Spec.t Builder.t) =
               )) *>>| List.filter_map ~f:Fn.id
           end
           *>>= fun mlis_which_exist -> (* retriggering when come/go *)
-          Builder.all (
-            List.map (mls @ mlis_which_exist) ~f:(check_path_is_digestable t)
-          ) *>>= fun results ->
-          match (List.filter_map results ~f:Fn.id) with
-          | _::_ as errs -> errors_for_omake_server ~within:conf errs "unreadable modules"
+          Builder.all (List.map (mls @ mlis_which_exist) ~f:(check_path_is_digestable t))
+          *>>= fun results ->
+          match List.filter_opt results with
+          | _ :: _ as errs ->
+            error_before_loading_rules ~path:conf (String.concat ~sep:"\n" errs)
           | [] ->
             (* Ocaml_plugin is called to load a list of .mls;
                Corresponding .mlis will also be loaded if they exist *)
@@ -899,17 +894,20 @@ let jenga_root_load_spec : (t -> root_ml:Path.t -> Load_root.Spec.t Builder.t) =
   fun t ~root_ml ->
     check_path_is_digestable t root_ml *>>= function
     (* The check also ensures polling jenga retriggers on changes *)
-    | Some err -> errors_for_omake_server ~within:root_ml [err] "unreadable"
+    | Some err -> error_before_loading_rules ~path:root_ml err
     | None -> return (Load_root.Spec.ml_file ~ml:root_ml)
 
 let jenga_load_spec : (t -> Jr_spec.t -> Env.t Builder.t) =
   fun t jr_spec ->
     let env_of_load_root_spec spec =
       Builder.of_deferred (fun () -> Load_root.get_env spec) *>>= function
+      | Ok (`Toplevel_exn (Located_error.E e)) ->
+        error (Reason.Rules_load_failed (`Located_error_while_loading e))
+      | Ok (`Toplevel_exn exn) ->
+        error (Reason.Rules_load_failed (`Error_while_loading (Error.of_exn exn)))
       | Error e ->
-        error (Reason.Jengaroot_load_failed e)
-      | Ok env ->
-        return env
+        error (Reason.Rules_load_failed (`Error_while_loading e))
+      | Ok (`Env env) -> return env
     in
     match jr_spec with
     | Env env ->
@@ -937,7 +935,7 @@ let jenga_load_spec : (t -> Jr_spec.t -> Env.t Builder.t) =
       in
       what_kind_of_jenga_setup *>>= function
       | `no_conf_or_root ->
-        one_error_for_omake_server ~within:conf "jenga.conf missing"
+        error_before_loading_rules ~path:conf "jenga.conf missing"
       | `just_old_style_root ->
         jenga_root_load_spec t ~root_ml
       | `just_new_style_conf
@@ -2043,19 +2041,15 @@ let get_env_option :
 
 let show_progress_reports config ~fin progress =
   match Config.progress config with
-  | None -> ()
-  | Some style ->
+  | false -> ()
+  | true ->
 
     let transient_message () =
       let snap = Progress.snap progress in
-      Message.transient "%s" (Progress.Snap.to_string snap style)
+      Message.transient "%s" (Progress.Snap.to_string snap `monitor_style)
     in
 
-    let progress_report_period =
-      match style with
-      | `omake_style -> sec 1.0
-      | `jem_style -> sec 0.3
-    in
+    let progress_report_period = sec 0.3 in
     don't_wait_for (
       let rec loop () =
         Clock.after progress_report_period >>= fun () ->
@@ -2068,41 +2062,48 @@ let show_progress_reports config ~fin progress =
     )
 
 module Cycle_checking = struct
-  let message_cycle_path (`Prefix prefix, `Cycle cycle) =
-    Message.message "%s"
-      (String.concat (List.map ~f:(fun s -> s ^ "\n") (List.concat [
-         ["CYCLIC DEPENDENCIES: "];
-         prefix;
-         ["--- cycle starts here ---"];
-         cycle;
-         [List.hd_exn cycle];
-       ]
-       )))
+  let pretend_goal = Goal.Alias (Alias.create ~dir:Path.the_root "<cycle-detection>")
 
-  let message_to_inform_omake_server_we_are_quitting () =
-    let pr fmt = ksprintf (fun s -> Core.Std.Printf.printf "%s\n%!" s) fmt in
-    pr "*** OMakeroot error:";
-    pr "   dependency cycle; jenga.exe quitting\n";
-    pr "*** omake error:"
+  let cycle_path (`Prefix prefix, `Cycle cycle) =
+    String.concat (List.map ~f:(fun s -> s ^ "\n") (List.concat [
+      prefix;
+      ["--- cycle starts here ---"];
+      cycle;
+      [List.hd_exn cycle];
+    ]))
 
-  let handle_cycle_if_any config () =
+  let set_status progress last_status new_status =
+    (* Let's avoid unreporting/rereporting the same thing over and over, and only
+       report when something actually changes. *)
+    if not ([%compare.equal: [ `Ok | `Error of string ]] !last_status new_status)
+    then begin
+      last_status := new_status;
+      match new_status with
+      | `Ok -> Progress.set_status_built progress pretend_goal;
+      | `Error message -> Progress.set_status_error progress pretend_goal [Misc message]
+    end
+  ;;
+
+  let handle_cycle_if_any ~last_status ~progress ~config () =
     match Tenacious_lib.Graph.look_for_a_cycle () with
-    | None -> Deferred.return ()
+    | None ->
+      set_status progress last_status `Ok;
+      Deferred.return ()
     | Some cycle ->
-      Message.error "Cycle found.";
-      message_cycle_path cycle;
+      let message = "dependency cycle found:\n" ^ cycle_path cycle in
+      set_status progress last_status (`Error message);
+      Reason.messages ~need:pretend_goal (Reason.Misc message);
       match Config.poll_forever config with
       | true ->
-        Message.error "ERROR: dependency cycle";
         Deferred.return ()
       | false ->
-        message_to_inform_omake_server_we_are_quitting ();
         Quit.quit Exit_code.cycle_abort;
         Deferred.never ()
 
-  let start_cycle_checking config =
+  let start_cycle_checking progress config =
+    let last_status = ref (`Error "") in
     Option.iter Jenga_options.t.cycle_checking_interval ~f:(fun interval ->
-      Clock.every' interval (handle_cycle_if_any config))
+      Clock.every' interval (handle_cycle_if_any ~last_status ~progress ~config))
 
 end
 
@@ -2137,8 +2138,8 @@ let compact_zero_overhead () =
   Gc.tune ~space_overhead:prev_space_overhead ()
 
 let build_once :
-    (Config.t -> Progress.t -> unit Builder.t ->
-     (Heart.t * int) Deferred.t) =
+  (Config.t -> Progress.t -> unit Builder.t ->
+   (Heart.t * int) Deferred.t) =
   (* Make a single build using the top level tenacious builder
      Where a single build means we've done all we can
      (maybe we are complete, or maybe some targets are in error)
@@ -2185,7 +2186,7 @@ let build_once :
         Exit_code.build_failed
       )
     in
-    Message.message "%s" (Progress.Snap.to_string snap `jem_style);
+    Message.message "%s" (Progress.Snap.to_string snap `monitor_style);
 
     Metrics.Disk_format.append
       (Map.add ~key:"time" ~data:(Time.Span.to_float duration, Second)
@@ -2195,17 +2196,20 @@ let build_once :
     >>| fun () ->
 
     List.iter errors ~f:(fun (reason, stack_trace) ->
-      Reason.message_summary
-        config
-        ~need:(match List.last stack_trace with
-          | None -> ""
-          | Some n -> Goal.to_string n)
-        reason;
-      (if Config.show_error_dependency_paths config
-       then
-         List.iter (List.rev stack_trace) ~f:(fun need ->
-           Message.message "Wanted by %s" (Goal.to_string need)
-         )));
+      match reason with
+      | Reason.Shutdown -> ()
+      | _ ->
+        Reason.message_summary
+          config
+          ~need:(match List.last stack_trace with
+            | Some n -> n
+            | None -> Alias (Alias.create ~dir:Path.the_root "<nothing>"))
+          reason;
+        (if Config.show_error_dependency_paths config
+         then
+           List.iter (List.rev stack_trace) ~f:(fun need ->
+             Message.message "Wanted by %s" (Goal.to_string need)
+           )));
     heart, exit_code
 
 (*----------------------------------------------------------------------
@@ -2216,12 +2220,20 @@ let run_user_function_from_env_opt env_opt tag ~f =
   match env_opt with
   | None -> Deferred.unit
   | Some env ->
-    Monitor.try_with ~extract_exn:true (fun () ->
-      f env ()
-    ) >>= function
+    let report_exn exn msg =
+      match Monitor.extract_exn exn with
+      | Action.Shutdown -> ()
+      | _ -> Message.error "%s: threw exception%s:\n%s" tag msg (Exn.to_string exn)
+    in
+    Monitor.handle_errors
+      (fun () ->
+         Monitor.try_with ~extract_exn:true ~rest:`Raise (fun () ->
+           f env ()))
+      (fun exn -> report_exn exn " after returning")
+    >>= function
     | Ok () -> Deferred.unit
     | Error exn ->
-      Message.error "%s: threw exception:\n%s" tag (Exn.to_string exn);
+      report_exn exn "";
       Deferred.unit
 
 let build_forever =
@@ -2239,7 +2251,7 @@ let build_forever =
         config progress
     in
 
-    Cycle_checking.start_cycle_checking config;
+    Cycle_checking.start_cycle_checking progress config;
 
     let rec build_and_poll ()  = (* never finishes if polling *)
 

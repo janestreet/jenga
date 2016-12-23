@@ -1,4 +1,5 @@
 open Core.Std
+open! Int.Replace_polymorphic_compare
 open Pattern
 
 let test_glob glob good bad =

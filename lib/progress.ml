@@ -263,10 +263,7 @@ module Snap = struct
 
   let to_string t style =
     match style with
-    | `omake_style ->
-      let top, bot = Counts.fraction t.counts in
-      sprintf "[= ] %d / %d" top bot
-    | `jem_style ->
+    | `monitor_style ->
       let todo = Counts.todo t.counts in
       Finish_time_estimator.push_todo estimator todo;
       sprintf "%s j=%d+%d %s%s"
@@ -317,10 +314,10 @@ It can NEVER happen that error=0 but failure>0.
 - failure : unable to build because of errors in dependencies
 
 - total = todo + built + error + failure
-- (built / total) is the omake style fraction
 
 The line is optionally suffixed by an estimated finish time if the
-build is still proceeding, or an indication that jenga is finished and
-polling for file-system changes. Note: \"finished\" does not necessary
-mean that the build was successful. Trailing \"?\"s indicate jem has not
-heard from jenga for more than half a second."
+build is still proceeding, or an indication that jenga is finished
+and polling for file-system changes. Note: \"finished\" does not
+necessary mean that the build was successful. Trailing \"?\"s
+indicate the monitor has not heard from jenga for more than half a
+second."
