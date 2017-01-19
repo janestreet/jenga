@@ -5,19 +5,19 @@ open Async.Std
 module Heart = Tenacious.Heart
 module Glass = Heart.Glass
 
-let memoize_reified_with_cache ~name ~key_to_string ht ~key f =
+let find_or_add_memoized ~name ~key_to_string ht ~key f =
   Hashtbl.find_or_add ht key ~default:(
     fun () ->
-      Tenacious.reify
+      Tenacious.memoize
         ~name:(lazy (
-          sprintf "memoize_reified_with_cache %S: %s" name (key_to_string key)))
+          sprintf "find_or_add_memoized %S: %s" name (key_to_string key)))
         (f key))
 
-let memoize_reified ~name ~key_to_string hashable f =
+let table_of_memoized ~name ~key_to_string hashable f =
   Memo.general ~hashable (fun x ->
-    Tenacious.reify
+    Tenacious.memoize
       ~name:(lazy (
-        sprintf "memoize_reified %S: %s" name (key_to_string x))) (f x))
+        sprintf "table_of_memoized %S: %s" name (key_to_string x))) (f x))
 
 let unbreakable x = x,Heart.unbreakable
 
@@ -588,19 +588,19 @@ end = struct
 
     and lstat =
       let r = lazy (
-        memoize_reified
+        table_of_memoized
           ~name:"lstat" ~key_to_string:Path.to_string Path.hashable uncached_lstat)
       in
       fun x -> Lazy.force r x
     and stat =
       let r = lazy (
-        memoize_reified
+        table_of_memoized
           ~name:"stat" ~key_to_string:Path.to_string  Path.hashable uncached_stat)
       in
       fun x -> Lazy.force r x
     and inode =
       let r = lazy (
-        memoize_reified
+        table_of_memoized
           ~name:"inode" ~key_to_string:Path.to_string  Path.hashable uncached_inode)
       in
       fun x -> Lazy.force r x
@@ -623,7 +623,7 @@ end = struct
           >>| fun x -> `listing x
     in
     let list_dir =
-      memoize_reified
+      table_of_memoized
         ~name:"list_dir" ~key_to_string:Path.to_string  Path.hashable uncached_list_dir
     in
     { stat; list_dir }
@@ -744,7 +744,7 @@ end = struct
   }
 
   let contents_file t sm ~file =
-    memoize_reified_with_cache
+    find_or_add_memoized
       ~name:"contents"
       ~key_to_string:Path.to_string
       t.cache ~key:file (fun file -> contents_file sm ~file)
@@ -779,7 +779,7 @@ end = struct
   }
 
   let digest_file t dp sm ~file =
-    memoize_reified_with_cache
+    find_or_add_memoized
       ~name:"digest"
       ~key_to_string:Path.to_string
       t.cache ~key:file (fun file ->
@@ -888,7 +888,7 @@ end = struct
   }
 
   let list_glob t fsm glob =
-    memoize_reified_with_cache
+    find_or_add_memoized
       ~name:"glob"
       ~key_to_string:Glob.to_string
       t.cache ~key:glob (fun glob ->

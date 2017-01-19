@@ -16,6 +16,7 @@ type t = {
   j_number : int;
   f_number : int;
   d_number : int;
+  tenacious_concurrency : int option;
   stop_on_first_error : bool;
   poll_forever : bool;
   verbose : bool;
@@ -35,7 +36,7 @@ type t = {
   path_to_jenga_conf : string option;
   brief_error_summary : bool;
   no_server : bool;
-  demands : string list;
+  goals : string list;
   no_notifiers : bool;
   no_fs_triggers : bool;
   sandbox_actions : Db.Sandbox_kind.t;

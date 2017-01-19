@@ -23,6 +23,7 @@ let source_if_it_exists p = Source_if_it_exists p
 let contents p = Contents p
 let group_dependencies t = Group_dependencies t
 let ( *>>| ) = map
+let memoize ~name t = Memoize { name; t; cached_exec = None; cached_reflect = None }
 
 let all_unit ts = all ts *>>| fun (_:unit list) -> ()
 

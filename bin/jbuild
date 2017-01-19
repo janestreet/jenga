@@ -1,6 +1,5 @@
 (embed
  ((names (jenga))
-  (code_style ppx)
   (libraries (
     async
     async_kernel

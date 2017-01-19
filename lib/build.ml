@@ -64,237 +64,7 @@ end = struct
 
 end
 
-module Problem : sig
-
-  type t
-
-  (** The list of individual errors together with dependency traces.
-     (a, [b,c,d]) means
-     "error 'a' happened at subgoal 'd',
-     which was a part of subgoal 'c',
-     which was a part of subgoal 'b'".
-  *)
-  val reasons : t -> (Reason.t * Goal.t list) list
-
-  (** The list of errors that happened at the current subgoal.
-    This should be true:
-    [reasons_here t = List.filter_map (reasons t) ~f:(function
-      | (r, []) -> Some r
-      | (r, _) -> None)]
-    *)
-  val reasons_here : t -> Reason.t list
-
-  (** This is a superset of the needs listed in [reasons]
-      because a single Reason.t can be reachable by multiple path,
-      all of needs along which are going to be in error.
-  *)
-  val needs_in_error : t -> Goal.Set.t
-
-  val create : Reason.t -> t
-  val all : t list -> t
-  val subgoal : Goal.t -> t -> t
-
-end = struct
-
-  module Id = Unique_id.Int()
-
-  (**
-    [reasons] contains all errors collected transitively together with
-    dependency paths via which they've been reached;
-
-     [reasons_here] contains only the errors at this subgoal.
-  *)
-  type t = {
-    reasons : (Reason.t * Goal.t list) Id.Map.t
-  ; reasons_here : Reason.t Id.Map.t
-  ; needs_in_error : Goal.Set.t
-  }
-
-  let union_left_biased = Map.merge ~f:(fun ~key:_ -> function
-    | `Left l -> Some l
-    | `Both (l, _) -> Some l
-    | `Right r -> Some r
-  )
-
-  let reasons t = Map.data (t.reasons)
-  let reasons_here t = Map.data (t.reasons_here)
-  let needs_in_error t = t.needs_in_error
-
-  let create r =
-    let id = Id.create () in
-    { reasons = Id.Map.singleton id (r, [])
-    ; reasons_here = Id.Map.singleton id r
-    ; needs_in_error = Goal.Set.empty
-    }
-
-  let merge a b =
-    { reasons = union_left_biased a.reasons b.reasons
-    ; reasons_here =
-        union_left_biased
-          a.reasons_here
-          b.reasons_here
-    ; needs_in_error =
-        Set.union a.needs_in_error b.needs_in_error
-    }
-
-  let empty =
-    { reasons = Id.Map.empty
-    ; reasons_here = Id.Map.empty
-    ; needs_in_error = Goal.Set.empty
-    }
-
-  let all = List.fold_left ~init:empty ~f:merge
-
-  let subgoal need t =
-    { reasons = Id.Map.map ~f:(fun (r, l) -> (r, need :: l)) t.reasons
-    ; reasons_here = Id.Map.empty
-    ; needs_in_error = Set.add t.needs_in_error need
-    }
-
-end
-
-(*----------------------------------------------------------------------
-  Builder
-----------------------------------------------------------------------*)
-
-module Builder : sig (* layer error monad within tenacious monad *)
-  type 'a t
-
-  val wrap : ('a, Problem.t) Result.t Tenacious.t -> 'a t
-  val expose : 'a t -> ('a, Problem.t) Result.t Tenacious.t
-
-  val of_tenacious : 'a Tenacious.t -> 'a t
-
-  val return : 'a -> 'a t
-  val bind : 'a t -> f:('a -> 'b t) -> 'b t
-  val ( *>>| ) : 'a t -> ('a -> 'b) -> 'b t
-
-  val cutoff : equal:('a -> 'a -> bool) -> 'a t -> 'a t
-
-  val reify : name:String.t Lazy.t -> 'a t -> 'a t
-
-  val error : Reason.t -> 'a t
-  val all : 'a t list -> 'a list t
-  val all_unit : unit t list -> unit t
-  val subgoal : Goal.t -> 'a t -> 'a t
-
-  val both : 'a t -> 'b t -> ('a * 'b) t
-
-  val of_deferred : (unit -> 'a Deferred.t) -> 'a t
-
-  val desensitize : 'a t -> ('a * Heart.t) t
-  val sensitize : Heart.t -> unit t
-
-  val bracket
-    :  'a t
-    -> running:(int -> unit)
-    -> finished:(('a, Problem.t) Result.t -> unit)
-    -> cancelled:(unit -> unit)
-    -> 'a t
-
-  val uncancellable : 'a t -> 'a t
-
-  val return_result : ('a, Reason.t) Result.t -> 'a t
-  val bind_result : 'a t -> ('a -> ('b, Reason.t) Result.t) -> 'b t
-
-end = struct
-
-  type 'a t = ('a, Problem.t) Tenacious.Result.t
-
-  let cutoff ~equal x =
-    Tenacious.cutoff
-      ~equal:(fun res1 res2 ->
-        match res1,res2 with
-        | Ok x1, Ok x2 -> equal x1 x2
-        (* never cutoff errors *)
-        | Ok _, Error _
-        | Error _, Ok _
-        | Error _, Error _
-          -> false
-      ) x
-
-  let wrap t = t
-  let expose t = t
-
-  let reify = Tenacious.reify
-
-  let of_tenacious tenacious =
-    Tenacious.map tenacious ~f:(fun x -> Ok x)
-
-  let return = Tenacious.Result.return
-  let bind = Tenacious.Result.bind
-  let map x ~f = Tenacious.Result.map x ~f
-
-  (* we can't use Tenacious.Result.all because:
-     - it's sequential, but we want parallel
-     - it only returns one error, but we want all of them *)
-  let all xs =
-    Tenacious.map (Tenacious.all xs) ~f:(fun ys ->
-      let rec collect probs oks = function
-        | Ok x :: xs -> collect probs (x::oks) xs
-        | Error p :: xs -> collect (p::probs) oks xs
-        | [] ->
-          match probs with
-          | [] -> Ok (List.rev oks)
-          | _::_ -> Error (Problem.all (List.rev probs))
-      in
-      collect [] [] ys
-    )
-
-  let all_unit ts = map (all ts) ~f:(fun (_ : unit list) -> ())
-
-  let error reason = Tenacious.Result.fail (Problem.create reason)
-
-  let subgoal need builder =
-    Tenacious.Result.map_error builder ~f:(Problem.subgoal need)
-
-  let of_deferred f =
-    Tenacious.lift (fun () ->
-      f () >>| fun x -> (Ok x, Heart.unbreakable)
-    )
-
-  let desensitize t =
-    Tenacious.bind (Tenacious.desensitize t) ~f:(function
-    | (Ok x,heart) -> Tenacious.return (Ok (x,heart))
-    | (Error e, heart) ->
-      Tenacious.lift (fun () ->
-        Deferred.return (Error e, heart)
-      )
-    )
-
-  let sensitize heart =
-    Tenacious.lift (fun () -> Deferred.return (Ok (), heart))
-
-  let bracket t ~running ~finished ~cancelled =
-    Tenacious.bracket t ~running ~finished ~cancelled
-
-  let uncancellable builder = Tenacious.uncancellable builder
-
-  let ( *>>| ) x f = map x ~f
-  let both : ('a t -> 'b t -> ('a * 'b) t) =
-    fun a b ->
-      all [
-        (a *>>| fun a -> `a a);
-        (b *>>| fun b -> `b b);
-      ] *>>| function
-      | [`a a; `b b] -> (a,b)
-      | _ -> assert false
-
-  let return_result v =
-    Tenacious.return
-      (match v with
-       | Error reason -> Error (Problem.create reason)
-       | Ok _ as ok -> ok)
-
-  let bind_result t f = Tenacious.map t ~f:(function
-    | Error _ as e -> e
-    | Ok v ->
-      match f v with
-      | Ok _ as ok -> ok
-      | Error reason -> Error (Problem.create reason))
-
-end
-let _ = Builder.(return_result)
+module Problem = Builder.Problem
 let return   = Builder.return
 let ( *>>| ) = Builder.( *>>| )
 let ( *>>= ) t f = Builder.bind t ~f
@@ -315,7 +85,7 @@ let memo_builder :(
     match !memo with
     | Some builder -> builder
     | None ->
-      let builder = Builder.reify ~name:(lazy "memo-builder") (f ()) in
+      let builder = Builder.memoize ~name:(lazy "memo-builder") (f ()) in
       memo := Some builder;
       builder
 
@@ -532,7 +302,7 @@ let share_builder : (
     | Some builder -> builder
     | None ->
       let builder =
-        Builder.reify (f ())
+        Builder.memoize (f ())
           ~name:(lazy (sprintf "share-builder %S: %s" name (key_to_string key)))
       in
       Hashtbl.add_exn memo ~key ~data:builder;
@@ -1023,13 +793,13 @@ let mtimes_of_proxy_map =
   let type_id : (Path.t * Fs.Mtime.t) list Builder.t Type_equal.Id.t =
     Type_equal.Id.create ~name:"" [%sexp_of: _]
   in
-  let compute_without_reify t paths =
+  let compute_without_memoize t paths =
     Builder.all (List.map paths ~f:(mtime_file_cached t))
   in
-  let compute_with_reify t paths =
-    Builder.reify
+  let compute_with_memoize t paths =
+    Builder.memoize
       ~name:(lazy "mtimes_of_proxy_map")
-      (compute_without_reify t paths)
+      (compute_without_memoize t paths)
   in
   fun t proxy_map ->
     if Jenga_options.t.turn_off_mtimes_check
@@ -1037,13 +807,13 @@ let mtimes_of_proxy_map =
     else
       let paths, groups = Db.Proxy_map.to_paths_for_mtimes_check proxy_map in
       let all =
-        compute_without_reify t paths ::
+        compute_without_memoize t paths ::
         List.map groups ~f:(fun group ->
           Db.Proxy_map.Group.find_or_add group
             ~unique_id_across_jenga:type_id
             (* Here we can have different [t]. However the function only cares about
                t.fs, and there is only one of those. *)
-            ~unique_f_across_jenga:(compute_with_reify t))
+            ~unique_f_across_jenga:(compute_with_memoize t))
       in
       Builder.all all
       *>>| fun l ->
@@ -1152,30 +922,30 @@ let source_files : (t -> dir:Path.t -> Path.Set.t Builder.t) =
 ----------------------------------------------------------------------*)
 
 let build_depends t depends ~need =
-  let rec exec : type a. a Dep.t -> (a * Proxy_map.t) Builder.t = fun dep ->
+  let rec exec : type a. need:string -> a Dep.t -> (a * Proxy_map.t) Builder.t = fun ~need dep ->
     match dep with
 
     | Dep.Return x ->
       return (x, Proxy_map_op.empty)
 
     | Dep.Map (x, f) ->
-      exec x *>>|= fun (v1, pm) ->
+      exec ~need x *>>|= fun (v1, pm) ->
       apply_user_function' (fun () -> (f v1, pm))
 
     | Dep.Bind (left,f_right) ->
-      exec left *>>= fun (v1,pm1) ->
+      exec ~need left *>>= fun (v1,pm1) ->
       apply_user_function (fun () -> f_right v1) *>>= fun right ->
-      exec right *>>= fun (v2,pm2) ->
+      exec ~need right *>>= fun (v2,pm2) ->
       build_merged_proxy_maps [pm1;pm2] *>>= fun pm ->
       return (v2, pm)
 
     | Dep.Cutoff (equal,body) ->
       Builder.cutoff
         ~equal:(fun (x1,pm1) (x2,pm2) -> equal x1 x2 && Proxy_map_op.equal pm1 pm2)
-        (exec body)
+        (exec ~need body)
 
     | Dep.All xs ->
-      Builder.all (List.map ~f:exec xs) *>>= fun xs ->
+      Builder.all (List.map ~f:(exec ~need) xs) *>>= fun xs ->
       let vs,pms = List.unzip xs in
       build_merged_proxy_maps pms *>>= fun pm ->
       return (vs,pm)
@@ -1212,7 +982,7 @@ let build_depends t depends ~need =
       (contents, pm)
 
     | Dep.Action_stdout action_depends ->
-      exec action_depends *>>= fun (action,pm) ->
+      exec ~need action_depends *>>= fun (action,pm) ->
       run_action_for_stdout_if_necessary t ~deps:pm ~need action *>>| fun stdout ->
       (stdout, Proxy_map.empty)
 
@@ -1261,44 +1031,53 @@ let build_depends t depends ~need =
       ((), pm)
 
     | Dep.Group_dependencies dep ->
-      exec dep *>>| fun (v, pm) ->
+      exec ~need dep *>>| fun (v, pm) ->
       v, Db.Proxy_map.group pm
 
     | Dep.Var var ->
       Builder.of_tenacious (Var.watch var) *>>|= fun result ->
       apply_user_function' (fun () -> ok_exn result, Proxy_map.empty)
 
+    | Dep.Memoize ({ name; t = dep; _ } as r) ->
+      match r.cached_exec with
+      | Some v -> v
+      | None ->
+        let v = Builder.memoize ~name:(lazy name) (exec ~need:name dep) in
+        r.cached_exec <- Some v;
+        v
+
   in
-  exec depends
+  exec depends ~need
 
 (*----------------------------------------------------------------------
  reflect depends
 ----------------------------------------------------------------------*)
 
 let reflect_depends t depends ~need =
-  let rec exec : type a. a Dep.t -> (a * Path.Set.t) Builder.t = function
+  let rec exec : type a. need:string -> a Dep.t -> (a * Path.Set.t) Builder.t =
+    fun ~need -> function
 
     | Dep.Return x ->
       return (x, Path.Set.empty)
 
     | Dep.Map (x, f) ->
-      exec x *>>|= fun (v1, set) ->
+      exec ~need x *>>|= fun (v1, set) ->
       apply_user_function' (fun () -> (f v1, set))
 
     | Dep.Bind (left,f_right) ->
-      exec left *>>= fun (v1,set1) ->
+      exec ~need left *>>= fun (v1,set1) ->
       apply_user_function (fun () -> f_right v1) *>>= fun right ->
-      exec right *>>= fun (v2,set2) ->
+      exec ~need right *>>= fun (v2,set2) ->
       let set = Path.Set.union set1 set2 in
       return (v2, set)
 
     | Dep.Cutoff (equal,body) ->
       Builder.cutoff
         ~equal:(fun (x1,set1) (x2,set2) -> equal x1 x2 && Path.Set.equal set1 set2)
-        (exec body)
+        (exec ~need body)
 
     | Dep.All xs ->
-      Builder.all (List.map ~f:exec xs) *>>= fun xs ->
+      Builder.all (List.map ~f:(exec ~need) xs) *>>= fun xs ->
       let vs,sets = List.unzip xs in
       let set = List.fold sets ~init:Path.Set.empty ~f:Path.Set.union in
       return (vs,set)
@@ -1377,14 +1156,21 @@ let reflect_depends t depends ~need =
     | Dep.Group_dependencies dep ->
       (* We should probably do something smarter here, but reflection doesn't matter as
          much, since it's not usually done on whole trees. *)
-      exec dep
+      exec ~need dep
 
     | Dep.Var var ->
       Builder.of_tenacious (Var.watch var) *>>|= fun result ->
       apply_user_function' (fun () -> ok_exn result, Path.Set.empty)
 
+    | Dep.Memoize ({ name; t = dep; _ } as r) ->
+      match r.cached_reflect with
+      | Some v -> v
+      | None ->
+        let v = Builder.memoize ~name:(lazy name) (exec dep ~need) in
+        r.cached_reflect <- Some v;
+        v
   in
-  exec depends
+  exec depends ~need
 
 (*----------------------------------------------------------------------
 schemes...
@@ -1970,7 +1756,7 @@ let build_one_root_goal :
       Memo.t ->
       Config.t ->
       Progress.t ->
-      demanded:Goal.t ->
+      goal:Goal.t ->
       unit Builder.t
     ) =
   (* Entry point to build a single root goal
@@ -1979,7 +1765,7 @@ let build_one_root_goal :
      tenacious monad - ignoring the proxy map or any errors.
   *)
   fun ~jr_spec fs persist memo
-    config progress ~demanded ->
+    config progress ~goal ->
     let t = {
       config;
       fs;
@@ -1995,7 +1781,7 @@ let build_one_root_goal :
       delete_if_depended_upon;
       delete_union;
     } in
-    build_goal t demanded
+    build_goal t goal
     *>>| fun (_ :Proxy_map.t) -> ()
 
 let get_env_option :
@@ -2239,7 +2025,7 @@ let run_user_function_from_env_opt env_opt tag ~f =
 let build_forever =
   (* co-ordinate the build-forever process *)
 
-  fun config progress ~jr_spec ~top_level_demands fs persist
+  fun config progress ~jr_spec ~top_level_goals fs persist
     ~save_db_now ~when_rebuilding ->
 
     let memo = Memo.create () in
@@ -2264,11 +2050,8 @@ let build_forever =
 
       let top_builder =
         Builder.all_unit (
-          List.map top_level_demands ~f:(fun demanded ->
-            build_one_root_goal
-              ~jr_spec
-              fs persist memo
-              config progress ~demanded
+          List.map top_level_goals ~f:(fun goal ->
+            build_one_root_goal ~jr_spec fs persist memo config progress ~goal
           )
         )
       in

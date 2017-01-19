@@ -2,7 +2,7 @@ open Core.Std
 open Async.Std
 
 (** A global graph of async computations used by tenacious: each node normally corresponds
-    to a single execution of a [reify]: if [reify]'s heart gets broken, we create a new
+    to a single execution of a [memoize]: if [memoize]'s heart gets broken, we create a new
     node next time it's demanded.
 
     There is an edge from [a] to [b] if computation [a] is waiting for result of

@@ -1,0 +1,270 @@
+open Core.Std
+open Async.Std
+open! Int.Replace_polymorphic_compare
+
+module Job_summary = struct
+  module Start = struct
+    type t = {
+      uid : int;
+      need : string;
+      where : string;
+      prog : string;
+      args : string list;
+      sandboxed : bool;
+    } [@@deriving sexp]
+  end
+
+  module Finish = struct
+    type t = {
+      outcome : [`success | `error of string];
+      duration : Time.Span.t;
+    } [@@deriving sexp]
+  end
+
+  type t = Start.t * Finish.t * Sexp.t
+  [@@deriving sexp]
+end
+
+type event =
+  | Job_started of Job_summary.Start.t
+  | Job_completed of Job_summary.t
+[@@deriving sexp]
+
+let iter_over_events debug_file ~f =
+  Reader.with_file debug_file ~f:(fun reader ->
+    Pipe.iter (Reader.lines reader) ~f:(fun line ->
+      match String.lsplit2 line ~on:' ' with
+      | Some (date, rest) ->
+        begin match String.lsplit2 rest ~on:' ' with
+        | Some (time_of_day, sexp) ->
+          if String.is_prefix ~prefix:"(Job_started" sexp
+          || String.is_prefix ~prefix:"(Job_completed" sexp
+          then
+            let time = Time.of_string (date ^ " " ^ time_of_day) in
+            f time (Sexp.of_string_conv_exn sexp event_of_sexp)
+          else return ()
+        | None -> return ()
+        end
+      | None -> return ()
+    )
+  )
+;;
+
+
+let map_with_next l ~f =
+  match l with
+  | [] -> []
+  | h :: t ->
+    let rec loop acc prev t =
+      match t with
+      | [] -> List.rev (f prev None :: acc)
+      | h :: t -> loop (f prev (Some h) :: acc) h t
+    in
+    loop [] h t
+;;
+
+(* Given a step function, this returns a new step function which has about the same values
+   but only one step every span [step]. The value of the steps of the output function is
+   the average of the value of the input function for the range of x values considered. *)
+let reduce_resolution ~step ~scalar_mul ~add time_a_list =
+  let combine this_start next_start this_acc =
+    let this_acc_combined =
+      map_with_next (List.rev this_acc) ~f:(fun (v_time, v) next ->
+        let v_time = Time.max v_time this_start in
+        let next_time = match next with None -> next_start | Some (t, _) -> t in
+        [%test_pred: Time.t * Time.t] (fun (a, b) -> Time.(>=) a b) (next_time, this_start);
+        Time.diff next_time v_time, v)
+      |> List.map ~f:(fun (span, v) -> scalar_mul (Time.Span.(//) span step) v)
+      |> List.reduce_exn ~f:add
+    in
+    let time_combined = Time.add this_start (Time.Span.scale step 0.5) in
+    time_combined, this_acc_combined
+  in
+  let rec loop this_start this_acc acc time_a_list =
+    assert (not (List.is_empty this_acc));
+    let next_start = Time.add this_start step in
+    match time_a_list with
+    | [] -> List.rev (combine this_start next_start this_acc :: acc)
+    | (time, a) :: rest ->
+      if Time.(>) time next_start
+      then loop next_start [List.hd_exn this_acc]
+             (combine this_start next_start this_acc :: acc) time_a_list
+      else loop this_start ((time, a) :: this_acc) acc rest
+  in
+  match time_a_list with
+  | [] -> []
+  | (time, a) :: rest -> loop time [(time, a)] [] rest
+;;
+
+let category (start : Job_summary.Start.t) =
+  if String.is_substring start.prog ~substring:"ocamldep"
+  then "ocamldep"
+  else if String.is_substring start.prog ~substring:"ocamlopt"
+          && List.mem start.args "-c"
+  then ".ml"
+  else if String.is_substring start.prog ~substring:"link-quietly"
+  then "link"
+  else if String.is_substring start.prog ~substring:"ocamlc"
+          && List.mem start.args "-c"
+  then ".mli"
+  else if String.is_substring start.need ~substring:"fgrep"
+  then "test/bench grep"
+  else if List.exists (start.prog :: start.args) ~f:(String.is_substring ~substring:"ocamlobjinfo")
+  then "ocamlobjinfo"
+  else if String.(=) start.prog "gcc"
+       || String.(=) start.prog "g++"
+       || (String.is_substring start.prog ~substring:"ocamlc"
+           && Option.exists (List.hd start.args) ~f:(String.is_suffix ~suffix:".c"))
+  then "c/c++"
+  else if String.is_prefix ~prefix:".liblinks" start.where
+  then "liblinks"
+  else if List.exists start.args ~f:(String.(=) "./inline_tests_runner")
+       || String.is_substring start.prog ~substring:"enforce-style"
+  then "test"
+  else if String.(=) start.prog "hg"
+       || List.exists start.args ~f:(String.is_substring ~substring:"hg showconfig")
+  then "hg"
+  else if String.is_substring start.prog ~substring:"ocamlyacc"
+       || String.is_substring start.prog ~substring:"ocamllex"
+       || String.is_substring start.prog ~substring:"menhir"
+  then "codegen"
+  else if (String.is_substring start.prog ~substring:"ocamlopt"
+           && Option.exists (List.last start.args) ~f:(String.is_suffix ~suffix:".cmxa"))
+  then "archive"
+  else if List.exists start.args ~f:(String.is_substring ~substring:"ocaml_embed_compiler")
+  then "ocaml-plugin"
+  else if String.(=) start.prog "bash"
+  then "bash"
+  else "other" (* raise_s [%sexp (start : Job_summary.Start.t)] *)
+
+let report_totals ~writer:w all_categories =
+  fprintf w "category,total time\n";
+  List.iter all_categories ~f:(fun (span, category) ->
+    fprintf w !"%s,%f\n" category (Time.Span.to_min span))
+;;
+
+module M = Core_extended.Std.Interval_map.Make(Time)
+
+let report_schedule ~writer:w ~all_categories ~interval_map ~first_time =
+  fprintf w "time";
+  List.iter all_categories ~f:(fprintf w ",%s");
+  fprintf w "\n";
+  Sequence.to_list (M.construct_preimage interval_map)
+  |> List.filter_map ~f:(fun (v, interval) ->
+    match interval with
+    | `Always -> assert false
+    | `Until _ -> None
+    | `From k | `Between (k, _) -> Some (k, v))
+  |> reduce_resolution
+       ~step:(Time.Span.of_sec 5.)
+       ~scalar_mul:(fun x y -> Map.map y ~f:(fun y -> x *. Float.of_int y))
+       ~add:(fun m1 m2 -> Map.merge m1 m2 ~f:(fun ~key:_ ->
+         function `Left x
+                | `Right x -> Some x
+                | `Both (x, y) -> Some (x +. y)))
+  |> List.iter ~f:(fun (k, m) ->
+    (* We could output Time.Span.to_string, but htmlplot shows spans as number of seconds
+       apparently, which is not nice. *)
+    fprintf w "%f" (Time.Span.to_min (Time.diff k first_time));
+    List.iter all_categories ~f:(fun category ->
+      let v = Option.value (Map.find m category) ~default:0. in
+      fprintf w ",%f" v);
+    fprintf w "\n")
+;;
+
+let main debug_file ~totals ~graph =
+  let unfinished = Int.Table.create () in
+  let state = ref (M.create ~left_of_leftmost:String.Map.empty ~value_right_of:Time.Map.empty) in
+  let first_time = ref Time.epoch in
+  let all_categories = ref String.Map.empty in
+  iter_over_events debug_file ~f:(fun time event ->
+    if Time.(=) Time.epoch !first_time then first_time := time;
+    begin match event with
+    | Job_started start ->
+      Hashtbl.add_exn unfinished ~key:start.uid ~data:time
+    | Job_completed (start, finish, _) ->
+      let start_time = Option.value_exn (Hashtbl.find_and_remove unfinished start.uid) in
+      ignore start_time;
+      let category = category start in
+      all_categories :=
+        Map.update !all_categories category
+          ~f:(function None -> finish.duration
+                     | Some prev -> Time.Span.(+) prev finish.duration);
+      state := M.map_within !state
+                 (`Between (Time.sub time finish.duration, time))
+                 ~f:(fun x -> Map.update x category ~f:(function None -> 1 | Some v -> v + 1));
+    end;
+    return ();
+  ) >>= fun () ->
+  let all_categories =
+    Map.to_alist !all_categories
+    |> List.map ~f:(fun (a, b) -> (b, a))
+    |> List.sort ~cmp:[%compare: Time.Span.t * string]
+  in
+  let report_totals writer = report_totals all_categories ~writer in
+  let report_schedule writer =
+    report_schedule
+      ~all_categories:(List.map all_categories ~f:snd)
+      ~interval_map:!state
+      ~first_time:!first_time
+      ~writer
+  in
+  match graph with
+  | None ->
+    (if totals
+     then report_totals (force Writer.stdout)
+     else report_schedule (force Writer.stdout));
+    return ()
+  | Some output ->
+    Unix.mkdir ~p:() output
+    >>= fun () ->
+    let totals_csv = output ^/ "totals.csv" in
+    let totals_sexp = output ^/ "totals.sexp" in
+    Writer.with_file totals_csv ~f:(fun w -> report_totals w; return ())
+    >>= fun () ->
+    let schedule_csv = output ^/ "schedule.csv" in
+    let schedule_sexp = output ^/ "schedule.sexp" in
+    Writer.with_file schedule_csv ~f:(fun w -> report_schedule w; return ())
+    >>= fun () ->
+    Process.run_exn
+      ~prog:"htmlplot"
+      ~args:[ "csv"; "hi"; totals_csv; "-sexp"; "-output"; totals_sexp
+            ; "-kind"; "pie"; "-colors"; "spinner" ]
+      ()
+    >>| print_string
+    >>= fun () ->
+    Process.run_exn
+      ~prog:"htmlplot"
+      ~args:[ "csv"; "hi"; schedule_csv; "-sexp"; "-output"; schedule_sexp
+            ; "-kind"; "area"; "-colors"; "spinner" ]
+      ()
+    >>| print_string
+    >>= fun () ->
+    (* htmlplot doesn't support stacked area charts, so we fiddle with javascript
+       directly *)
+    Process.run_expect_no_output_exn
+      ~prog:"sed"
+      ~args:["-ie"; "s/'plotOptions':{/'plotOptions':{'area':{'stacking':'normal'},/"
+            ; schedule_sexp ]
+      ()
+    >>= fun () ->
+    Process.run_exn
+      ~prog:"htmlplot"
+      ~args:[ "csv"; "of-sexps"; schedule_sexp; totals_sexp; "-output"; output ^/ "graph.html" ]
+      ()
+    >>| print_string
+;;
+
+let command =
+  let open Command.Let_syntax in
+  Command.async'
+    ~summary:" report bench result by analysing .jenga/metrics files"
+    [%map_open
+      let debug_file = anon (".jenga/debug file" %: file)
+      and totals = flag "totals" no_arg  ~doc:""
+      and graph = flag "graph" (optional file) ~doc:"DIR where the graph will be written"
+      in fun () ->
+        Writer.behave_nicely_in_pipeline ();
+        main debug_file ~totals ~graph
+    ]
+;;

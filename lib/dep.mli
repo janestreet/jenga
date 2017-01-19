@@ -14,6 +14,7 @@ val all : 'a t list -> 'a list t
 val all_unit : unit t list -> unit t
 val cutoff : equal:('a -> 'a -> bool) -> 'a t -> 'a t
 val deferred : (unit -> 'a Deferred.t) -> 'a t
+val memoize : name:string -> 'a t -> 'a t
 
 val action : Action.t t -> unit t
 val action_stdout : Action.t t -> string t

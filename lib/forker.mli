@@ -7,7 +7,7 @@
 open! Core.Std
 open! Async.Std
 
-val init : Config.t -> unit (* just once *)
+val init : Config.t -> args:string list -> unit Or_error.t Deferred.t (* just once *)
 
 module Reply : sig
   type t = {
@@ -30,3 +30,4 @@ module Request : sig
 end
 
 val run : Request.t -> Reply.t Deferred.t
+val command : Command.t

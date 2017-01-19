@@ -79,22 +79,24 @@ let dump_reader_in_writer reader writer =
 ;;
 
 let run_jenga ~exe ~args ~env ~log =
-  let env =
+  List.iter (* override a few of the env or jengaroot defaults *)
     [ "VERSION_UTIL_SUPPORT", "false"
     ; "STABLE_BUILD_INFO", "true"
     ; "TERM", "dumb"
-    ; "NODYNLINK", "true"
-    ; "DYNLINKABLE_CODE", "false"
-    ; "BUILD_PROFILE", "fast-exe"
-    ; "OCAML_VERSION", "default"
-    ; "WITH_FRAME_POINTERS", "false"
-    ; "WITH_NO_NAKED_POINTERS", "false"
-    ; "WITH_ARCH_32_BIT", "false"
-    ; "WITH_FLAMBDA", "false"
-    ; "WITH_SPACETIME", "false"
-    ; "LINK_EXECUTABLES", "true"
-    ] @ env
-  in
+    ] ~f:(fun (var, value) -> Unix.putenv ~key:var ~data:value);
+  List.iter (* Avoid propagating user defaults into the benches *)
+    [ "NODYNLINK"
+    ; "DYNLINKABLE_CODE"
+    ; "BUILD_PROFILE"
+    ; "OCAML_VERSION"
+    ; "WITH_FRAME_POINTERS"
+    ; "WITH_NO_NAKED_POINTERS"
+    ; "WITH_ARCH_32_BIT"
+    ; "WITH_FLAMBDA"
+    ; "WITH_SPACETIME"
+    ; "LINK_EXECUTABLES"
+    ; "X_LIBRARY_INLINING"
+    ] ~f:Unix.unsetenv;
   let args = "-show-mem" :: args in
   let prog = exe in
   Process.create_exn ~env:(`Extend env) ~prog ~args ()
@@ -145,7 +147,11 @@ let setup_limits () =
       { cur = Limit (Int64.of_int (20_000 * 1024)); max = Infinity })
 ;;
 
-let setup_repository ~rev ~jenga_exe ~log =
+let clean_all () =
+  Process.run_expect_no_output_exn ~prog:"hg" ~args:["clean"; "--all"] ()
+;;
+
+let clean_and_update ~rev ~log =
   eprintf_progress "setting up repository at %s\n" rev;
   Deferred.all_unit
     [ Process.run_exn ~prog:"hg" ~args:["revert"; "--all"] ()
@@ -154,14 +160,23 @@ let setup_repository ~rev ~jenga_exe ~log =
       >>| Writer.write log
     ]
   >>= fun () ->
+  clean_all ()
+  >>= fun () ->
   Process.run_exn ~prog:"hg" ~args:["up"; "-r"; rev] ()
   >>| Writer.write log
+  >>= fun () ->
+  clean_all ()
+;;
+
+let setup_repository ~rev ~jenga_exe ~log =
+  clean_and_update ~rev ~log
   >>= fun () ->
   eprintf_progress "figuring out jenga version\n";
   let jenga_exe =
     match jenga_exe with
-    | `This path -> path
+    | `Path path -> path
     | `From_rev -> "/j/office/app/jenga/prod/bin/jenga"
+    | `Build_at rev -> sprintf "../%s.exe" rev
   in
   Process.run_exn ~prog:jenga_exe ~args:["-version"] ()
   >>= fun version ->
@@ -170,10 +185,6 @@ let setup_repository ~rev ~jenga_exe ~log =
   let jenga_jengaroot_version = String.prefix rev 12 ^ "/" ^ version in
   eprintf_progress "setup done\n";
   return (jenga_jengaroot_version, jenga_exe)
-;;
-
-let from_scrach () =
-  Process.run_expect_no_output_exn ~prog:"hg" ~args:["clean"; "--all"] ()
 ;;
 
 let repeat n f =
@@ -202,7 +213,7 @@ let non_polling_builds ~rev ~jenga_exe ~env ~flags ~dst ~log =
       let total = 2 in
       repeat total (fun i ->
         eprintf_progress "bench of non-polling mode %s %d/%d\n" bench_name (i + 1) total;
-        from_scrach ()
+        clean_all ()
         >>= fun () ->
         run_jenga_and_save_metrics ~exe:jenga_exe ~jenga_jengaroot_version ~env ~flags ~dst ~log
           ~bench_name:(bench_name ^ " from scratch") ~targets
@@ -220,7 +231,7 @@ let polling_builds ~rev ~jenga_exe ~env ~flags ~dst ~log =
     ^ (String.concat (List.map env ~f:(fun (a, b) -> sprintf " %s=%s" a b)))
     ^ (String.concat (List.map flags ~f:(sprintf " %s")))
   in
-  from_scrach ()
+  clean_all ()
   >>= fun () ->
   Deferred.List.iter
     [ "core_kernel",
@@ -275,7 +286,7 @@ type jenga_invocation_syntax =
 
 type jenga_invocation =
   { revision : string
-  ; exe : [ `From_rev | `This of string ]
+  ; exe : [ `From_rev | `Path of string | `Build_at of string ]
   ; env : (string * string) sexp_list
   ; flags : string sexp_list
   }
@@ -287,6 +298,12 @@ type config =
   ; exe : string sexp_option
   } [@@deriving of_sexp]
 
+let exe_of_syntax str =
+  if String.mem str '/'
+  then `Path str
+  else `Build_at str
+;;
+
 let feature_and_exe feature exe =
   Deferred.both
     (Process.run_exn ~prog:"fe" ~args:["show"; feature; "-base"] ())
@@ -295,7 +312,7 @@ let feature_and_exe feature exe =
   let exe =
     match exe with
     | None -> `From_rev
-    | Some path -> `This path
+    | Some str -> exe_of_syntax str
   in
   { revision = String.strip base; exe; env = []; flags = [] },
   { revision = String.strip tip; exe; env = []; flags = [] }
@@ -305,15 +322,39 @@ let jenga_invocation (jenga_invocation_syntax : jenga_invocation_syntax) exe =
   let default_exe =
     match exe with
     | None -> `From_rev
-    | Some path -> `This path
+    | Some str -> exe_of_syntax str
   in
   { revision = jenga_invocation_syntax.revision
   ; exe = (match jenga_invocation_syntax.exe with
-      | None -> default_exe
-      | Some path -> `This path)
+           | None -> default_exe
+           | Some str -> exe_of_syntax str)
   ; env = jenga_invocation_syntax.env
   ; flags = jenga_invocation_syntax.flags
   }
+;;
+
+let build_all_needed_jengas jengas ~log =
+  let revs =
+    List.filter_map jengas ~f:(fun (invocation : jenga_invocation) ->
+      match invocation.exe with
+      | `Build_at rev -> Some rev
+      | `Path _ | `From_rev -> None)
+    |> List.dedup ~compare:String.compare
+  in
+  Deferred.List.iter revs ~f:(fun rev ->
+    eprintf_progress "building jenga at rev %s\n" rev;
+    clean_and_update ~rev ~log
+    >>= fun () ->
+    run_jenga ~exe:"/j/office/app/jenga/prod/bin/jenga"
+      ~args:["app/jenga/bin/jenga.exe"]
+      ~env:[ "VERSION_UTIL_SUPPORT", "true"
+           ; "BUILD_PROFILE", "fast-exe"]
+      ~log
+    >>| ok_exn
+    >>= fun () ->
+    Process.run_expect_no_output_exn ~prog:"cp"
+      ~args:["app/jenga/bin/jenga.exe"; sprintf "../%s.exe" rev] ()
+  )
 ;;
 
 let command =
@@ -363,6 +404,8 @@ let command =
               return (List.map jengas ~f:(fun x -> jenga_invocation x config.exe))
             end
             >>= fun jengas ->
+            build_all_needed_jengas jengas ~log
+            >>= fun () ->
             let builds =
               match config.mode with
               | `polling -> polling_builds

@@ -5,6 +5,8 @@ open! Int.Replace_polymorphic_compare
 
 let main ?(argv=Array.to_list Sys.argv) ~run () =
 
+  let run config = run config ~forker_args:["internal"; Cmd_internal.forker] in
+
   let toplevel_group =
     [ "build"         , Cmd_build.command ~toplevel:false ~run ()
     ; "cat-api"       , Cmd_cat_api.command

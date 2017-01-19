@@ -261,6 +261,11 @@ module Dep : sig
   val cutoff : equal:('a -> 'a -> bool) -> 'a t -> 'a t
   val deferred : (unit -> 'a Deferred.t) -> 'a t
 
+  (** [let v = memoize ~name t] behaves like [t], except with caching: using [v] in several
+      computations will not result in duplicate evaluations of [t].
+      [name] is used in displayed in errors, or in the case of dependency cycles. *)
+  val memoize : name:string -> 'a t -> 'a t
+
   val action : Action.t t -> unit t
   val action_stdout : Action.t t -> string t
   val alias : Alias.t -> unit t

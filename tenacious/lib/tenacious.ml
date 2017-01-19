@@ -26,9 +26,9 @@ type 'a comp = 'a result Deferred.t
    The thread represents who is asking for the computation, some in some sense it is the
    same kind of information as [cancel] and [dep], except that instead of being passed for
    the purpose of cancelling the computation, it is passed around for the purpose of
-   finding cycles. Cycles can only be introduced by reify nodes, so everywhere else the
+   finding cycles. Cycles can only be introduced by memoize nodes, so everywhere else the
    [thread] is just passed around (unlike [cancel] and [dep] which support cancel/restart
-   at a granularity finer than whole computations between [reify] nodes). *)
+   at a granularity finer than whole computations between [memoize] nodes). *)
 type 'a semantics =
   thread:Graph.Node.t -> cancel:Heart.t -> dep:Heart.t -> 'a comp
 
@@ -42,7 +42,7 @@ type 'a t =
   | Map : 'a t * ('a -> 'b) -> 'b t
   | All : 'a t list -> 'a list t
   | Bind : 'a t * ('a -> 'b t) -> 'b t
-  | Reify : 'a state ref * String.t Lazy.t * 'a t Lazy.t -> 'a t
+  | Memoize : 'a state ref * String.t Lazy.t * 'a t Lazy.t -> 'a t
   | Lift : (unit -> ('a * Heart.t) Deferred.t) -> 'a t
   | Embed : 'a semantics -> 'a t
 type 'a tenacious = 'a t
@@ -72,7 +72,7 @@ let rec reduce : type a . a t -> a t =
         | Return x -> reduce (k x)
         | _ -> if phys_equal s s' then t else Bind(s', k)
       end
-    | Reify (_, _name, lazy s) -> begin
+    | Memoize (_, _name, lazy s) -> begin
         (* The lazy contains the already reduced version. *)
         match s with
         | Return _ -> s
@@ -103,14 +103,137 @@ let combine_result comp ~with_:heart =
   if Heart.is_unbreakable heart then comp
   else comp >>| combine_result' ~with_:heart
 
-let rec sample : type a . a t -> a semantics =
+module Tenacious_throttle = struct
+  (* About throttling: the user callbacks (in lift mostly) run slow operations like
+     calling commands, or more precisely, pushing computations that will run commands in a
+     throttle, as there are only so many commands we can run before running out of file
+     descriptors for instance.
+     While these commands are running, the tenacious computation that are not blocked on
+     something keep executing. And this execution keeps pushing more things in the command
+     throttle. This is not only not useful, but in fact all of this allocates things that
+     will only be necessary much later, thus creating long lived allocations, which are
+     bad for memory usage and performance.
+     So this module is used to implement a form of pushback: we are going to run tenacious
+     computations but only so many of them at a time. And in practice we pick a number of
+     tenacious computations which is slightly higher than the number of external commands,
+     so that we can actually fill the throttle of external commands, and have a few extra
+     computations buffered up.
+     We also use this to change the order in which computations are run. Async jobs are
+     pushed in a queue, which means if we rely on the async queue, we do something like a
+     breadth-first traversal of the dependency graph, which is also not good for memory.
+     So we use a stack and favor depth-first traversal when possible. *)
+
+  (* The maximum number of running async computations we can have, inclusive. No limit on
+     the pending async computations, as in theory it could be the entire computation. *)
+  let concurrency = ref 0
+
+  (* The computations that could run, except we are limited by [!concurrency]. It's a
+     stack so we try to traverse the dependency graph in a depth-first way, to limit
+     memory usage. *)
+  type stack_elt =
+    | Elt : { t : 'a t
+            ; thread : Graph.Node.t
+            ; cancel : Heart.t
+            ; dep : Heart.t
+            ; k :  ('a result -> unit)
+            } -> stack_elt
+    (* Would write this:
+       | K of ('a -> unit)
+       but instead we use a flat sum which probably helps a bit with memory, and "pattern
+       match" using [Obj.tag], so it's more like:
+       | ('a -> unit) *)
+  let waiting = Stack.create ()
+
+  (* How many computations are running. This value is in the interval [0, !concurrency].
+     If it is < [!concurrency], then the waiting stack must be empty. *)
+  let running = ref 0
+  let max_running = ref 0
+
+  let init ~concurrency:v =
+    if !concurrency > 0 then failwith "init was already called";
+    concurrency := max 1 v
+  ;;
+
+  let incr_running () =
+    assert (!running < !concurrency);
+    incr running;
+    if !running > !max_running then max_running := !running
+
+  let decr_running () =
+    assert (!running > 0);
+    decr running
+end
+
+let init = Tenacious_throttle.init
+
+(* A tenacious computation that starts [n] tenacious computations must use this on [n - 1]
+   of them, otherwise it leads to assertion failures (like too many or not enough running
+   jobs). A non tenacious computation that starts a tenacious computation (like [exec])
+   must also use this. *)
+let rec sample_enqueue_k : type a. a t -> thread:Graph.Node.t -> cancel:Heart.t -> dep:Heart.t -> k:(a result -> unit) -> unit =
+  fun t ~thread ~cancel ~dep ~k ->
+    let open Tenacious_throttle in
+    if !running < !concurrency
+    then (incr_running ();
+          sample t ~thread ~cancel ~dep >>> fun a ->
+          decr_running ();
+          k a;
+          reschedule ())
+    else Stack.push waiting (Elt { t; thread; cancel; dep; k })
+
+and reschedule () =
+  let open Tenacious_throttle in
+  if !running < !concurrency
+  && not (Stack.is_empty waiting)
+  then begin
+    let v = Stack.pop_exn waiting in
+    if Obj.tag (Obj.repr v) <> 0
+    then begin
+      let (k : _ -> _) = (Obj.magic v) in
+      incr_running ();
+      k ()
+    end else
+      let Elt { t; thread; cancel; dep; k } = Obj.magic v in
+      (incr_running ();
+       sample t ~thread ~cancel ~dep >>> fun a ->
+       decr_running ();
+       k a;
+       reschedule ())
+  end
+
+and sample_enqueue : type a. a t -> thread:Graph.Node.t -> cancel:Heart.t -> dep:Heart.t -> a result Deferred.t = fun t ~thread ~cancel ~dep ->
+  let i = Ivar.create () in
+  sample_enqueue_k t ~thread ~cancel ~dep ~k:(Ivar.fill i);
+  Ivar.read i
+
+(* [release_running] is useful when the current computation will become idle (ie wait for
+   the results of other computations), and [retake_running_k] is used when these other
+   computations finish and we want to resume the initial computations. Any use of
+   [release_running] must be followed eventually by a [retake_running_k]. *)
+and release_running ~reschedule:b =
+  let open Tenacious_throttle in
+  decr_running ();
+  if b then reschedule ()
+
+and retake_running_k k =
+  let open Tenacious_throttle in
+  if !running < !concurrency
+  then (incr_running (); k ())
+  else (Stack.push waiting (Obj.magic k))
+
+and retake_running () =
+  let i = Ivar.create () in
+  retake_running_k (Ivar.fill i);
+  Ivar.read i
+
+and sample : type a . a t -> a semantics =
   fun t ~thread ~cancel ~dep ->
     match t with
     | Return x -> return x ~thread ~cancel ~dep
     | Bind (t, f) -> bind t ~f ~thread ~cancel ~dep
     | Map (t, f) -> map t f ~thread ~cancel ~dep
     | All ts -> all ts ~thread ~cancel ~dep
-    | Reify (st, name, lazy t) -> reify st ~name t ~thread ~cancel ~dep
+    | Memoize (st, name, lazy t) -> memoize st ~name t ~thread ~cancel ~dep
     | Lift f -> lift f ~thread ~cancel ~dep
     | Embed emb -> emb ~thread ~cancel ~dep
 
@@ -155,34 +278,37 @@ and all : 'a . 'a t list -> 'a list semantics =
     let ivar = Ivar.create () in
     let finished = Ivar.read ivar in
     let collect_results_and_finish () =
-      (* This function must be called exactly once, but not until either:
-         - [t] has been cancelled, or
-         - we have collected a value from each [t] *)
-      let res =
-        if Heart.is_broken cancel
-        then None
-        else begin
-          let results = Array.map cells ~f:(fun v -> Option.value_exn v) in
-          let values, hearts = Array.unzip results in
-          let values = Array.to_list values in
-          let hearts = Array.to_list hearts in
-          let heart = Heart.combine (dep :: hearts) in
-          Some (values, heart)
-        end
-      in
-      Ivar.fill ivar res
+      retake_running_k (fun () ->
+        (* This function must be called exactly once, but not until either:
+           - [t] has been cancelled, or
+           - we have collected a value from each [t] *)
+        let res =
+          if Heart.is_broken cancel
+          then None
+          else begin
+            let results = Array.map cells ~f:(fun v -> Option.value_exn v) in
+            let values, hearts = Array.unzip results in
+            let values = Array.to_list values in
+            let hearts = Array.to_list hearts in
+            let heart = Heart.combine (dep :: hearts) in
+            Some (values, heart)
+          end
+        in
+        Ivar.fill ivar res
+      )
     in
     let count =
       (* the number of sub-tenacious sampled, but still running *)
       ref 0
     in
+    release_running ~reschedule:false; (* we'll schedule some children instead *)
     List.iteri ts ~f:(fun i t ->
       match t with
       | Return x -> cells.(i) <- Some (x, Heart.unbreakable)
       | _ ->
         let rec loop () =
           incr count;
-          sample t ~thread ~cancel ~dep:Heart.unbreakable >>> fun res ->
+          sample_enqueue_k t ~thread ~cancel ~dep:Heart.unbreakable ~k:(fun res ->
           decr count;
           let certificate_opt =
             match res with
@@ -209,7 +335,7 @@ and all : 'a . 'a t list -> 'a list semantics =
                 if not (Deferred.is_determined finished) then (
                     (* certificate invalidated; not finished *)
                   loop ()
-                )
+                ))
         in
         loop ()
     );
@@ -234,11 +360,11 @@ and all : 'a . 'a t list -> 'a list semantics =
    re-sampling is avoided.
 
    [shared_dep] is an optimization for the case where all the computations sampling a
-   reify are known to have a common Heart.t in their [~dep] argument. This common
-   dependency can be pushed inside of [reify], so the dep can be combined with the cancel
-   heart and the result heart once per computation of reify, instead of once per sampling
-   of [reify]. *)
-and reify_with_shared_dep
+   memoize are known to have a common Heart.t in their [~dep] argument. This common
+   dependency can be pushed inside of [memoize], so the dep can be combined with the cancel
+   heart and the result heart once per computation of memoize, instead of once per sampling
+   of [memoize]. *)
+and memoize_with_shared_dep
   : 'a . 'a state ref -> name:(String.t Lazy.t) -> shared_dep:Heart.t -> 'a t -> 'a semantics =
   fun state ~name ~shared_dep t ->
     let start ~last_result ~last_node =
@@ -248,7 +374,7 @@ and reify_with_shared_dep
       in
       let stop_heart = Heart.watch stop_glass in
       let shared_computation_node =
-        Graph.Node.create (lazy ("reify: " ^ Lazy.force name))
+        Graph.Node.create (lazy ("memoize: " ^ Lazy.force name))
       in
       let shared_computation =
         (* wait for the previous (cancelled) computation to finish *)
@@ -264,18 +390,23 @@ and reify_with_shared_dep
         if last_still_valid
         then Deferred.return res
         else
-          sample t
+          sample_enqueue t
             ~thread:shared_computation_node ~cancel:stop_heart ~dep:shared_dep
       in
       let count = ref 0 in
       let join ~thread ~cancel:my_cancel ~dep:my_dep =
         (* join a new client, with its own [my_cancel] to the running [shared_computation] *)
         let my_cancel = Heart.combine2 my_cancel my_dep in
+        release_running ~reschedule:true;
         incr count;
         Graph.edge_until thread ~blocked_on:shared_computation_node
           (Heart.or_broken my_cancel shared_computation)
-        >>| function
-        | Some res -> combine_result' res ~with_:my_dep
+        >>= fun shared_result ->
+        retake_running ()
+        >>| fun () ->
+        match shared_result with
+        | Some res ->
+          combine_result' res ~with_:my_dep
         | None -> (* this client has cancelled *)
           assert (!count >= 1);
           decr count;
@@ -303,19 +434,23 @@ and reify_with_shared_dep
     fun ~thread ~cancel ~dep ->
       match !state with
       | Wait (result, node) ->
-        start ~last_result:result ~last_node:node ~thread ~cancel ~dep
-      | Running join -> join ~thread ~cancel ~dep
+        let join = start ~last_result:result ~last_node:node in
+        join ~thread ~cancel ~dep
+      | Running join ->
+        join ~thread ~cancel ~dep
       | Ready(x, certificate) ->
         if Heart.is_broken certificate
-        then
-          start
+        then begin
+          let join = start
             ~last_result:(Deferred.return None)
-            ~last_node:(Graph.Node.create (lazy "reify_last_broken"))
-            ~thread ~cancel ~dep
+            ~last_node:(Graph.Node.create (lazy "memoize_last_broken"))
+          in
+          join ~thread ~cancel ~dep
+        end
         else Deferred.return (Some (x, Heart.combine2 certificate dep))
 
-and reify : 'a . 'a state ref -> name:(String.t Lazy.t) -> 'a t -> 'a semantics =
-  fun r ~name -> reify_with_shared_dep r ~name ~shared_dep:Heart.unbreakable
+and memoize : 'a . 'a state ref -> name:(String.t Lazy.t) -> 'a t -> 'a semantics =
+  fun r ~name -> memoize_with_shared_dep r ~name ~shared_dep:Heart.unbreakable
 
 and lift : type a . (unit -> (a * Heart.t) Deferred.t) -> a semantics =
   fun f ~thread:_ ~cancel ~dep ->
@@ -338,12 +473,12 @@ let all = function
 
 let lift f = Lift f
 
-let create_reify_state () =
-  ref (Wait (Deferred.return None, Graph.Node.create (lazy "reify wait")))
+let create_memoize_state () =
+  ref (Wait (Deferred.return None, Graph.Node.create (lazy "memoize wait")))
 ;;
 
-let reify ~name t =
-  Reify (create_reify_state (), name, lazy (reduce t))
+let memoize ~name t =
+  Memoize (create_memoize_state (), name, lazy (reduce t))
 
 let embed f =
   Embed (fun ~thread:_ ~cancel ~dep ->
@@ -368,7 +503,7 @@ let race a b =
       match reduce b with
       | Return v -> Deferred.return (Some (v, dep))
       | b ->
-        sample ~thread ~cancel:(Heart.combine2 cancel (Heart.watch cancel_b)) ~dep b
+        sample_enqueue ~thread ~cancel:(Heart.combine2 cancel (Heart.watch cancel_b)) ~dep b
     in
     Deferred.choose
       [ choice ad (fun x -> `a x)
@@ -526,17 +661,16 @@ let desensitize t =
   in
   with_semantics t ~f
 
-let exec' t ~thread =
-  sample (reduce t) ~thread ~cancel:Heart.unbreakable ~dep:Heart.unbreakable >>| function
-  | Some result -> result
-  | None ->
-    (* This holds because [sample] only return a [None] if the [~cancel] or [~dep] it
-       receives is broken. *)
-    assert false
-
 let exec t ~name =
   let node = Graph.Node.create (lazy ("exec: " ^ Lazy.force name)) in
-  Graph.root_until ~node (exec' ~thread:node t)
+  Graph.root_until ~node
+    (sample_enqueue (reduce t) ~thread:node ~cancel:Heart.unbreakable ~dep:Heart.unbreakable
+     >>| function
+     | Some result -> result
+     | None ->
+       (* This holds because [sample] only return a [None] if the [~cancel] or [~dep] it
+          receives is broken. *)
+       assert false)
 
 module Stream = struct
 
@@ -549,8 +683,8 @@ module Stream = struct
         let a, init_dep = next init in
         let stream_tail =
           Embed
-            (reify_with_shared_dep
-               (create_reify_state ())
+            (memoize_with_shared_dep
+               (create_memoize_state ())
                ~name:(lazy (force name ^ " #" ^ Int.to_string count))
                ~shared_dep:heart1
                (Embed (fun ~thread ~cancel ~dep ->
@@ -624,19 +758,22 @@ end
 let cutoff ~equal ten =
   Embed (fun ~thread ~cancel:_ ~dep ->
     let my_weak_glass, my_heart = Weak_glass.create () in
-    exec' ~thread ten >>| fun (first_result,first_heart) ->
-    let rec loop heart =
-      Heart.or_broken heart (Weak_glass.unwatched my_weak_glass)
-      >>> function
-      | None ->
-        exec ~name:(lazy "cutoff") ten >>> fun (replacement_result,heart) ->
-        if (equal first_result replacement_result)
-        then loop heart
-        else Weak_glass.break my_weak_glass
-      | Some () -> ()
-    in
-    loop first_heart;
-    Some (first_result, Heart.combine2 my_heart dep)
+    sample ~thread ~cancel:Heart.unbreakable ~dep:Heart.unbreakable (reduce ten) >>| function
+    | None -> None
+    | Some (first_result,first_heart) ->
+      let rec loop heart =
+        Heart.or_broken heart (Weak_glass.unwatched my_weak_glass)
+        >>> function
+        | None ->
+            exec ~name:(lazy "cutoff") ten
+            >>> fun (replacement_result,heart) ->
+            if (equal first_result replacement_result)
+            then loop heart
+            else Weak_glass.break my_weak_glass
+        | Some () -> ()
+      in
+      loop first_heart;
+      Some (first_result, Heart.combine2 my_heart dep)
   )
 
 let race_errors errors =
@@ -660,8 +797,8 @@ let race_errors errors =
 module For_tests = struct
 
   let race_error a b ~f =
-    let a = reify ~name:(lazy "race-error-a") a in
-    let b = reify ~name:(lazy "race-error-b") b in
+    let a = memoize ~name:(lazy "race-error-a") a in
+    let b = memoize ~name:(lazy "race-error-b") b in
     bind
       (race (map ~f:(fun x -> `a x) a) (map ~f:(fun x -> `b x) b))
       ~f:(function

@@ -29,7 +29,7 @@ val build_forever :
   Config.t ->
   Progress.t ->
   jr_spec: Jr_spec.t ->
-  top_level_demands : Goal.t list ->
+  top_level_goals : Goal.t list ->
   Fs.t ->
   Persist.t ->
   save_db_now:(unit -> unit Deferred.t) ->

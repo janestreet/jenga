@@ -4,7 +4,7 @@ open Async.Std
 let mes fmt = ksprintf (fun s -> Core.Std.Printf.eprintf "%s\n%!" s) fmt
 let _ = mes
 
-module Tenacious_tests(T1: Tenacious_intf.S) = struct
+module Tenacious_tests(T1: Tenacious_intf.S) : sig end = struct
   module Tenacious = struct
     include T1
 
@@ -25,7 +25,7 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
         f ()
       )
 
-    let reify = reify ~name:(lazy "test-reify")
+    let memoize = memoize ~name:(lazy "test-memoize")
   end
 
   module Heart = Tenacious.Heart
@@ -194,11 +194,11 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
   )
 
   let%test_unit _ = (
-    (* mod of above test; introduce use of reification *)
+    (* mod of above test; introduce use of memoization *)
     let tenacious =
       begin
         let a,break_a = make_counter() in
-        let a = Tenacious.reify a in
+        let a = Tenacious.memoize a in
         let break = once break_a in
         a *>>= fun a1 -> (* 1   2 *)
         a *>>= fun a2 -> (*   1   2 *)
@@ -225,11 +225,11 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
   let%test_unit _ =
     (* checking that various functions don't drop the dependencies on
        the lhs of the surrounding bind (these cases used to broken):
-       - a reify that's already computed,
+       - a memoize that's already computed,
        - a desensitize *)
     let some_tenacious, _ = make_counter () in
     check_dependency_when_on_rhs_of_bind
-      (let a = Tenacious.reify some_tenacious in
+      (let a = Tenacious.memoize some_tenacious in
        [%test_result: int] (run a) ~expect:1;
        a);
     check_dependency_when_on_rhs_of_bind
@@ -444,8 +444,11 @@ module Tenacious_tests(T1: Tenacious_intf.S) = struct
   ;;
 end
 
-module Test_reference = Tenacious_tests (struct
-  include Tenacious
-  include Tenacious.For_tests
+let%test_module _ = (module struct
+  let () = Tenacious.init ~concurrency:5
+  module Test_reference = Tenacious_tests (struct
+    include Tenacious
+    include Tenacious.For_tests
+  end)
+  module Test_production = Tenacious_tests (Tenacious)
 end)
-module Test_production = Tenacious_tests (Tenacious)

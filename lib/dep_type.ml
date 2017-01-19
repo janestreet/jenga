@@ -2,10 +2,13 @@ open Core.Std
 open Async.Std
 open! Int.Replace_polymorphic_compare
 
+type 'a cached_exec = ('a * Db.Proxy_map.t) Builder.t
+type 'a cached_reflect = ('a * Path.Set.t) Builder.t
+
 (** [Dep_type.t] is the GADT implementation behind [Dep.t]. Values of this type are
     interpreted by jenga's build algorithm.*)
 
-type _ t =
+type 'a t =
 | Return : 'a -> 'a t
 | Map : 'a t * ('a -> 'b) -> 'b t
 | Bind : 'a t * ('a -> 'b t) -> 'b t
@@ -28,4 +31,9 @@ type _ t =
 | Glob_change_OLD : Fs.Glob.t -> unit t
 | Glob_change : Fs.Glob.t -> unit t (* FS or buildable *)
 | Var : 'a Var.t -> 'a t
+| Memoize : { name : string
+            ; t : 'a t
+            ; mutable cached_exec : 'a cached_exec option sexp_opaque
+            ; mutable cached_reflect : 'a cached_reflect option sexp_opaque
+            } -> 'a t
 [@@deriving sexp_of] (* sexp_of_t is only usable for debugging *)

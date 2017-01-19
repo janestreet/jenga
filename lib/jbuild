@@ -3,7 +3,7 @@
   (public_name jenga)
   (libraries (async
               async_inotify
-              async_parallel
+              command_rpc
               core
               fieldslib
               ocaml_plugin
@@ -11,7 +11,8 @@
               sexplib
               str
               tenacious_lib))
-  (c_names (digest_stubs batched_mtimes_stubs))))
+  (c_names (digest_stubs batched_mtimes_stubs))
+  (inline_tests ((deps (fs.ml))))))
 
 ;; Embed the API into the library as a string
 (rule

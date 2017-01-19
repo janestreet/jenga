@@ -24,8 +24,13 @@ let db_save_span =
     Core.Std.Printf.eprintf "db_save_span = %d sec\n%!" int;
     sec (float int)
 
-let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
-  Forker.init config;
+let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec ~forker_args =
+  Forker.init config ~args:forker_args
+  >>| ok_exn
+  >>= fun () ->
+  Tenacious.init
+    ~concurrency:(Option.value config.tenacious_concurrency
+                    ~default:(config.j_number + 5));
   Fs.Ocaml_digest.init config;
   let progress = Progress.create config in
   Rpc_server.go config ~root_dir progress
@@ -36,19 +41,19 @@ let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec =
     Quit.quit Exit_code.persist_bad;
     Deferred.never()
   | Ok persist ->
-  Fs.create config persist >>= fun fs ->
-  (match Config.demands config with
-   | [] -> return [ Goal.Alias (Alias.default ~dir:(Path.of_relative start_dir)) ]
-   | demands -> Deferred.List.map demands ~f:(Goal.parse_string ~dir:start_dir))
-  >>= fun top_level_demands ->
-  let save_db_now () =
-    Persist.disable_periodic_saving_and_save_now persist
-  in
-  let when_rebuilding () =
-    return (Persist.re_enable_periodic_saving persist)
-  in
-  Build.build_forever config progress
-    ~jr_spec ~top_level_demands fs persist ~save_db_now ~when_rebuilding
+    Fs.create config persist >>= fun fs ->
+    (match Config.goals config with
+     | [] -> return [ Goal.Alias (Alias.default ~dir:(Path.of_relative start_dir)) ]
+     | goals -> Deferred.List.map goals ~f:(Goal.parse_string ~dir:start_dir))
+    >>= fun top_level_goals ->
+    let save_db_now () =
+      Persist.disable_periodic_saving_and_save_now persist
+    in
+    let when_rebuilding () =
+      return (Persist.re_enable_periodic_saving persist)
+    in
+    Build.build_forever config progress
+      ~jr_spec ~top_level_goals fs persist ~save_db_now ~when_rebuilding
 
 let install_signal_handlers () =
   trace "install_signal_handlers..";
@@ -96,7 +101,7 @@ let tune_gc config =
     ~space_overhead: config.space_overhead
     ()
 
-let main' jr_spec ~root_dir config =
+let main' jr_spec ~root_dir ~forker_args config =
 
   Path.Repo.set_root root_dir;
   tune_gc (Config.gc config);
@@ -124,6 +129,8 @@ let main' jr_spec ~root_dir config =
   trace !"Root: %{Path.Abs}" root_dir;
   trace !"Start: %{Path.Rel}" start_dir;
 
+  (* chdir before Forker.init so that we have the same cwd when using parallel forkers or
+     not *)
   Core.Std.Sys.chdir (Path.Abs.to_string root_dir);
 
   let pid_string () = Pid.to_string (Unix.getpid ()) in
@@ -134,36 +141,11 @@ let main' jr_spec ~root_dir config =
     (Config.j_number config) (Config.f_number config)
     Version_util.version;
 
-  (* Must do the chdir before Parallel.init is called, so that we have the same cwd when
-     using parallel forkers or not *)
-
-  let config =
-    if Config.f_number config >= 0 then config else (
-      Message.error "Ignoring negative value to -f flag; treating as 0";
-      {config with Config. f_number = 0}
-    )
-  in
-
-  let config =
-    try
-      if Config.f_number config > 0 then (
-        Async_parallel_deprecated.Std.Parallel.init
-          ~close_stdout_and_stderr:true ();
-      );
-      config
-    with | exn ->
-      Message.error "Parallel.init (needed for forkers) threw exception:\n%s"
-        (Exn.to_string exn);
-      Message.message "INFO: Avoid separate forker processes with: '-f 0'";
-      {config with Config. f_number = 0}
-  in
-
-  (* Only after Parallel.init is called may we start async *)
   let main () =
     don't_wait_for (
       Deferred.unit >>= fun () ->
       Quit.ignore_exn_while_quitting (fun () ->
-        run_once_async_is_started config ~start_dir ~root_dir ~jr_spec;
+        run_once_async_is_started config ~start_dir ~root_dir ~jr_spec ~forker_args;
       ) >>= never_returns
     );
     configure_scheduler ~report_long_cycle_times:config.report_long_cycle_times;

@@ -76,7 +76,7 @@ module String(X : sig val who : string end) = struct
 
   module Snap : sig
 
-    (* [Snap.t] represents a reified interning-store suitable for bin_io loading/saving *)
+    (* [Snap.t] represents a interning-store suitable for bin_io loading/saving *)
     type t [@@deriving bin_io]
     val create : (string * Handle.t) list -> t
     val alist : t -> (string * Handle.t) list

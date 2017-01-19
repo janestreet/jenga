@@ -2,6 +2,6 @@
 
 val main
   :  ?argv:string list
-  -> run:(Config.t -> unit)
+  -> run:(Config.t -> forker_args:string list -> unit)
   -> unit
   -> unit

@@ -15,8 +15,12 @@ let rpc_versions =
     ]
 ;;
 
+let forker = "forker"
+
 let command =
   Command.group
     ~summary:" various subcommands not meant for casual users"
-    [ "rpc-versions", rpc_versions ]
+    [ "rpc-versions", rpc_versions
+    ; forker, Forker.command
+    ]
 ;;

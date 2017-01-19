@@ -11,7 +11,7 @@ build: [
 depends: [
   "async"
   "async_inotify"
-  "async_parallel"
+  "command_rpc"
   "core"
   "fieldslib"
   "jbuilder"

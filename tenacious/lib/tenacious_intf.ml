@@ -31,7 +31,7 @@
   certificate is monitored for validity; if the certificate becomes invalid, and some
   siblings are still running, the invalidated child is re-sampled immediately.
 
-  [Tenacious.reify inner] constructs an [outer] tenacious which behaves like [inner]
+  [Tenacious.memoize inner] constructs an [outer] tenacious which behaves like [inner]
   except a single computation instance obtained from sampling [inner] is shared between
   every sampling of [outer]. It is guaranteed only a single computation instance is ever
   running at the same time.
@@ -43,6 +43,9 @@ open Async.Std
 module type S = sig
 
   val version : string
+
+  (** To be called to set the amount of concurrency allowed before any call to [exec].*)
+  val init : concurrency:int -> unit
 
   module Heart : Heart_intf.S
 
@@ -56,11 +59,11 @@ module type S = sig
       even if you call it from a function given to [embed] or [lift]. *)
   val exec        : 'a t -> name:(String.t Lazy.t) -> ('a * Heart.t) Deferred.t
   val embed       : (cancel:Heart.t -> ('a * Heart.t) option Deferred.t) -> 'a t
-  val reify       : name:(String.t Lazy.t) -> 'a t -> 'a t
+  val memoize       : name:(String.t Lazy.t) -> 'a t -> 'a t
 
-  (** This is most useful in combination with reify:
-      [reify (bracket ~running ~finished ~cancelled x)].
-      Without [reify], you can get multiple concurrent [running..canceled] and
+  (** This is most useful in combination with memoize:
+      [memoize (bracket ~running ~finished ~cancelled x)].
+      Without [memoize], you can get multiple concurrent [running..canceled] and
       [running..finished] blocks even when your tenacious doesn't breaks its heart.
   *)
   val bracket
@@ -78,7 +81,7 @@ module type S = sig
 
   (** cutoff is dangerous:
       it will delay heart breakage for the time it takes to re-compute the value so
-      evaluating a [reify (cutoff x)] might give you stale values even when [reify x]
+      evaluating a [memoize (cutoff x)] might give you stale values even when [memoize x]
       wouldn't.
 
       We have had a solution in the form of [val protecting_cutoffs : 'a t -> 'a t]
@@ -99,9 +102,9 @@ module type S = sig
 
   (** [Stream] provides two things:
       - sharing of the computations needed by various tenacious computations (same as
-        reify)
+        memoize)
       - sharing of the [Heart]s representing the validity of the prefixes of the stream
-      That second part is important, as it cannot be done by simply calling [reify]. *)
+      That second part is important, as it cannot be done by simply calling [memoize]. *)
   module Stream : sig
     type 'a t
     val unfold : 's -> ('s -> ('a * 's tenacious)) -> name:string Lazy.t -> 'a t
