@@ -1975,7 +1975,7 @@ let build_once :
     Message.message "%s" (Progress.Snap.to_string snap `monitor_style);
 
     Metrics.Disk_format.append
-      (Map.add ~key:"time" ~data:(Time.Span.to_float duration, Second)
+      (Map.add ~key:"time" ~data:(Time.Span.to_sec duration, Second)
          (Metrics.disjoint_union_exn
             (Progress.Snap.to_metrics snap)
             (Metrics.Memory.to_metrics memory_metrics)))

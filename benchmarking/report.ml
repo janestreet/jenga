@@ -87,7 +87,7 @@ let display_dimensionless_number ~show_sign v =
 
 let display_metric ~show_sign v (unit : Jenga_lib.Metrics.Unit.t) =
   match unit with
-  | Second -> display_span ~show_sign (Time.Span.of_float v)
+  | Second -> display_span ~show_sign (Time.Span.of_sec v)
   | Byte -> display_byte_unit ~show_sign (Byte_units.create `Bytes v)
   | Dimensionless -> display_dimensionless_number ~show_sign v
 ;;

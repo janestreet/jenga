@@ -60,7 +60,7 @@ module Stats = struct
       ino = U.ino u;
       kind = U.kind u;
       size = U.size u;
-      mtime = Mtime.of_float (Time.to_float (U.mtime u));
+      mtime = Mtime.of_float (Time.to_span_since_epoch (U.mtime u) |> Time.Span.to_sec);
     }
 
 end
