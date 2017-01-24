@@ -142,7 +142,7 @@ module Tenacious_throttle = struct
        but instead we use a flat sum which probably helps a bit with memory, and "pattern
        match" using [Obj.tag], so it's more like:
        | ('a -> unit) *)
-  let waiting = Stack.create ()
+  let waiting : stack_elt Stack.t = Stack.create ()
 
   (* How many computations are running. This value is in the interval [0, !concurrency].
      If it is < [!concurrency], then the waiting stack must be empty. *)
