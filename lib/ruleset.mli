@@ -1,6 +1,6 @@
 (** [Ruleset.t] represent a set of rules, with lookup. *)
 
-open! Core.Std
+open! Core
 
 type t
 [@@deriving sexp_of]

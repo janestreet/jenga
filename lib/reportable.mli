@@ -1,7 +1,7 @@
 (** This module allows the jenga server to incrementally send updates about
     build errors in a typed way to clients (see the errors rpc). *)
 
-open Core.Std
+open Core
 open Async.Std
 
 (** A [Reportable.t] is an updatable bag of reportable errors, with clients.

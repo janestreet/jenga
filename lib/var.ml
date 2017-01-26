@@ -1,8 +1,8 @@
-open! Core.Std
+open! Core
 open! Int.Replace_polymorphic_compare
 
 module Info = struct
-  open Core.Stable
+  open Core.Core_stable
 
   module Stable = struct
     module V1 = struct
@@ -91,7 +91,7 @@ let lookup name =
 module Getenv = struct
   module Stable = struct
     module I = Info
-    open Core.Stable
+    open Core.Core_stable
     module V1 = struct
       type query = { name : string } [@@deriving bin_io]
       type response = I.Stable.V1.t Or_error.V2.t [@@deriving bin_io]
@@ -111,7 +111,7 @@ end
 
 module Setenv = struct
   module Stable = struct
-    open Core.Stable
+    open Core.Core_stable
     module V1 = struct
       type query = { name : string; value : string option } [@@deriving bin_io]
       type response = unit Or_error.V2.t [@@deriving bin_io]

@@ -1,5 +1,5 @@
 
-open Core.Std
+open Core
 open Async.Std
 open Jenga_lib.Api
 (* let return = Dep.return *)
@@ -26,7 +26,7 @@ let ( *>>| ) = Dep.map
    sources are found in that directory.
 *)
 
-let message fmt = ksprintf (fun s -> Core.Std.Printf.printf "USER : %s\n%!" s) fmt
+let message fmt = ksprintf (fun s -> Core.Printf.printf "USER : %s\n%!" s) fmt
 let rec upto i j = if i > j then [] else i :: upto (i+1) j
 
 let simple_rule ~targets ~deps ~action =

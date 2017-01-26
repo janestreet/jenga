@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open Async.Std
 
 (** A global graph of async computations used by tenacious: each node normally corresponds

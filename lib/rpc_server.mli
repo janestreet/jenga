@@ -1,7 +1,7 @@
 (** This module starts the rpc server (unless configured not to), and
     ties together the modules that implements the various rpcs. *)
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 val heartbeat_config : Rpc.Connection.Heartbeat_config.t

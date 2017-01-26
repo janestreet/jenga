@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 open Pattern
 

@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 
 type t = Linux | Darwin | Dumb | Unexpected of string
@@ -19,7 +19,7 @@ let auto_determined =
   of_string (Unix.Utsname.sysname (Unix.uname()))
 
 let system =
-  match Core.Std.Sys.getenv "JENGA_SYSTEM" with
+  match Core.Sys.getenv "JENGA_SYSTEM" with
   | Some x -> of_string x
   | None -> auto_determined
 
@@ -36,7 +36,7 @@ let num_cpus_if_known =
       let path = "/proc/cpuinfo" in
       let lines =
         try
-          let module IC = Core.Std.In_channel in
+          let module IC = Core.In_channel in
           IC.with_file path ~f:IC.input_lines
         with
         | _ -> err "cant read: %s" path; []

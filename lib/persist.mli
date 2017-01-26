@@ -2,7 +2,7 @@
     periodically, assuming something needs to be saved.
     Manipulation of the database is done in other places. *)
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 type t

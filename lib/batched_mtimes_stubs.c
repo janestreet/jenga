@@ -32,7 +32,7 @@ static inline void free_paths(char **paths, int n) {
 /* Use of this function manages to improve from-scratch build times in jenga
    by ~5% in some cases (specifically,
    [PACKING=false X_LIBRARY_INLINING=true jenga app/fe app/hydra] in 2eb4e759bf23)
-   compared to repeatedly calling [Core.Std.Unix.stat].
+   compared to repeatedly calling [Core.Unix.stat].
 
    We think that most of the improvement comes from the fact that we
    don't reacquire the ocaml lock after every call to [stat].

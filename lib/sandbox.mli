@@ -4,7 +4,7 @@
     specified to be targets but are not created, or created but not specified to be
     targets, will be found as well. *)
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 type kind = Db.Sandbox_kind.t =

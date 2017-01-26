@@ -1,9 +1,9 @@
 
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 
 let terminal_type =
-  match Core.Std.Sys.getenv "TERM" with
+  match Core.Sys.getenv "TERM" with
   | None -> ""
   | Some x -> x
 

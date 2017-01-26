@@ -1,5 +1,5 @@
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 val quit : Exit_code.t -> unit

@@ -1,11 +1,11 @@
-open Core.Std
+open Core
 open Async.Std
 open! Int.Replace_polymorphic_compare
 
 module Error = struct
 
   module Stable = struct
-    open! Core.Stable
+    open! Core.Core_stable
 
     module V2 = struct
 
@@ -132,7 +132,7 @@ end
 
 module Stable = struct
   module E = Error
-  open Core.Stable
+  open Core.Core_stable
   module Error = E.Stable
 
   module V2 = struct

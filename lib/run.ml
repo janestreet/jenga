@@ -1,15 +1,15 @@
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 open Async.Std
 
 let max_num_threads = 50
 
 let max_num_threads =
-  match Core.Std.Sys.getenv "JENGA_MAX_NUM_THREADS" with
+  match Core.Sys.getenv "JENGA_MAX_NUM_THREADS" with
   | None -> max_num_threads
   | Some s ->
     let n = Int.of_string s in
-    Core.Std.Printf.eprintf "max_num_threads = %d\n%!" n;
+    Core.Printf.eprintf "max_num_threads = %d\n%!" n;
     n
 
 let trace fmt = ksprintf (fun string -> Message.trace "Run: %s" string) fmt
@@ -17,11 +17,11 @@ let trace fmt = ksprintf (fun string -> Message.trace "Run: %s" string) fmt
 let db_save_span = sec 60.0
 
 let db_save_span =
-  match Core.Std.Sys.getenv "JENGA_DB_SAVE_SPAN" with
+  match Core.Sys.getenv "JENGA_DB_SAVE_SPAN" with
   | None -> db_save_span
   | Some s ->
     let int = Int.of_string s in
-    Core.Std.Printf.eprintf "db_save_span = %d sec\n%!" int;
+    Core.Printf.eprintf "db_save_span = %d sec\n%!" int;
     sec (float int)
 
 let run_once_async_is_started config ~start_dir ~root_dir ~jr_spec ~forker_args =
@@ -64,7 +64,7 @@ let install_signal_handlers () =
   )
 
 (* for pre-init_logging errors *)
-let error fmt = ksprintf (fun s -> Core.Std.Printf.eprintf "%s\n%!" s) fmt
+let error fmt = ksprintf (fun s -> Core.Printf.eprintf "%s\n%!" s) fmt
 
 let configure_scheduler ~report_long_cycle_times =
   Option.iter report_long_cycle_times ~f:(fun cutoff ->
@@ -82,7 +82,7 @@ let configure_scheduler ~report_long_cycle_times =
     *)
     let time_to_wait_for = ref 0.001 in
     while !time_to_wait_for >. 0.; do
-      time_to_wait_for := Core.Std.Unix.nanosleep !time_to_wait_for;
+      time_to_wait_for := Core.Unix.nanosleep !time_to_wait_for;
     done;
     let completed_after = Async_unix.Thread_pool.num_work_completed sched.thread_pool in
     if completed_before = completed_after then
@@ -118,7 +118,7 @@ let main' jr_spec ~root_dir ~forker_args config =
 
   let start_dir =
     match
-      Path.case (Path.of_absolute_string (Core.Std.Sys.getcwd ()))
+      Path.case (Path.of_absolute_string (Core.Sys.getcwd ()))
     with
     | `absolute _ ->
       failwith "start_dir, not under root_dir - impossible"
@@ -131,7 +131,7 @@ let main' jr_spec ~root_dir ~forker_args config =
 
   (* chdir before Forker.init so that we have the same cwd when using parallel forkers or
      not *)
-  Core.Std.Sys.chdir (Path.Abs.to_string root_dir);
+  Core.Sys.chdir (Path.Abs.to_string root_dir);
 
   let pid_string () = Pid.to_string (Unix.getpid ()) in
 
@@ -160,7 +160,7 @@ let main config =
   (* The jenga root discovery must run before we call Parallel.init *)
   match Config.path_to_jenga_conf config with
   | Some jenga_root ->
-    let root_dir = Path.Abs.create (Core.Std.Sys.getcwd ()) in
+    let root_dir = Path.Abs.create (Core.Sys.getcwd ()) in
     let jenga_root = Path.relative_or_absolute ~dir:Path.the_root jenga_root in
     main' ~root_dir (Build.Jr_spec.Path jenga_root) config
   | None ->

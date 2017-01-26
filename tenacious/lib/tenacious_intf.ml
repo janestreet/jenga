@@ -37,7 +37,7 @@
   running at the same time.
 *)
 
-open! Core.Std
+open! Core
 open Async.Std
 
 module type S = sig

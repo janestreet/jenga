@@ -1,5 +1,5 @@
 
-open Core.Std
+open Core
 open Async.Std
 open! Int.Replace_polymorphic_compare
 
@@ -7,7 +7,7 @@ type delete_predicate = (non_target:Path.t -> bool) Dep.t
 
 let putenv_for_path =
   (* lookup once and remember to avoid repeated pushing on to the front *)
-  let orig_path = match (Core.Std.Sys.getenv "PATH") with | None -> "" | Some s -> s in
+  let orig_path = match (Core.Sys.getenv "PATH") with | None -> "" | Some s -> s in
 
   let minimal_path_kept_even_after_replacement = "/bin:/usr/bin:/usr/local/bin" in
   (* Without this minimal path, user replacement can terminally break Jenga!

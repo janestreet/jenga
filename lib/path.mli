@@ -1,6 +1,6 @@
 (** The type and operations on filesystem paths. *)
 
-open! Core.Std
+open! Core
 
 (* [Path.Rel.t]
    Type for repo root-relative paths. Used throughout jenga.

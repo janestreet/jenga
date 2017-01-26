@@ -1,6 +1,6 @@
 (** The main entry points of jenga. *)
 
-open! Core.Std
+open! Core
 
 (** Entry point after command line has been processed. [forker_args] is the command line
     arguments to pass to the current exe that will call [Forker.command]. *)

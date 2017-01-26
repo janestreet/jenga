@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open Jenga_lib.Api
 
 let ( *>>= ) t f = Dep.bind t ~f

@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 
 (* [Scheme_type.t] is the variant implementation behind [Scheme.t].  Values of this type

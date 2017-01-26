@@ -4,7 +4,7 @@
     process early on, when jenga uses little memory. Jenga can then ask these processes to
     cheaply spawn commands. *)
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 val init : Config.t -> args:string list -> unit Or_error.t Deferred.t (* just once *)

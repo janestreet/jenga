@@ -1,4 +1,4 @@
-open! Core.Std
+open! Core
 
 (** A table of registered environment variables, with typed access *)
 

@@ -1,4 +1,4 @@
-open! Core.Std
+open! Core
 open! Async.Std
 open! Int.Replace_polymorphic_compare
 
@@ -240,6 +240,8 @@ let with_sandbox ~dir ~deps ~kind ~targets ~f =
     match%bind f box with
     | Error _ as err ->
       Monitor.try_with (fun () ->
+        let%bind () = unlink_files ~paths:empty_files in
+        let%bind () = unlink_files ~paths:files in
         move_existing_file_recursively root
       ) >>| fun _ -> Ok err
     | Ok _ as res ->

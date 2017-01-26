@@ -1,5 +1,5 @@
 
-(** A [Ring] is a bag structure; similar to [Core.Std.Bag].
+(** A [Ring] is a bag structure; similar to [Core.Bag].
 
    The differences being:
    - An [elem] can be [detach]ed without explicit reference to the [Ring].

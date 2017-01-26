@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open Async.Std
 
 let save_metrics ~jenga_jengaroot_version ~bench_name ~dst =
@@ -46,7 +46,7 @@ let eprintf_progress =
 
 let wait_for_compact_and_db_save () =
   eprintf_progress "waiting for compact/db save...%!";
-  Clock.after (Time.Span.of_sec 80.)
+  Clock.after (Time.Span.of_sec 20.)
   >>| fun () ->
   eprintf " done\n";
 ;;
@@ -97,7 +97,18 @@ let run_jenga ~exe ~args ~env ~log =
     ; "LINK_EXECUTABLES"
     ; "X_LIBRARY_INLINING"
     ] ~f:Unix.unsetenv;
-  let args = "-show-mem" :: args in
+  let env =
+    let map = String.Map.of_alist_exn env in
+    let key = "JENGA_OPTIONS" in
+    let field = "(compact_and_save_delay 0s)" in
+    let new_value =
+      match Map.find map key with
+      | None -> sprintf "(%s)" field
+      | Some old_value ->
+        sprintf "(%s%s)" field (String.chop_prefix_exn old_value ~prefix:"(")
+    in
+    Map.to_alist (Map.add map ~key ~data:new_value)
+  in
   let prog = exe in
   Process.create_exn ~env:(`Extend env) ~prog ~args ()
   >>= fun p ->
@@ -142,7 +153,7 @@ let run_polling_jenga_and_wait ~exe ~targets ~env ~flags ~log =
 
 let setup_limits () =
   In_thread.run (fun () ->
-    let open Core.Std in
+    let open Core in
     Unix.RLimit.set Unix.RLimit.stack
       { cur = Limit (Int64.of_int (20_000 * 1024)); max = Infinity })
 ;;

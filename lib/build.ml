@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 open Async.Std
 
@@ -2087,7 +2087,7 @@ let build_forever =
           (* Let's wait until it looks like we don't need to build anything, and then we
              can compact if needed. This way we don't get in the way of the user. *)
           Quit.with_prevent_quitting (fun quitting ->
-            Clock.with_timeout (Time.Span.of_sec 60.)
+            Clock.with_timeout Jenga_options.t.compact_and_save_delay
               (Deferred.choose
                  [ Deferred.choice wait (fun () -> `Done_waiting)
                  ; Deferred.choice quitting (fun () -> `Quitting)

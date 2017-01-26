@@ -6,7 +6,7 @@
     [../benchmarking/bench.exe] can be used to build and gather these metrics files,
     and compare various versions of jenga or the jenga rules against one another. *)
 
-open! Core.Std
+open! Core
 
 module Unit : sig
   type t =

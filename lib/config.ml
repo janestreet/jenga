@@ -1,7 +1,7 @@
 (** The representation of the various command line options. Further configuration
     (not exposed to casual users) is in jenga_options.ml. *)
 
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 
 module Gc = struct

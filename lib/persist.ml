@@ -1,5 +1,5 @@
 
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 open Async.Std
 
@@ -10,7 +10,7 @@ module Version = struct
 end
 
 let jenga_show_persist =
-  Option.is_some (Core.Std.Sys.getenv "JENGA_SHOW_PERSIST")
+  Option.is_some (Core.Sys.getenv "JENGA_SHOW_PERSIST")
 
 let trace = Message.(if jenga_show_persist then message else trace)
 let trace fmt = ksprintf (fun s -> trace "Persist: %s" s) fmt

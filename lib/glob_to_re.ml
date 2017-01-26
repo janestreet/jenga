@@ -1,5 +1,5 @@
 
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 
 (* copied from some old code -- dev/repo_utils/lib/glob.ml *)

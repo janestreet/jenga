@@ -2,7 +2,7 @@
     Jenga created all its files below .jenga, but knows about a few
     other files, like the "jengaroot.ml". *)
 
-open! Core.Std
+open! Core
 
 (** Files created in the [.jenga] sub-directory. *)
 module Dot_jenga : sig

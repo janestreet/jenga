@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open Async.Std
 open! Int.Replace_polymorphic_compare
 
@@ -88,7 +88,7 @@ module Breakable = struct
       let clients = Ring.create () in
       let trigger = Ivar.create () in
       let fragile = { registrations; clients; trigger; } in
-      Core.Std.Gc.Expert.add_finalizer_exn fragile (fun fragile ->
+      Core.Gc.Expert.add_finalizer_exn fragile (fun fragile ->
         Array.iter fragile.registrations ~f:Ring.detach;
       );
       t.state <- Fragile fragile;

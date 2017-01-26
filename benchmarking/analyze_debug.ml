@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open Async.Std
 open! Int.Replace_polymorphic_compare
 
@@ -21,7 +21,14 @@ module Job_summary = struct
     } [@@deriving sexp]
   end
 
-  type t = Start.t * Finish.t * Sexp.t
+  module Output = struct
+    type t = {
+      stdout : string list;
+      stderr : string list;
+    } [@@deriving sexp]
+  end
+
+  type t = Start.t * Finish.t * Output.t
   [@@deriving sexp]
 end
 
@@ -96,46 +103,128 @@ let reduce_resolution ~step ~scalar_mul ~add time_a_list =
   | (time, a) :: rest -> loop time [(time, a)] [] rest
 ;;
 
-let category (start : Job_summary.Start.t) =
-  if String.is_substring start.prog ~substring:"ocamldep"
-  then "ocamldep"
-  else if String.is_substring start.prog ~substring:"ocamlopt"
-          && List.mem start.args "-c"
-  then ".ml"
-  else if String.is_substring start.prog ~substring:"link-quietly"
-  then "link"
-  else if String.is_substring start.prog ~substring:"ocamlc"
-          && List.mem start.args "-c"
-  then ".mli"
-  else if String.is_substring start.need ~substring:"fgrep"
-  then "test/bench grep"
-  else if List.exists (start.prog :: start.args) ~f:(String.is_substring ~substring:"ocamlobjinfo")
-  then "ocamlobjinfo"
-  else if String.(=) start.prog "gcc"
-       || String.(=) start.prog "g++"
-       || (String.is_substring start.prog ~substring:"ocamlc"
-           && Option.exists (List.hd start.args) ~f:(String.is_suffix ~suffix:".c"))
-  then "c/c++"
-  else if String.is_prefix ~prefix:".liblinks" start.where
-  then "liblinks"
-  else if List.exists start.args ~f:(String.(=) "./inline_tests_runner")
-       || String.is_substring start.prog ~substring:"enforce-style"
-  then "test"
-  else if String.(=) start.prog "hg"
-       || List.exists start.args ~f:(String.is_substring ~substring:"hg showconfig")
-  then "hg"
-  else if String.is_substring start.prog ~substring:"ocamlyacc"
-       || String.is_substring start.prog ~substring:"ocamllex"
-       || String.is_substring start.prog ~substring:"menhir"
-  then "codegen"
-  else if (String.is_substring start.prog ~substring:"ocamlopt"
-           && Option.exists (List.last start.args) ~f:(String.is_suffix ~suffix:".cmxa"))
-  then "archive"
-  else if List.exists start.args ~f:(String.is_substring ~substring:"ocaml_embed_compiler")
-  then "ocaml-plugin"
-  else if String.(=) start.prog "bash"
-  then "bash"
-  else "other" (* raise_s [%sexp (start : Job_summary.Start.t)] *)
+let categorize_ocaml_passes ((start, finish, output) : Job_summary.t) =
+  if List.mem start.args "-dtimings"
+  && (* not sure what's up with linking, may want to look in more details laterr *)
+  not (String.is_substring start.prog ~substring:"link-quietly")
+  && (match finish.outcome with `success -> true | `error _ -> false)
+  then begin
+    let categories_and_durations =
+      List.filter_map output.stdout ~f:(fun line ->
+        Option.map (String.lsplit2 line ~on:':') ~f:(fun (timing_category, duration) ->
+          let timing_category =
+            match String.lsplit2 timing_category ~on:'(' with
+            | None -> timing_category
+            | Some (r, _) -> r
+          in
+          String.strip timing_category, Time.Span.of_string duration))
+    in
+    match categories_and_durations with
+    | [ ("parsing", _); ("all", _); ("preprocessing", _) ]
+    | [ ("all", _); ("preprocessing", _) ] ->
+      None (* no timings, which includes at least compilation of mli's *)
+    | _ ->
+      let all = ref None in
+      let major_categories_and_durations =
+        List.filter_map categories_and_durations ~f:(fun (timing_category, duration) ->
+          match timing_category with
+          | "assemble" | "clambda" | "cmm" | "compile_phrases" | "comballoc"
+          | "cse" | "liveness" | "deadcode" | "spill" | "regalloc" | "linearize"
+          | "scheduling" | "emit" | "flambda_pass" | "split" | "selection" ->
+            None (* included in generate I think *)
+          | "all" -> assert (Option.is_none !all); all := Some duration; None
+          | "transl" | "generate" -> Some ("ocaml backend", duration)
+          | "preprocessing" -> None (* included in parsing with my change, and useless
+                                       without my change, as it uses Sys.time to measure
+                                       time spent in a subprocess *)
+          | "parsing"  | "typing" as s -> Some ("ocaml " ^ s, duration)
+          | s -> failwith s)
+      in
+      match !all with
+      | None -> raise_s [%sexp (start : Job_summary.Start.t)]
+      | Some all -> Some (major_categories_and_durations, all)
+  end else None
+
+let category ((start, _, _) as job_summary) =
+  match categorize_ocaml_passes job_summary with
+  | Some v -> `Detailed v
+  | None ->
+    `Simple (
+      if String.is_substring start.prog ~substring:"ocamldep"
+      then "ocamldep"
+      else if String.is_substring start.prog ~substring:"ocamlopt"
+           && List.mem start.args "-c"
+           && List.mem start.args "-impl"
+      then ".ml"
+      else if String.is_substring start.prog ~substring:"ocamlc"
+           && List.mem start.args "-c"
+           && List.mem start.args "-impl"
+      then ".ml byte"
+      else if (String.is_substring start.prog ~substring:"ocamlc"
+               || String.is_substring start.prog ~substring:"ocamlopt")
+           && List.mem start.args "-c"
+           && List.mem start.args "-intf"
+      then ".mli"
+      else if String.is_substring start.prog ~substring:"link-quietly"
+      then "link"
+      else if String.is_substring start.need ~substring:"fgrep"
+      then "test/bench grep"
+      else if List.exists (start.prog :: start.args)
+                ~f:(String.is_substring ~substring:"ocamlobjinfo")
+      then "ocamlobjinfo"
+      else if String.(=) start.prog "gcc"
+           || String.(=) start.prog "g++"
+           || (String.is_substring start.prog ~substring:"ocamlc"
+               && Option.exists (List.hd start.args) ~f:(String.is_suffix ~suffix:".c"))
+      then "c/c++"
+      else if String.is_prefix ~prefix:".liblinks" start.where
+      then "liblinks"
+      else if List.exists start.args ~f:(String.(=) "./inline_tests_runner")
+           || String.is_substring start.prog ~substring:"enforce-style"
+           || String.(=) start.need ".runtest"
+      then "test"
+      else if String.(=) start.prog "hg"
+           || List.exists start.args ~f:(String.is_substring ~substring:"hg showconfig")
+      then "hg"
+      else if String.is_substring start.prog ~substring:"ocamlyacc"
+           || String.is_substring start.prog ~substring:"ocamllex"
+           || String.is_substring start.prog ~substring:"menhir"
+      then "codegen"
+      else if (String.is_substring start.prog ~substring:"ocamlopt"
+               && Option.exists (List.last start.args) ~f:(String.is_suffix ~suffix:".cmxa"))
+      then "archive"
+      else if List.exists start.args ~f:(String.is_substring ~substring:"ocaml_embed_compiler")
+      then "ocaml-plugin"
+      else if String.(=) start.prog "bash"
+      then "bash"
+      else "other" (* raise_s [%sexp (start : Job_summary.Start.t)] *)
+    )
+;;
+
+let categories_and_durations ((_, finish, _) as job_summary : Job_summary.t) =
+  let duration = finish.duration in
+  match category job_summary with
+  | `Simple category -> [ category, duration ]
+  | `Detailed (categories_and_durations, all) ->
+    let sum_of_durations = List.sum (module Time.Span) categories_and_durations ~f:snd in
+    let measured_but_undetailed = Time.Span.(-) all sum_of_durations in
+    let categories_and_durations = categories_and_durations @ [ "measured by compiler without detail", measured_but_undetailed ] in
+    let unaccounted_for = Time.Span.(-) duration all in
+    (* if Time.Span.(>.) unaccounted_for (Time.Span.of_sec 0.5)
+     * then eprintf !"%{Sexp#hum}\n"
+     *        [%sexp ~~(all : Time.Span.t), ~~(duration : Time.Span.t), ~~(unaccounted_for : Time.Span.t),
+     *               ~~(measured_but_undetailed : Time.Span.t), ~~(start.prog : string), ~~(start.args : string list)]; *)
+    if Time.Span.(<.) measured_but_undetailed Time.Span.zero
+    then eprintf !"Sum of subcategories is more than total (%{Time.Span})\n"
+           measured_but_undetailed;
+    if Time.Span.(<.) unaccounted_for Time.Span.zero
+    then (eprintf !"real time is less than user/sys time (%{Time.Span} overaccouted for)\n"
+            (Time.Span.neg unaccounted_for);
+          categories_and_durations)
+    else if Time.Span.(>.) unaccounted_for Time.Span.zero
+    then categories_and_durations @ [ "padding between ocaml and jenga measurement", unaccounted_for ]
+    else categories_and_durations
+;;
 
 let report_totals ~writer:w all_categories =
   fprintf w "category,total time\n";
@@ -182,17 +271,22 @@ let main debug_file ~totals ~graph =
     begin match event with
     | Job_started start ->
       Hashtbl.add_exn unfinished ~key:start.uid ~data:time
-    | Job_completed (start, finish, _) ->
+    | Job_completed (start, finish, _ as job_summary) ->
       let start_time = Option.value_exn (Hashtbl.find_and_remove unfinished start.uid) in
       ignore start_time;
-      let category = category start in
-      all_categories :=
-        Map.update !all_categories category
-          ~f:(function None -> finish.duration
-                     | Some prev -> Time.Span.(+) prev finish.duration);
-      state := M.map_within !state
-                 (`Between (Time.sub time finish.duration, time))
-                 ~f:(fun x -> Map.update x category ~f:(function None -> 1 | Some v -> v + 1));
+      let categories_and_durations = categories_and_durations job_summary in
+      let start = ref (Time.sub time finish.duration) in
+      List.iter categories_and_durations ~f:(fun (category, duration) ->
+        all_categories :=
+          Map.update !all_categories category
+            ~f:(function None -> duration
+                       | Some prev -> Time.Span.(+) prev duration);
+        let end_ = Time.add !start duration in
+        state := M.map_within !state
+                   (`Between (!start, end_))
+                   ~f:(fun x -> Map.update x category ~f:(function None -> 1 | Some v -> v + 1));
+        start := end_;
+      );
     end;
     return ();
   ) >>= fun () ->
@@ -236,7 +330,7 @@ let main debug_file ~totals ~graph =
     Process.run_exn
       ~prog:"htmlplot"
       ~args:[ "csv"; "hi"; schedule_csv; "-sexp"; "-output"; schedule_sexp
-            ; "-kind"; "area"; "-colors"; "spinner" ]
+            ; "-kind"; "area"; "-colors"; "spinner"; "-height"; "600"; "-width"; "1000" ]
       ()
     >>| print_string
     >>= fun () ->

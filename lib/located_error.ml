@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 
 module Loc = struct
   module Source = struct

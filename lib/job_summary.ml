@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 
 module Q : sig
@@ -70,7 +70,7 @@ let%test_unit _ =
 ;;
 
 module Stable = struct
-  open! Core.Stable
+  open! Core.Core_stable
 
   module V2 = struct
 

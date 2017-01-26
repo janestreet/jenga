@@ -1,17 +1,18 @@
-open! Core.Std
+open! Core
 open! Int.Replace_polymorphic_compare
 
 type t =
-  { sigstop_on_thread_pool_stuck : bool [@default false]
+  { cycle_checking_interval :
+      Time.Span.t option [@default (Some (Time.Span.of_sec 10.))]
+  ; fd_close_timeout             : Time.Span.t [@default Time.Span.of_min 1.]
+  ; sigstop_on_thread_pool_stuck : bool [@default false]
+  ; compact_and_save_delay       : Time.Span.t [@default Time.Span.of_min 1.]
+  ; turn_off_db_saves            : bool [@default false]
   ; turn_off_mtimes_check        : bool [@default false]
   (* Turning off mtimes check is only safe if no one is changing the filesystem, and
      the build system works without self triggering.
      If you are not sure, use it in combination with [turn_off_db_saves] to to avoid
      breaking the future jenga runs. *)
-  ; turn_off_db_saves            : bool [@default false]
-  ; cycle_checking_interval :
-      Time.Span.t option [@default (Some (Time.Span.of_sec 10.))]
-  ; fd_close_timeout             : Time.Span.t [@default Time.Span.of_min 1.]
   }
 [@@deriving sexp]
 

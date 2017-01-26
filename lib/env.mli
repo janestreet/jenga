@@ -2,7 +2,7 @@
     that a user of the jenga library can provide to jenga.
     See api.mli for documentation of the various fields. *)
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 type t

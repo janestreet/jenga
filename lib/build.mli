@@ -3,7 +3,7 @@
     persistent state etc.
     This module is not meant to be used directly, except for the Jr_spec type. *)
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 module Jr_spec : sig

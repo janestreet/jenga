@@ -1,5 +1,5 @@
 
-open! Core.Std
+open! Core
 open Async.Std
 
 (* Type to represent when some previously computed result is no longer valid.

@@ -8,7 +8,7 @@
     format across values (see With_index), and so they cannot be serialized
     independently. *)
 
-open! Core.Std
+open! Core
 
 module Kind : sig
   type t = [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]

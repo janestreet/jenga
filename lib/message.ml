@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 open Async.Std
 module Log = Async.Std.Log
@@ -176,8 +176,8 @@ let stdout_logger config event =
 
   let put_trans s =
     if dont_emit_kill_line()
-    then Core.Std.Printf.printf "%s%s\r%!" elapsed s
-    else Core.Std.Printf.printf "\027[K%s%s\r%!" elapsed s
+    then Core.Printf.printf "%s%s\r%!" elapsed s
+    else Core.Printf.printf "\027[K%s%s\r%!" elapsed s
   in
 
   let redisplay_transient() =
@@ -188,13 +188,13 @@ let stdout_logger config event =
 
   let put s =
     if dont_emit_kill_line()
-    then Core.Std.Printf.printf "%s%s\n%!" elapsed s
-    else Core.Std.Printf.printf "\027[K%s%s\n%!" elapsed s
+    then Core.Printf.printf "%s%s\n%!" elapsed s
+    else Core.Printf.printf "\027[K%s%s\n%!" elapsed s
   in
   let jput s =
     (if dont_emit_kill_line()
-    then Core.Std.Printf.printf "%s*** jenga: %s\n%!" elapsed s
-    else Core.Std.Printf.printf "\027[K%s*** jenga: %s\n%!" elapsed s);
+    then Core.Printf.printf "%s*** jenga: %s\n%!" elapsed s
+    else Core.Printf.printf "\027[K%s*** jenga: %s\n%!" elapsed s);
     redisplay_transient()
   in
 

@@ -1,5 +1,5 @@
 
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 
 module Unit = struct
@@ -40,7 +40,7 @@ module Counter = struct
   module Snap = struct
 
     module Stable = struct
-      open Core.Stable
+      open Core.Core_stable
 
       module V1 = struct
         type t = {
@@ -86,7 +86,7 @@ module Counters = struct
   module Snap = struct
 
     module Stable = struct
-      open Core.Stable
+      open Core.Core_stable
 
       module V1 = struct
         type t = {

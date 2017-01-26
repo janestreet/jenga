@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open Async.Std
 open! Int.Replace_polymorphic_compare
 
@@ -46,7 +46,7 @@ let lock_running_server ~root_dir ~port =
     >>= fun () ->
     at_exit (fun () ->
       (* To reduce user confusion: remove the .server file when jenga is not running *)
-      try Core.Std.Unix.unlink (server_filename) with _ -> ()
+      try Core.Unix.unlink (server_filename) with _ -> ()
     );
     return ()
 

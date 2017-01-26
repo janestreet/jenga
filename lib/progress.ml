@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open Async.Std
 open! Int.Replace_polymorphic_compare
 
@@ -168,7 +168,7 @@ let iter_classification t ~f =
 module Counts = struct
 
   module Stable = struct
-    open Core.Stable
+    open Core.Core_stable
 
     module V1 = struct
       type t = {
@@ -227,7 +227,7 @@ let estimator =
 module Snap = struct
 
   module Stable = struct
-    open Core.Stable
+    open Core.Core_stable
     module V1 = struct
       type t = {
         counts : Counts.Stable.V1.t;

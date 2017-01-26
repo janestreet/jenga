@@ -2,7 +2,7 @@
     scheme may itself have dependencies. This allows generation of rules based on a glob
     pattern, say [*.c], or generation w.r.t to a config file. *)
 
-open! Core.Std
+open! Core
 
 include module type of Scheme_type
 

@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 open Async.Std
 
@@ -117,13 +117,13 @@ end = struct
           Unix.with_file (Path.to_absolute_string path) ~mode:[`Rdonly]
             ~f:(fun fd ->
               Fd.with_file_descr_deferred_exn fd (fun fd ->
-                let fd = Core.Std.Unix.File_descr.to_int fd in
+                let fd = Core.Unix.File_descr.to_int fd in
                 In_thread.run (fun () -> digest_fd fd))))
         |> Deferred.Or_error.map ~f:Caml.Digest.to_hex))
 
   let%test_unit _ =
     set 20;
-    let open Core.Std in
+    let open Core in
     let cwd = Sys.getcwd () in
     let file = Filename.concat cwd (Filename.basename [%here].pos_fname) in
     let our_digest =
@@ -962,7 +962,7 @@ end
 ----------------------------------------------------------------------*)
 
 let tmp_jenga =
-  let user = Core.Std.Unix.getlogin() in
+  let user = Core.Unix.getlogin() in
   sprintf "/tmp/jenga-%s" user
 
 module Fs : sig
@@ -1046,7 +1046,7 @@ let caml_batched_mtimes l = caml_batched_mtimes l ~len:(List.length l)
 let%test_module _ = (module struct
 
   let slow_caml_batched_mtimes_for_comparison l =
-    Array.of_list (List.map l ~f:(fun path -> (Core.Std.Unix.stat path).st_mtime))
+    Array.of_list (List.map l ~f:(fun path -> (Core.Unix.stat path).st_mtime))
 
   let caml_batched_mtimes_with_same_error l =
     try caml_batched_mtimes l

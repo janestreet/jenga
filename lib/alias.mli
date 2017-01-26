@@ -1,5 +1,5 @@
 
-open! Core.Std
+open! Core
 
 (** [Alias.t] is a symbolic target, ie build-goal which is not associated with any
     generated files. It is used as a way of asking jenga to do an arbitrary [Dep]

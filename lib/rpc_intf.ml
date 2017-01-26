@@ -5,7 +5,7 @@
     called from build-manager, we expect build-manager to be ahead, and it should be
     rolled before jengas that introduce new versions. *)
 
-open Core.Std
+open Core
 open Async.Std
 open! Int.Replace_polymorphic_compare
 

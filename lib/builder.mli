@@ -1,6 +1,6 @@
 (** Layer error monad within tenacious monad *)
 
-open Core.Std
+open Core
 open Async.Std
 
 module Problem : sig

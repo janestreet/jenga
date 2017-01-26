@@ -3,7 +3,7 @@
     build rules etc for a specific instance of jenga, and the core jenga build system.
     What is ultimately the main entry point of this module is [Env], at the bottom. *)
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 module Path : sig

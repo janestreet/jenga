@@ -2,7 +2,7 @@
 (* Define constructors for [Dep.t] & additional non-primitive functions, to be provided in
    the API, allowing the GADT representation to be hidden. *)
 
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 
 include Dep_type

@@ -1,4 +1,4 @@
-open! Core.Std
+open! Core
 open! Async.Std
 
 (** Entry point to run Jenga as directed by the command line *)

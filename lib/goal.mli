@@ -1,5 +1,5 @@
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 (** [Goal.t] is a build goal, as demanded on the command line or requested by rules.

@@ -1,5 +1,5 @@
 
-open Core.Std
+open Core
 open Async.Std
 open! Int.Replace_polymorphic_compare
 

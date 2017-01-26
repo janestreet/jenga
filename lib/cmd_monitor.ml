@@ -1,11 +1,11 @@
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 open Async.Std
 
 let retry_span = sec 0.5
 
 let terminal_type =
-  match Core.Std.Sys.getenv "TERM" with
+  match Core.Sys.getenv "TERM" with
   | None -> ""
   | Some x -> x
 
@@ -13,8 +13,8 @@ let dont_emit_kill_line = String.(terminal_type = "dumb")
 
 let message =
   if dont_emit_kill_line
-  then fun fmt -> ksprintf (fun s -> Core.Std.Printf.printf "%s\r%!" s) fmt
-  else fun fmt -> ksprintf (fun s -> Core.Std.Printf.printf "\027[2K%s\r%!" s) fmt
+  then fun fmt -> ksprintf (fun s -> Core.Printf.printf "%s\r%!" s) fmt
+  else fun fmt -> ksprintf (fun s -> Core.Printf.printf "\027[2K%s\r%!" s) fmt
 
 let run_once ~root_dir style =
   Jenga_client.with_menu_connection_with_detailed_error ~root_dir ~f:(fun cwm ->

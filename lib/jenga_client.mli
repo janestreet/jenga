@@ -5,7 +5,7 @@
     root directory of the server (usually where the .hg/.git directory is). This implies
     one can only connect to jenga servers on the local machine. *)
 
-open Core.Std
+open Core
 open Async.Std
 
 module Connection_error : sig

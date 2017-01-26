@@ -2,7 +2,7 @@
     the purpose of displaying them to the user. None of this is saved persistently.
     The actual displaying is done in message.ml though. *)
 
-open Core.Std
+open Core
 
 module Q : sig
   (** [shell_escape s] can be used as a part of bash command line to mean the word [s]

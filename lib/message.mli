@@ -3,7 +3,7 @@
     - printing on stdout
 *)
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 val init_logging : Config.t -> log_filename:string -> unit

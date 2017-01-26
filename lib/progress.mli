@@ -7,7 +7,7 @@
     way to rpc clients through the [Reportable.t].
 *)
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 val lstat_counter : Metrics.Counter.t

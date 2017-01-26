@@ -1,5 +1,5 @@
 
-open Core.Std
+open Core
 open! Int.Replace_polymorphic_compare
 
 let starts_with_slash s =

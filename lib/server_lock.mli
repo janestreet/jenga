@@ -3,7 +3,7 @@
     It also writes to disk where the jenga server is listening, which can be queried
     by anything that needs to find the server. *)
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 val lock_running_server : root_dir:Path.Abs.t -> port:int -> unit Deferred.t

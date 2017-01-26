@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open Int.Replace_polymorphic_compare
 module T = Textutils.Text_block
 
@@ -284,8 +284,7 @@ let command =
         - yellow: slightly high variance\n\
         - red: really high variance\n\
         - purple: so much variance the data is nonsensical\n\n\
-        There is no accompanying executable to create input files matching this \
-        format.\
+        Such input files can be created by the [run] subcommand.\
     ")
     [%map_open
       let metrics_files = anon (sequence ("METRICS" %: file))

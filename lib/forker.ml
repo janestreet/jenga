@@ -1,7 +1,11 @@
-
-open Core.Std
+open Core
 open Async.Std
 open! Int.Replace_polymorphic_compare
+
+let heartbeat_config =
+  Rpc.Connection.Heartbeat_config.create
+    ~timeout: Time_ns.Span.max_value
+    ~send_every: (Time_ns.Span.of_sec 10.)
 
 module Request = struct
   type t = {
@@ -37,12 +41,12 @@ module Fork = struct
   let rpc = Rpc.Rpc.create ~name:"fork" ~version:0 ~bin_query ~bin_response
 
   let implementation { Request. putenv; dir_as_string; prog; args } =
-    Core.Std.Unix.create_process_backend := `spawn_vfork;
+    Core.Unix.create_process_backend := `spawn_vfork;
     let start = Time.now () in
     List.iter putenv ~f:(fun (key, data) ->
       match data with
-      | None -> Core.Std.Unix.unsetenv key
-      | Some data -> Core.Std.Unix.putenv ~key ~data);
+      | None -> Core.Unix.unsetenv key
+      | Some data -> Core.Unix.putenv ~key ~data);
     Process.create ~working_dir:dir_as_string ~prog ~args () >>= function
     | Error e -> return (Reply.of_error e ~duration:(Time.diff (Time.now ()) start))
     | Ok process ->
@@ -88,7 +92,7 @@ let command =
     let implementation _ query =
       Throttle.enqueue (force fork_throttle) (fun () -> implementation query)
   end in
-  Command_rpc.Command.create ~summary:"" [ `Plain (module Fork) ]
+  Command_rpc.Command.create ~heartbeat_config ~summary:"" [ `Plain (module Fork) ]
 ;;
 
 type t =
@@ -102,7 +106,7 @@ let the_t () = match !t_opt_ref with | None -> assert false | Some t -> t
 let init config ~args =
   let t_or_error_def =
     if Config.f_number config > 0
-    then Command_rpc.Connection.create
+    then Command_rpc.Connection.create ~heartbeat_config
            ~propagate_stderr:true ~prog:Sys.executable_name ~args ()
          >>| Or_error.map ~f:(fun conn -> Dispatch conn)
     else return (Ok In_process)

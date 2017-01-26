@@ -1,4 +1,4 @@
-open Core.Std
+open Core
 open Async.Std
 open Int.Replace_polymorphic_compare
 
@@ -82,7 +82,7 @@ let root = Node.create (lazy "root")
 module Dump = struct
 
   module Stable = struct
-    open Core.Stable
+    open Core.Core_stable
 
     module V1 = struct
       type t = {

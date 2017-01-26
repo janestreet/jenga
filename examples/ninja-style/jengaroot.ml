@@ -1,5 +1,5 @@
 
-open Core.Std
+open Core
 open Async.Std
 
 (* Dont open jenga API, but access via explicit [J.] *)

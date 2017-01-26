@@ -1,7 +1,7 @@
 (** This module implements loading the jengaroot (whose type is defined in
     jenga_root_interface.ml) using ocaml_plugin. *)
 
-open! Core.Std
+open! Core
 open! Async.Std
 
 val is_loading : unit -> bool
