@@ -1,6 +1,6 @@
 
 open! Core
-open! Async.Std
+open! Async
 
 val quit : Exit_code.t -> unit
 val exit : Exit_code.t -> 'a Deferred.t

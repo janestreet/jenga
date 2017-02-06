@@ -1,6 +1,6 @@
 open Core
 open! Int.Replace_polymorphic_compare
-open Async.Std
+open Async
 module Heart = Tenacious.Heart
 
 module Problem = struct

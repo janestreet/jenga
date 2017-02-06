@@ -4,7 +4,7 @@
     What is ultimately the main entry point of this module is [Env], at the bottom. *)
 
 open! Core
-open! Async.Std
+open! Async
 
 module Path : sig
 

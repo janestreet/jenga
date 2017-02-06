@@ -1,7 +1,7 @@
 open Core
 open! Int.Replace_polymorphic_compare
-open Async.Std
-module Log = Async.Std.Log
+open Async
+module Log = Async.Log
 
 let parse_pretty_span = Job_summary.parse_pretty_span
 

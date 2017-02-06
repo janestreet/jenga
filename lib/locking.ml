@@ -1,6 +1,6 @@
 
 open Core
-open Async.Std
+open Async
 open! Int.Replace_polymorphic_compare
 
 let with_acquire_release : (

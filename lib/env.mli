@@ -3,7 +3,7 @@
     See api.mli for documentation of the various fields. *)
 
 open! Core
-open! Async.Std
+open! Async
 
 type t
 

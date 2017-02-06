@@ -1,6 +1,6 @@
 open Core
 open! Int.Replace_polymorphic_compare
-open Async.Std
+open Async
 
 let max_num_threads = 50
 
@@ -70,8 +70,8 @@ let configure_scheduler ~report_long_cycle_times =
   Option.iter report_long_cycle_times ~f:(fun cutoff ->
     Scheduler.report_long_cycle_times ~cutoff ()
   );
-  Async.Std.Scheduler.handle_thread_pool_stuck (fun ~stuck_for ->
-    let sched = Async.Std.Scheduler.t () in
+  Async.Scheduler.handle_thread_pool_stuck (fun ~stuck_for ->
+    let sched = Async.Scheduler.t () in
     let completed_before = Async_unix.Thread_pool.num_work_completed sched.thread_pool in
     (* A 1ms pause shouldn't matter since this is called at most once per second, but it
        should be enough to convince the kernel to give other threads a chance to grab the
@@ -86,7 +86,7 @@ let configure_scheduler ~report_long_cycle_times =
     done;
     let completed_after = Async_unix.Thread_pool.num_work_completed sched.thread_pool in
     if completed_before = completed_after then
-      Async.Std.Scheduler.default_handle_thread_pool_stuck ~stuck_for;
+      Async.Scheduler.default_handle_thread_pool_stuck ~stuck_for;
     if Jenga_options.t.sigstop_on_thread_pool_stuck && Time_ns.Span.(stuck_for > of_sec 5.) then
       Signal.send_exn Signal.stop (`Pid (Unix.getpid ()));
   )

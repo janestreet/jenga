@@ -4,7 +4,7 @@
 *)
 
 open! Core
-open! Async.Std
+open! Async
 
 val init_logging : Config.t -> log_filename:string -> unit
 

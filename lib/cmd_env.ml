@@ -1,8 +1,8 @@
 open Core
-open Async.Std
+open Async
 open! Int.Replace_polymorphic_compare
 open Command.Let_syntax
-let return = Async.Std.return
+let return = Async.return
 
 let with_menu_connection ~f =
   return (Special_paths.discover_root ()) >>=? fun root_dir ->

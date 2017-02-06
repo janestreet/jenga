@@ -1,5 +1,5 @@
 open Core
-open Async.Std
+open Async
 open! Int.Replace_polymorphic_compare
 
 let puts fmt = ksprintf (fun s -> printf !"%s\n%!" s) fmt

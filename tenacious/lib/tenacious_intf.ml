@@ -38,7 +38,7 @@
 *)
 
 open! Core
-open Async.Std
+open Async
 
 module type S = sig
 

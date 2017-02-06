@@ -4,7 +4,7 @@
     by anything that needs to find the server. *)
 
 open! Core
-open! Async.Std
+open! Async
 
 val lock_running_server : root_dir:Path.Abs.t -> port:int -> unit Deferred.t
 

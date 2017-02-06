@@ -1,6 +1,6 @@
 open Core
 open! Int.Replace_polymorphic_compare
-open Async.Std
+open Async
 
 let retry_span = sec 0.5
 
@@ -97,7 +97,7 @@ let run exit_on_finish ~root_dir style =
   loop ~wait:false
 
 open Command.Let_syntax
-let return = Async.Std.return
+let return = Async.return
 
 let command =
   Command.async_or_error'

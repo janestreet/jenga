@@ -1,5 +1,5 @@
 open Core
-open Async.Std
+open Async
 open! Int.Replace_polymorphic_compare
 
 let version = "finalized-hearts+watching+weak-glass"
@@ -180,7 +180,7 @@ module Weak_glass = struct
     let glass = Glass.create () in
     let heart = Heart.watch glass in
     let unwatched = Ivar.create () in
-    Async.Std.Gc.add_finalizer_exn glass (fun _ -> Ivar.fill unwatched ());
+    Async.Gc.add_finalizer_exn glass (fun _ -> Ivar.fill unwatched ());
     (Weak_ref.create glass, Ivar.read unwatched), heart
 
   let break (t, _) =

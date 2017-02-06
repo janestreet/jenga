@@ -3,7 +3,7 @@
     Manipulation of the database is done in other places. *)
 
 open! Core
-open! Async.Std
+open! Async
 
 type t
 

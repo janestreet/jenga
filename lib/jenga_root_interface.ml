@@ -2,7 +2,7 @@
     used when the rules are statically linked in (see build.mli). *)
 
 open Core
-open Async.Std
+open Async
 open! Int.Replace_polymorphic_compare
 
 module type S = sig

@@ -6,7 +6,7 @@
     one can only connect to jenga servers on the local machine. *)
 
 open Core
-open Async.Std
+open Async
 
 module Connection_error : sig
   type t =

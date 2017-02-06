@@ -2,7 +2,7 @@
     build errors in a typed way to clients (see the errors rpc). *)
 
 open Core
-open Async.Std
+open Async
 
 (** A [Reportable.t] is an updatable bag of reportable errors, with clients.
     When a client attaches it receives a snapshot and a pipe of updates. *)

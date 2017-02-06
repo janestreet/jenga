@@ -1,10 +1,10 @@
 open Core
-open Async.Std
+open Async
 open! Int.Replace_polymorphic_compare
 
 open Tenacious_lib
 open Command.Let_syntax
-let return = Async.Std.return
+let return = Async.return
 
 module Tenacious_graph = struct
   let colored color s =

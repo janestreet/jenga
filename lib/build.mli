@@ -4,7 +4,7 @@
     This module is not meant to be used directly, except for the Jr_spec type. *)
 
 open! Core
-open! Async.Std
+open! Async
 
 module Jr_spec : sig
 

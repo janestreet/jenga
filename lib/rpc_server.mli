@@ -2,7 +2,7 @@
     ties together the modules that implements the various rpcs. *)
 
 open! Core
-open! Async.Std
+open! Async
 
 val heartbeat_config : Rpc.Connection.Heartbeat_config.t
 

@@ -61,7 +61,7 @@ module Memory : sig
 end
 
 module Disk_format : sig
-  open Async.Std
+  open Async
   type nonrec t =
     { build_info : Sexp.t
     ; version_util : string list

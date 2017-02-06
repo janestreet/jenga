@@ -2,7 +2,7 @@
     Services: Digest caching & inotify wrapping (as hearts). *)
 
 open! Core
-open! Async.Std
+open! Async
 
 module Ocaml_digest : sig
   val init : Config.t -> unit (* just once *)

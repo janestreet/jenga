@@ -1,6 +1,6 @@
 
 open Core
-open Async.Std
+open Async
 open Jenga_lib.Api
 (* let return = Dep.return *)
 let ( *>>| ) = Dep.map

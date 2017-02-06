@@ -1,5 +1,5 @@
 open! Core
-open! Async.Std
+open! Async
 
 (** [Action.t] - things which a build-rule can do:
     - [shell] run a process (a [Job.t])

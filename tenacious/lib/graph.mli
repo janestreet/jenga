@@ -1,5 +1,5 @@
 open Core
-open Async.Std
+open Async
 
 (** A global graph of async computations used by tenacious: each node normally corresponds
     to a single execution of a [memoize]: if [memoize]'s heart gets broken, we create a new

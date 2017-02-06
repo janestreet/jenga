@@ -2,7 +2,7 @@
     dependencies and computing dependencies with arbitrary dependencies.
     See documentation for individual items in api.mli. *)
 
-open! Async.Std
+open! Async
 
 include module type of Dep_type
 

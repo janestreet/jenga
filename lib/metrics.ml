@@ -180,7 +180,7 @@ module Memory = struct
 end
 
 module Disk_format = struct
-  open Async.Std
+  open Async
 
   type t =
     { build_info : Sexp.t

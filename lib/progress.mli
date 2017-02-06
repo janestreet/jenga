@@ -8,7 +8,7 @@
 *)
 
 open! Core
-open! Async.Std
+open! Async
 
 val lstat_counter : Metrics.Counter.t
 val digest_counter : Metrics.Counter.t

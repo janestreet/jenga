@@ -1,5 +1,5 @@
 open! Core
-open! Async.Std
+open! Async
 open! Int.Replace_polymorphic_compare
 
 type kind = Db.Sandbox_kind.t =

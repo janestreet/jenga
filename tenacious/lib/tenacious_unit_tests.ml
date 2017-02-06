@@ -1,5 +1,5 @@
 open Core
-open Async.Std
+open Async
 
 let mes fmt = ksprintf (fun s -> Core.Printf.eprintf "%s\n%!" s) fmt
 let _ = mes

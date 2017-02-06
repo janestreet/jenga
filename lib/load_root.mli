@@ -2,7 +2,7 @@
     jenga_root_interface.ml) using ocaml_plugin. *)
 
 open! Core
-open! Async.Std
+open! Async
 
 val is_loading : unit -> bool
 

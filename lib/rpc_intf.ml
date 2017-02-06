@@ -6,7 +6,7 @@
     rolled before jengas that introduce new versions. *)
 
 open Core
-open Async.Std
+open Async
 open! Int.Replace_polymorphic_compare
 
 module Progress_stream = struct

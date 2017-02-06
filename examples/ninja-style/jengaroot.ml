@@ -1,6 +1,6 @@
 
 open Core
-open Async.Std
+open Async
 
 (* Dont open jenga API, but access via explicit [J.] *)
 module J = Jenga_lib.Api

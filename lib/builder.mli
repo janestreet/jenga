@@ -1,7 +1,7 @@
 (** Layer error monad within tenacious monad *)
 
 open Core
-open Async.Std
+open Async
 
 module Problem : sig
   type t

@@ -5,7 +5,7 @@
     cheaply spawn commands. *)
 
 open! Core
-open! Async.Std
+open! Async
 
 val init : Config.t -> args:string list -> unit Or_error.t Deferred.t (* just once *)
 

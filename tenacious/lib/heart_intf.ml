@@ -1,6 +1,6 @@
 
 open! Core
-open Async.Std
+open Async
 
 (* Type to represent when some previously computed result is no longer valid.
    When this happens the heart becomes broken.

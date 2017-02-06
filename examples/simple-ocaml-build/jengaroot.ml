@@ -1,6 +1,6 @@
 
 open Core
-open Async.Std
+open Async
 open Jenga_lib.Api
 let ( *>>| ) = Dep.map
 let ( *>>= ) t f = Dep.bind t ~f
@@ -101,7 +101,7 @@ let compile_rules ~dir =
   Scheme.rules_dep (
     Dep.glob_listing (glob_ml ~dir)  *>>= fun mls ->
     Dep.glob_listing (glob_mli ~dir) *>>| fun mlis ->
-    let exists_mli x = List.mem mlis (relative ~dir (x ^ ".mli")) in
+    let exists_mli x = List.mem mlis (relative ~dir (x ^ ".mli")) ~equal:Path.equal in
     List.concat_map mls ~f:(fun ml ->
       let name = String.chop_suffix_exn (basename ml) ~suffix:".ml" in
       let b = exists_mli name in
@@ -163,4 +163,4 @@ let scheme ~dir =
      ])]
 
 let env = Env.create scheme
-let setup () = Async.Std.Deferred.return env
+let setup () = Async.Deferred.return env

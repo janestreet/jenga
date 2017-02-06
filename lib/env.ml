@@ -1,6 +1,6 @@
 
 open Core
-open Async.Std
+open Async
 open! Int.Replace_polymorphic_compare
 
 type delete_predicate = (non_target:Path.t -> bool) Dep.t

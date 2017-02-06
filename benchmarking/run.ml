@@ -1,5 +1,5 @@
 open Core
-open Async.Std
+open Async
 
 let save_metrics ~jenga_jengaroot_version ~bench_name ~dst =
   let started_at = Time.now () in
@@ -370,7 +370,7 @@ let build_all_needed_jengas jengas ~log =
 
 let command =
   let open Command.Let_syntax in
-  let return = Async.Std.return in
+  let return = Async.return in
   Command.async'
     ~summary:"Runs benches and outputs the result on stdout"
     [%map_open

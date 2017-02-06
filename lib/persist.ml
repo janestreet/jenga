@@ -1,7 +1,7 @@
 
 open Core
 open! Int.Replace_polymorphic_compare
-open Async.Std
+open Async
 
 module Digest = Db.Digest
 

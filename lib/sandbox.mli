@@ -5,7 +5,7 @@
     targets, will be found as well. *)
 
 open! Core
-open! Async.Std
+open! Async
 
 type kind = Db.Sandbox_kind.t =
   | No_sandbox

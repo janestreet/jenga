@@ -1,7 +1,7 @@
 
 open Core
 open! Int.Replace_polymorphic_compare
-module Unix = Async.Std.Unix
+module Unix = Async.Unix
 
 let equal_using_compare compare = fun x1 x2 -> 0 = compare x1 x2
 

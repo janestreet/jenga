@@ -1,5 +1,5 @@
 open Core
-open Async.Std
+open Async
 open! Int.Replace_polymorphic_compare
 
 module Job_summary = struct
@@ -104,7 +104,7 @@ let reduce_resolution ~step ~scalar_mul ~add time_a_list =
 ;;
 
 let categorize_ocaml_passes ((start, finish, output) : Job_summary.t) =
-  if List.mem start.args "-dtimings"
+  if List.mem start.args "-dtimings" ~equal:String.equal
   && (* not sure what's up with linking, may want to look in more details laterr *)
   not (String.is_substring start.prog ~substring:"link-quietly")
   && (match finish.outcome with `success -> true | `error _ -> false)
@@ -153,17 +153,17 @@ let category ((start, _, _) as job_summary) =
       if String.is_substring start.prog ~substring:"ocamldep"
       then "ocamldep"
       else if String.is_substring start.prog ~substring:"ocamlopt"
-           && List.mem start.args "-c"
-           && List.mem start.args "-impl"
+           && List.mem start.args "-c"    ~equal:String.equal
+           && List.mem start.args "-impl" ~equal:String.equal
       then ".ml"
       else if String.is_substring start.prog ~substring:"ocamlc"
-           && List.mem start.args "-c"
-           && List.mem start.args "-impl"
+           && List.mem start.args "-c"    ~equal:String.equal
+           && List.mem start.args "-impl" ~equal:String.equal
       then ".ml byte"
       else if (String.is_substring start.prog ~substring:"ocamlc"
                || String.is_substring start.prog ~substring:"ocamlopt")
-           && List.mem start.args "-c"
-           && List.mem start.args "-intf"
+           && List.mem start.args "-c"    ~equal:String.equal
+           && List.mem start.args "-intf" ~equal:String.equal
       then ".mli"
       else if String.is_substring start.prog ~substring:"link-quietly"
       then "link"
