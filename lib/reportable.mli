@@ -70,14 +70,12 @@ module Stable : sig
     module Snap : sig
       type t [@@deriving bin_io]
       val upgrade : t -> Snap.t
-      val downgrade : Snap.t -> t
     end
 
     (** [Update.t] facilitates transport over RPC *)
     module Update : sig
       type t [@@deriving bin_io]
       val upgrade : t -> Update.t
-      val downgrade : Update.t -> t
     end
   end
 

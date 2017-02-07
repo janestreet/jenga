@@ -121,9 +121,6 @@ module Stable = struct
       let upgrade { uid; need; where; prog; args } =
         let sandboxed = false in
         { V2.Start.uid; need; where; prog; args; sandboxed }
-
-      let downgrade { V2.Start. uid; need; where; prog; args; sandboxed = _ } =
-        { uid; need; where; prog; args }
     end
 
     module Finish = V2.Finish
@@ -135,10 +132,6 @@ module Stable = struct
 
     let upgrade (start, finish, output) =
       let start = Start.upgrade start in
-      (start, finish, output)
-
-    let downgrade (start, finish, output) =
-      let start = Start.downgrade start in
       (start, finish, output)
 
   end

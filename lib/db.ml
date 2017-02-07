@@ -637,7 +637,7 @@ end
 module T = struct
   type t = {
     digest_cache : (Stats.t * Digest.t) Path.Table.t;
-    generated : Path.Set.t Gen_key.Table.t;
+    generated : Path.Set.t Path.Rel.Table.t;
     ruled : Rule_proxy.t Path.Rel.Table.t;
     actioned : Output_proxy.t Action_proxy.Table.t;
   } [@@deriving fields]
@@ -654,7 +654,7 @@ module T_with_serialization(X : Proxy_map.Serialization_param) = struct
   module Output_proxy = Output_proxy.T_with_serialization(X)
   type nonrec t = t = {
     digest_cache : (Stats.t * Digest.t) Path.Table.t;
-    generated : Path.Set.t Gen_key.Table.t;
+    generated : Path.Set.t Path.Rel.Table.t;
     ruled : Rule_proxy.t Path.Rel.Table.t;
     actioned : Output_proxy.t Action_proxy.Table.t;
   } [@@deriving sexp_of, bin_io]
@@ -662,7 +662,7 @@ end
 
 let create () = {
   digest_cache = Path.Table.create ();
-  generated = Gen_key.Table.create();
+  generated = Path.Rel.Table.create();
   ruled = Path.Rel.Table.create();
   actioned = Action_proxy.Table.create();
 }

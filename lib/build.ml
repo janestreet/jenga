@@ -278,14 +278,13 @@ let determine_and_remove_stale_artifacts : (
       *>>= fun stale_files ->
       blow_stale_files_away t ~dir stale_files
       *>>| fun () ->
-      let gen_key = Gen_key.create ~dir:rel in
       let prev_targets =
-        match (Hashtbl.find (generated t) gen_key) with
+        match (Hashtbl.find (generated t) rel) with
         | Some x -> x
         | None -> Path.Set.empty
       in
       if not (Path.Set.equal prev_targets targets) then (
-        Hashtbl.set (Persist.modify "generated" (generated t)) ~key:gen_key ~data:targets;
+        Hashtbl.set (Persist.modify "generated" (generated t)) ~key:rel ~data:targets;
       )
 ;;
 
@@ -1690,8 +1689,7 @@ let delete_nothing = fun ~non_target:_ -> false
 let internal_artifacts t ~dir =
   (* Determine artifacts as what was previously build by jenga. Not completely reliable -
      doesn't work if jenga.db is removed - but avoids any effort from the rule-author. *)
-  let gen_key = Gen_key.create ~dir in
-  match Hashtbl.find (generated t) gen_key with
+  match Hashtbl.find (generated t) dir with
   | Some previous_targets -> (fun ~non_target -> Set.mem previous_targets non_target)
   | None -> delete_nothing
 

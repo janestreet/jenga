@@ -354,7 +354,7 @@ let command =
   Command.async'
     ~summary:" report bench result by analysing .jenga/metrics files"
     [%map_open
-      let debug_file = anon (".jenga/debug file" %: file)
+      let debug_file = anon (".jenga/debug" %: file)
       and totals = flag "totals" no_arg  ~doc:""
       and graph = flag "graph" (optional file) ~doc:"DIR where the graph will be written"
       in fun () ->

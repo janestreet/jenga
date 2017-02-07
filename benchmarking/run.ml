@@ -309,6 +309,38 @@ type config =
   ; exe : string sexp_option
   } [@@deriving of_sexp]
 
+let config_examples = [
+  `Text "Here are some sample configs:";
+  `Text "";
+  `Text "Bench base and tip of a feature with the jenga from that revision:";
+  `Example "((mode non_polling)(feature jane/foo))";
+  `Text "";
+  `Text "Bench base and tip of a feature with a specific jenga:";
+  `Example "((mode non_polling)(feature jane/foo)(exe /usr/local/home/..))";
+  `Example "((mode non_polling)(feature jane/foo)(exe jane-114.12+58))";
+  `Text "";
+  `Text "Bench the polling mode at the base and tip of a feature:";
+  `Example "((mode polling)(feature jane/foo))";
+  `Text "";
+  `Text "More general form, to pass flags or variable to jenga, or to build arbitrary revisions";
+  `Text "rather than base and tip of a feature:";
+  `Example "\
+((mode non_polling)(jengas (((revision rev-to-build)
+                             (exe path-or-rev)) ;; optional
+                            ((revision rev-to-build)
+                             (exe path-or-rev) ;; optional
+                             (env ((HACK true)))
+                             (flags (-no-notifiers))))))";
+]
+let config_text =
+  String.concat (List.map config_examples ~f:(fun (`Text s | `Example s) -> s ^ "\n"))
+let () =
+  List.iter config_examples ~f:(function
+    | `Text _ -> ()
+    | `Example s ->
+      ignore (config_of_sexp (Sexp.of_string s) : config))
+;;
+
 let exe_of_syntax str =
   if String.mem str '/'
   then `Path str
@@ -373,12 +405,13 @@ let command =
   let return = Async.return in
   Command.async'
     ~summary:"Runs benches and outputs the result on stdout"
+    ~readme:(fun () -> config_text)
     [%map_open
       let can_delete_everything =
         flag "-can-delete-everything" no_arg
           ~doc:" to acknowledge that this command can blow your files away"
       and config =
-        anon ("((feature ..)(mode (polling|non_polling))(exe (some a.exe)))" %: string)
+        anon ("config" %: string)
       in fun () ->
         let config = Sexp.of_string_conv_exn config [%of_sexp: config] in
         Unix.getlogin ()

@@ -67,7 +67,7 @@ module Error_pipe = struct (** Snapshot of errors + updates *)
       include V2
     end)
 
-  module Rpc_v1 = Register(V1)
+  include Register(V1)
   include Register(V2)
 end
 

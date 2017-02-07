@@ -55,7 +55,6 @@ module Stable : sig
   module V1 : sig
     type t [@@deriving bin_io]
     val upgrade : t -> model
-    val downgrade : model -> t
   end
   module V2 : sig
     type t = model [@@deriving bin_io]

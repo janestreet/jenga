@@ -72,20 +72,9 @@ module Error = struct
           Command_failed { job_summary }
         | Internal i -> Internal i
 
-      let downgrade_kind : V2.kind -> kind = function
-        | Internal i -> Internal i
-        | Command_failed { job_summary } ->
-          let job_summary = Job_summary.Stable.V1.downgrade job_summary in
-          Command_failed { job_summary }
-
       let upgrade { goal_string; dir_string; kind; id; } =
         let kind = upgrade_kind kind in
         { V2.goal_string; dir_string; kind; id }
-
-      let downgrade { V2.goal_string; dir_string; kind; id; } =
-        let kind = downgrade_kind kind in
-        { goal_string; dir_string; kind; id }
-
     end
 
     let%expect_test _ =
@@ -165,12 +154,6 @@ module Stable = struct
           let err = Error.V1.upgrade err in
           Add err
         | Remove id -> Remove id
-
-      let downgrade : V2.Update.t -> t = function
-        | Add err ->
-          let err = Error.V1.downgrade err in
-          Add err
-        | Remove id -> Remove id
     end
 
     module Snap = struct
@@ -181,10 +164,6 @@ module Stable = struct
       let upgrade { data } =
         let data = List.map ~f:Error.V1.upgrade data in
         { V2.Snap.data }
-
-      let downgrade { V2.Snap.data } =
-        let data = List.map ~f:Error.V1.downgrade data in
-        { data }
     end
 
   end

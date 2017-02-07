@@ -40,12 +40,6 @@ let error_pipe =
   Rpc.State_rpc.implement Rpc_intf.Error_pipe.rpc (fun state () ->
     return (Ok (error_pipe_handler state ())))
 
-let error_pipe_v1 =
-  Rpc.State_rpc.implement Rpc_intf.Error_pipe.Rpc_v1.rpc (fun state () ->
-    let snap, updates = error_pipe_handler state () in
-    return (Ok (Reportable.Stable.V1.Snap.downgrade snap,
-                Pipe.map ~f:Reportable.Stable.V1.Update.downgrade updates)))
-
 let getenv =
   Rpc.Rpc.implement Rpc_intf.Getenv.rpc (fun _state q -> return (Var.Getenv.run q))
 
@@ -73,7 +67,6 @@ let all_rpcs =
     [
       progress_stream;
       error_pipe;
-      error_pipe_v1;
       dump_tenacious_graph;
       getenv;
       setenv;

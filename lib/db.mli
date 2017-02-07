@@ -209,7 +209,7 @@ type t
 val create : unit -> t
 
 val digest_cache : t -> (Stats.t * Digest.t) Path.Table.t
-val generated : t -> Path.Set.t Gen_key.Table.t
+val generated : t -> Path.Set.t Path.Rel.Table.t
 val ruled : t -> Rule_proxy.t Path.Rel.Table.t (* actions run for target-rules *)
 val actioned : t -> Output_proxy.t Action_proxy.Table.t (* actions run for their stdout *)
 
