@@ -128,17 +128,20 @@ let categorize_ocaml_passes ((start, finish, output) : Job_summary.t) =
       let major_categories_and_durations =
         List.filter_map categories_and_durations ~f:(fun (timing_category, duration) ->
           match timing_category with
+           (* included in generate I think *)
           | "assemble" | "clambda" | "cmm" | "compile_phrases" | "comballoc"
           | "cse" | "liveness" | "deadcode" | "spill" | "regalloc" | "linearize"
-          | "scheduling" | "emit" | "flambda_pass" | "split" | "selection" ->
-            None (* included in generate I think *)
+          | "scheduling" | "emit" | "flambda_pass" | "split" | "selection"
+          (* included in parsing *)
+          | "-pp" | "parser" | "-ppx"
+            -> None
           | "all" -> assert (Option.is_none !all); all := Some duration; None
           | "transl" | "generate" -> Some ("ocaml backend", duration)
           | "preprocessing" -> None (* included in parsing with my change, and useless
                                        without my change, as it uses Sys.time to measure
                                        time spent in a subprocess *)
           | "parsing"  | "typing" as s -> Some ("ocaml " ^ s, duration)
-          | s -> failwith s)
+          | s -> failwithf "unknown -dtiming category: %s" s ())
       in
       match !all with
       | None -> raise_s [%sexp (start : Job_summary.Start.t)]
@@ -218,7 +221,7 @@ let categories_and_durations ((_, finish, _) as job_summary : Job_summary.t) =
     then eprintf !"Sum of subcategories is more than total (%{Time.Span})\n"
            measured_but_undetailed;
     if Time.Span.(<.) unaccounted_for Time.Span.zero
-    then (eprintf !"real time is less than user/sys time (%{Time.Span} overaccouted for)\n"
+    then (eprintf !"real time is less than user/sys time (%{Time.Span} overaccounted for)\n"
             (Time.Span.neg unaccounted_for);
           categories_and_durations)
     else if Time.Span.(>.) unaccounted_for Time.Span.zero
