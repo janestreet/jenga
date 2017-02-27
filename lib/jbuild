@@ -19,3 +19,5 @@
  ((targets (cat_api.ml))
   (deps (api.mli))
   (action "{ echo -n 'let string = {cat_api|'; cat api.mli; echo -n '|cat_api}'; } > ${@}")))
+
+(jbuild_version jane_street)

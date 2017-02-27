@@ -4,3 +4,5 @@
   (libraries (core async))))
 
 ;(alias ((name lib_artifacts) (deps ((alias runtest)))))
+
+(jbuild_version jane_street)

@@ -3,3 +3,5 @@
   (libraries (core core_extended async jenga_lib textutils))
   (modules (:standard \ analyze))))
 
+
+(jbuild_version jane_street)

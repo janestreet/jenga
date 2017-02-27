@@ -22,3 +22,5 @@
 (install
  ((section bin)
   (files ((jenga.exe as jenga)))))
+
+(jbuild_version jane_street)
