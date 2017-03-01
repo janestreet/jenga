@@ -61,7 +61,7 @@ let ocamldep ~dir ~source ~target =
       relative ~dir target, List.map deps ~f:(relative ~dir)
     )
   in
-  match List.Assoc.find dd target with
+  match List.Assoc.find dd ~equal:Poly.equal target with
   | None -> failwithf "lookup: %s" (Path.to_string target) ()
   | Some xs -> depend xs
 
