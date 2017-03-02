@@ -7,12 +7,12 @@
               core
               fieldslib
               ocaml_plugin
-              re
               sexplib
               str
               tenacious_lib))
   (c_names (digest_stubs batched_mtimes_stubs))
-  (inline_tests ((deps (fs.ml))))))
+  (preprocess (pps (ppx_jane)))
+))
 
 ;; Embed the API into the library as a string
 (rule

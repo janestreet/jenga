@@ -3,8 +3,6 @@ open! Int.Replace_polymorphic_compare
 open Async
 module Log = Async.Log
 
-let parse_pretty_span = Job_summary.parse_pretty_span
-
 module Tag = struct
   type t =
   (* with triple leading stars *)
@@ -269,57 +267,6 @@ let stdout_logger config event =
 
   | Event.Rebuilding ->
     jput "rebuilding--------------------------------------------------"
-;;
-
-let parse_build_measures_assoc_list =
-  let regexp =
-    Re.(compile
-          (seq [ alt [str "done"; str "failed"]
-               ; str " ("
-               ; group (seq [ str "#"
-                            ; opt (set "-+"); rep1 digit
-                            ; str ", "
-                            ; rep any
-                            ])
-               ; str ")"
-               ; opt (str " -- HURRAH")
-               ]))
-  in
-  (fun str ->
-     Option.map (Re.exec_opt regexp str)
-       ~f:(fun groups ->
-         let csv = Re.Group.get groups 1 in
-         List.map (String.split ~on:',' csv) ~f:(fun value ->
-           let value = String.strip value in
-           match String.lsplit2 ~on:'=' value with
-           | Some (key, value) -> (key, value)
-           | None -> ("", value)
-         ))
-  )
-;;
-
-let%test_unit _ =
-  let test str expect =
-    [%test_result: (string * string) list option] (parse_build_measures_assoc_list str)
-      ~expect
-  in
-  test "\
-*** jenga: done (#1, 30.199s, heap=1.17188g, m=8.25294g, M=1.54731g, p=1.43634g, \
-major=11, stat=95340, digest=16, ls=4570, db-save=0) -- HURRAH
-"
-    (Some [ ""        , "#1"
-          ; ""        , "30.199s"
-          ; "heap"    , "1.17188g"
-          ; "m"       , "8.25294g"
-          ; "M"       , "1.54731g"
-          ; "p"       , "1.43634g"
-          ; "major"   , "11"
-          ; "stat"    , "95340"
-          ; "digest"  , "16"
-          ; "ls"      , "4570"
-          ; "db-save" , "0"
-          ]);
-  test "blah" None
 ;;
 
 let install_logger ~f ~flushed = T.install_logger the_log ~f ~flushed

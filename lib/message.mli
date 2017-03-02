@@ -27,10 +27,6 @@ val transient : ('a, unit, string, unit) format4 -> 'a
 
 val clear_transient : unit -> unit
 
-(** Used by jengraph *)
-val parse_pretty_span : string -> Time.Span.t
-val parse_build_measures_assoc_list : string -> (string * string) list option
-
 val job_started :
   need:string ->
   where:string ->

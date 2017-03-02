@@ -1,23 +1,8 @@
-(embed
- ((names (jenga))
-  (libraries (
-    async
-    async_kernel
-    async_unix
-    core
-    core_kernel
-    fieldslib
-    jenga_lib
-    parsexp
-    re
-    re.pcre
-    sexplib
-    ))
-  (pps (ppx_jane))))
 
 (executables
  ((names (jenga))
-  (libraries (async core jenga_lib))))
+  (libraries (async core jenga_lib))
+  (preprocess (pps (ppx_jane)))))
 
 (install
  ((section bin)
