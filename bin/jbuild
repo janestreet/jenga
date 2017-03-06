@@ -2,7 +2,7 @@
 (executables
  ((names (jenga))
   (libraries (async core jenga_lib))
-  (preprocess (pps (ppx_jane)))))
+  (preprocess (pps (ppx_jane ppx_driver.runner)))))
 
 (install
  ((section bin)

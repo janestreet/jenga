@@ -2,7 +2,7 @@
  ((names (bench))
   (libraries (core core_extended async jenga_lib textutils))
   (modules (:standard \ analyze))
-  (preprocess (pps (ppx_jane)))))
+  (preprocess (pps (ppx_jane ppx_driver.runner)))))
 
 
 (jbuild_version jane_street)

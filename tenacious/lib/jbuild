@@ -2,7 +2,7 @@
  ((name tenacious_lib)
   (public_name jenga.tenacious)
   (libraries (core async))
-  (preprocess (pps (ppx_jane)))))
+  (preprocess (pps (ppx_jane ppx_driver.runner)))))
 
 ;(alias ((name lib_artifacts) (deps ((alias runtest)))))
 
