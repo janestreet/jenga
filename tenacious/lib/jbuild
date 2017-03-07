@@ -6,4 +6,4 @@
 
 ;(alias ((name lib_artifacts) (deps ((alias runtest)))))
 
-(jbuild_version jane_street)
+(jbuild_version 1)
