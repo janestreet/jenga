@@ -22,13 +22,20 @@ let putenv_for_path =
     in
     replacement_path
 
+module Per_directory_information = struct
+  type t =
+    { scheme : Scheme.t
+    ; directories_generated_from : Path.t option
+    }
+end
+
 type t = {
   putenv : (string * string option) list;
   build_begin : unit -> unit Deferred.t;
   build_end : unit -> unit Deferred.t;
   delete_eagerly : delete_predicate option;
   delete_if_depended_upon : delete_predicate;
-  scheme_for_dir : (dir:Path.t -> Scheme.t);
+  scheme_for_dir : (dir:Path.t -> Per_directory_information.t);
 } [@@deriving fields]
 
 let create
@@ -49,4 +56,4 @@ let create
     delete_eagerly; delete_if_depended_upon;
   }
 
-let get_scheme t ~dir = t.scheme_for_dir ~dir
+let per_directory_information t ~dir = t.scheme_for_dir ~dir

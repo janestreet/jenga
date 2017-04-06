@@ -424,7 +424,26 @@ module Scheme : sig
 end
 
 module Env : sig
+
+  (** Specifies for a given directory [dir]
+      - its rule-scheme, ie a specification of what rules are available in that directory
+      - whether jenga can create the directory if it doesn't already exist.
+      If [directories_generated_from = None], jenga will assume [dir] exists.
+      If [directories_generated_from = Some path], then [path] must be a prefix of [dir],
+      and jenga will create all the ancestors of [dir] and descendants of [path]
+      (both inclusive) as needed.
+      These values are assumed to be consistent, ie if the specification for [dir] states
+      [directories_generated_from = Some path], then the specification for any directory
+      below [path] (inclusive) must state the same. *)
+  module Per_directory_information : sig
+    type t =
+      { scheme : Scheme.t
+      ; directories_generated_from : Path.t option
+      }
+  end
+
   type t = Env.t
+
   val create :
     (** Env variable for the execution of actions, not for jenga itself. *)
     ?putenv:(string * string option) list ->
@@ -463,9 +482,7 @@ module Env : sig
     ?delete_eagerly:((non_target:Path.t -> bool) Dep.t) ->
     ?delete_if_depended_upon:((non_target:Path.t -> bool) Dep.t) ->
 
-    (** Specifies for a given directory, its rule-scheme, ie a specification of what rules
-        are available in that directory. *)
-    (dir:Path.t -> Scheme.t) ->
+    (dir:Path.t -> Per_directory_information.t) ->
     t
 
 end

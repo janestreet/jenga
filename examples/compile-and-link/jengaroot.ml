@@ -98,5 +98,5 @@ let scheme ~dir =
     Scheme.rules (compile_rules @ [link_rule; default_rule;])
   )
 
-let env = Env.create scheme
+let env = Env.create (fun ~dir -> { scheme = scheme ~dir; directories_generated_from = None })
 let setup () = Deferred.return env

@@ -70,27 +70,6 @@ let is_digestable stats =
   | _ -> false
 
 (*----------------------------------------------------------------------
- ensure_directory
-----------------------------------------------------------------------*)
-
-module Ensure_directory_result = struct
-  type t = [`ok | `failed of Error.t | `not_a_dir]
-end
-
-let ensure_directory ~dir =
-  stat ~follow_symlinks:true dir >>= function
-  | `ok stats -> return (if is_dir stats then `ok else `not_a_dir)
-  | `unknown_error err -> return (`failed err)
-  | `does_not_exist ->
-    (*Message.message "mkdir: %s" (Path.to_string dir);*)
-    Metrics.Counter.incr Progress.mkdir_counter;
-    try_with (fun () ->
-      Unix.mkdir ~p:() (Path.to_absolute_string dir)
-    ) >>= function
-    | Ok () -> return `ok
-    | Error exn -> return (`failed (Error.of_exn exn))
-
-(*----------------------------------------------------------------------
  Ocaml_digest (count!)
 ----------------------------------------------------------------------*)
 
@@ -901,6 +880,70 @@ end = struct
 
 end
 
+let stat_directory memo ~dir =
+  Fs_memo.stat memo (Path.of_relative dir)
+  *>>| function
+  | (Error _ | Ok `does_not_exist) as e -> e
+  | Ok (`stats stats) ->
+    if is_dir stats
+    then Ok `ok
+    else Or_error.errorf !"%{Path.Rel} is not a directory" dir
+;;
+
+let mkdir_ignoring_eexist dir =
+  Monitor.try_with (fun () -> Unix.mkdir (Path.Rel.to_string dir))
+  >>| function
+  | Ok () -> Ok ()
+  | Error e ->
+    match Monitor.extract_exn e with
+    | Unix.Unix_error (EEXIST, _, _) -> Ok ()
+    | _ -> Error (Error.of_exn e)
+
+let rec ensure_directory memo watcher ~mkdir_root ~dir : unit Or_error.t Tenacious.t =
+  (* In theory, we should probably cache the prefixes of these computations. In practice,
+     the paths are always two directories deep, so caching would only be a small constant
+     factor of improvement. *)
+  begin
+    if Path.Rel.(=) mkdir_root dir
+    then Tenacious.return (Ok ())
+    else ensure_directory memo watcher ~mkdir_root ~dir:(Path.Rel.dirname dir)
+  end *>>= function
+  | Error _ as e -> Tenacious.return e
+  | Ok () ->
+    Metrics.Counter.incr Progress.mkdir_counter;
+    Tenacious.lift (fun () -> mkdir_ignoring_eexist dir >>| unbreakable)
+    *>>= fun (_ : unit Or_error.t) ->
+    Tenacious.cutoff
+      (* We can't really cutoff the non-ok cases, otherwise this could happen: we stat
+         the directory, missing so we mkdir, someone deletes the directory, we self
+         triggered so we stat again, this directory is missing so we cutoff and return
+         successfully. *)
+      ~equal:(fun a b -> match a, b with Ok `ok, Ok `ok -> true | _ -> false)
+      (stat_directory memo ~dir)
+    *>>= function
+    | Error _ as e -> Tenacious.return e
+    | Ok `ok -> Tenacious.return (Ok ())
+    | Ok `does_not_exist ->
+      (* Here we potentially self trigger by breaking the stat above. Oh well. *)
+      Metrics.Counter.incr Progress.mkdir_counter;
+      Tenacious.lift (fun () -> mkdir_ignoring_eexist dir >>| unbreakable)
+;;
+
+let ensure_directory memo watcher ~mkdir_root ~dir =
+  Tenacious.cutoff
+    ~equal:[%compare.equal: unit Or_error.t]
+    (match mkdir_root with
+     | Some mkdir_root ->
+       assert (Path.Rel.is_descendant ~dir:mkdir_root dir);
+       ensure_directory memo watcher ~mkdir_root ~dir
+     | None ->
+       stat_directory memo ~dir
+       *>>| function
+       | Error _ as e -> e
+       | Ok `ok -> Ok ()
+       | Ok `does_not_exist -> Or_error.errorf !"%{Path.Rel} does not exist" dir)
+;;
+
 module Memo : sig
 
   type t
@@ -926,6 +969,13 @@ module Memo : sig
     t ->
     file:Path.t ->
     Mtime.t option Tenacious.t
+
+  val ensure_directory
+    : t
+    -> Watcher.t
+    -> mkdir_root:Path.Rel.t option
+    -> dir:Path.Rel.t
+    -> unit Core.Or_error.t Tenacious.tenacious
 
 end = struct
 
@@ -955,6 +1005,8 @@ end = struct
     | Ok `does_not_exist -> None
     | Ok (`stats stats) -> Some (Stats.mtime stats)
 
+  let ensure_directory t watcher ~mkdir_root ~dir =
+    ensure_directory t.fsm watcher ~mkdir_root ~dir
 end
 
 (*----------------------------------------------------------------------
@@ -991,6 +1043,12 @@ module Fs : sig
   val clear_watcher_cache : t -> Path.t -> needed_for_correctness:bool -> unit
 
   val mtime_file : t -> file:Path.t -> Mtime.t option Tenacious.t
+
+  val ensure_directory
+    : t
+    -> mkdir_root:Path.Rel.t option
+    -> dir:Path.Rel.t
+    -> unit Core.Or_error.t Tenacious.tenacious
 
 end = struct
 
@@ -1030,15 +1088,12 @@ end = struct
 
   let mtime_file t ~file = Memo.mtime_file t.memo ~file
 
+  let ensure_directory t ~mkdir_root ~dir =
+    Memo.ensure_directory t.memo t.watcher ~mkdir_root ~dir
+
 end
 
-
 include Fs
-
-let ensure_directory (_:t) ~dir = (* why need t ? *)
-  Tenacious.lift (fun () ->
-    ensure_directory ~dir >>| unbreakable (* ?? *)
-  )
 
 external caml_batched_mtimes : string list -> len:int -> float array = "caml_batched_mtimes"
 let caml_batched_mtimes l = caml_batched_mtimes l ~len:(List.length l)

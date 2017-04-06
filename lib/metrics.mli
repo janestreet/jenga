@@ -60,6 +60,12 @@ module Memory : sig
   val to_metrics : t -> metrics
 end
 
+module System_resources : sig
+  type t
+  val create_diff_from_previous_create : unit -> t
+  val to_metrics : t -> metrics
+end
+
 module Disk_format : sig
   open Async
   type nonrec t =

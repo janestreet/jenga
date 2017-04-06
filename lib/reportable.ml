@@ -12,17 +12,17 @@ module Error = struct
       (** An error when running an external command *)
       type command_failed = {
         job_summary : Job_summary.Stable.V2.t;
-      } [@@deriving bin_io]
+      } [@@deriving bin_io, sexp_of]
 
       (** Any other error *)
       type internal = {
         lines : string list;
-      } [@@deriving bin_io]
+      } [@@deriving bin_io, sexp_of]
 
       type kind =
         | Command_failed of command_failed
         | Internal of internal
-      [@@deriving bin_io]
+      [@@deriving bin_io, sexp_of]
 
       module Id = Unique_id.Int()
 
@@ -34,7 +34,7 @@ module Error = struct
            use of [Db] types such as path. *)
         kind : kind;
         id : Id.t;
-      } [@@deriving bin_io]
+      } [@@deriving bin_io, sexp_of]
 
     end
 
@@ -193,6 +193,7 @@ include Stable.V2
 module T : sig
 
   type t
+  [@@deriving sexp_of]
 
   val create : name:string -> t
   val of_snap : name:string -> Snap.t -> t
@@ -216,6 +217,7 @@ end = struct
     table : Error.t Error.Id.Table.t;
     clients : Update.t Pipe.Writer.t Bag.t;
   }
+  let sexp_of_t t = [%sexp_of: Error.t Error.Id.Table.t] t.table
 
   let of_list ~name errors = {
     name;
@@ -251,6 +253,7 @@ end = struct
 end
 
 type t = T.t
+[@@deriving sexp_of]
 
 let of_snap = T.of_snap
 let update = T.update

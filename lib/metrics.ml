@@ -117,6 +117,21 @@ module Counters = struct
   }
 end
 
+let stat_since_last_checked get_current zero (-) =
+  let last = ref zero in
+  fun stat ->
+    let current = get_current stat in
+    let diff = current - !last in
+    last := current;
+    diff
+;;
+
+let stat_since_last_checked_int get_current =
+  stat_since_last_checked get_current 0 (-)
+let stat_since_last_checked_float get_current =
+  stat_since_last_checked get_current 0. (-.)
+;;
+
 module Memory = struct
   type t =
     { top_heap : Byte_units.t
@@ -126,21 +141,6 @@ module Memory = struct
     ; major_collections : int
     ; heap : Byte_units.t
     } [@@deriving sexp, fields]
-
-  let stat_since_last_checked get_current zero (-) =
-    let last = ref zero in
-    fun stat ->
-      let current = get_current stat in
-      let diff = current - !last in
-      last := current;
-      diff
-  ;;
-
-  let stat_since_last_checked_int get_current =
-    stat_since_last_checked get_current 0 (-)
-  let stat_since_last_checked_float get_current =
-    stat_since_last_checked get_current 0. (-.)
-  ;;
 
   let create_diff_from_previous_create =
     let float_words x = Byte_units.create `Words x in
@@ -177,6 +177,26 @@ module Memory = struct
         ~major_collections:int
         ~heap:byte_units
   ;;
+end
+
+module System_resources = struct
+  type t =
+    { user_time : float
+    ; system_time : float
+    }
+  let create_diff_from_previous_create =
+    let user_time = stat_since_last_checked_float Unix.Resource_usage.utime in
+    let system_time = stat_since_last_checked_float Unix.Resource_usage.stime in
+    fun () ->
+      let resource_usage = Unix.Resource_usage.get `Self in
+      { user_time = user_time resource_usage
+      ; system_time = system_time resource_usage
+      }
+  let to_metrics { user_time; system_time } =
+    String.Map.of_alist_exn
+      [ "jenga-user-time", (user_time, (Second : Unit.t))
+      ; "jenga-system-time", (system_time, Second)
+      ]
 end
 
 module Disk_format = struct

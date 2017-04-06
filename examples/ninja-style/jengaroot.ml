@@ -627,5 +627,5 @@ let scheme ~dir =
           Loaded.rules)
     ]
 
-let env = J.Env.create scheme
+let env = J.Env.create (fun ~dir -> { scheme = scheme ~dir; directories_generated_from = None })
 let setup () = Deferred.return env

@@ -13,6 +13,7 @@ let fs_metrics =
     lstat_counter;
     digest_counter;
     ls_counter;
+    mkdir_counter;
     saves_done;
   ]
 

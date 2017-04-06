@@ -103,50 +103,89 @@ let reduce_resolution ~step ~scalar_mul ~add time_a_list =
   | (time, a) :: rest -> loop time [(time, a)] [] rest
 ;;
 
+let parse_dtimings_output_4_06 (output : Job_summary.Output.t) =
+  let parsed_lines =
+    List.filter_map output.stdout ~f:(fun line ->
+      let stripped_line = String.lstrip line in
+      let indentation = String.length line - String.length stripped_line in
+      match String.lsplit2 stripped_line ~on:' ' with
+      | None -> None
+      | Some (time, category) ->
+        Some (indentation, Time.Span.of_string time, category))
+  in
+  let all =
+    List.sum (module Time.Span) parsed_lines
+      ~f:(fun (indentation, span, _) ->
+        if indentation = 0 then span else Time.Span.zero)
+  in
+  let major_categories_and_durations =
+    List.filter_map parsed_lines ~f:(fun (indentation, span, category) ->
+      if indentation <> 2 || String.(=) category "other" then None
+      else
+        let category =
+          match category with
+          | "transl" | "generate" -> "backend"
+          | s -> s
+        in
+        Some ("ocaml " ^ category, span))
+  in
+  Some (major_categories_and_durations, all)
+;;
+
+let parse_dtimings_output_4_03 start (output : Job_summary.Output.t) =
+  let categories_and_durations =
+    List.filter_map output.stdout ~f:(fun line ->
+      Option.map (String.lsplit2 line ~on:':') ~f:(fun (timing_category, duration) ->
+        let timing_category =
+          match String.lsplit2 timing_category ~on:'(' with
+          | None -> timing_category
+          | Some (r, _) -> r
+        in
+        String.strip timing_category, Time.Span.of_string duration))
+  in
+  match categories_and_durations with
+  | [ ("parsing", _); ("all", _); ("preprocessing", _) ]
+  | [ ("all", _); ("preprocessing", _) ] ->
+    None (* no timings, which includes at least compilation of mli's *)
+  | _ ->
+    let all = ref None in
+    let major_categories_and_durations =
+      List.filter_map categories_and_durations ~f:(fun (timing_category, duration) ->
+        match timing_category with
+         (* included in generate I think *)
+        | "assemble" | "clambda" | "cmm" | "compile_phrases" | "comballoc"
+        | "cse" | "liveness" | "deadcode" | "spill" | "regalloc" | "linearize"
+        | "scheduling" | "emit" | "flambda_pass" | "split" | "selection"
+        (* included in parsing *)
+        | "-pp" | "parser" | "-ppx"
+          -> None
+        | "all" -> assert (Option.is_none !all); all := Some duration; None
+        | "transl" | "generate" -> Some ("ocaml backend", duration)
+        | "preprocessing" -> None (* included in parsing with my change, and useless
+                                     without my change, as it uses Sys.time to measure
+                                     time spent in a subprocess *)
+        | "parsing"  | "typing" as s -> Some ("ocaml " ^ s, duration)
+        | s -> failwithf "unknown -dtiming category: %s" s ())
+    in
+    match !all with
+    | None -> raise_s [%sexp (start : Job_summary.Start.t)]
+    | Some all -> Some (major_categories_and_durations, all)
+;;
+
 let categorize_ocaml_passes ((start, finish, output) : Job_summary.t) =
   if List.mem start.args "-dtimings" ~equal:String.equal
-  && (* not sure what's up with linking, may want to look in more details laterr *)
+  && (* timings for linking is bad before 4.05, and even after we'd need to classify
+        linker vs everything else, because the details inside the compiler are probably
+        not relevant *)
   not (String.is_substring start.prog ~substring:"link-quietly")
   && (match finish.outcome with `success -> true | `error _ -> false)
-  then begin
-    let categories_and_durations =
-      List.filter_map output.stdout ~f:(fun line ->
-        Option.map (String.lsplit2 line ~on:':') ~f:(fun (timing_category, duration) ->
-          let timing_category =
-            match String.lsplit2 timing_category ~on:'(' with
-            | None -> timing_category
-            | Some (r, _) -> r
-          in
-          String.strip timing_category, Time.Span.of_string duration))
-    in
-    match categories_and_durations with
-    | [ ("parsing", _); ("all", _); ("preprocessing", _) ]
-    | [ ("all", _); ("preprocessing", _) ] ->
-      None (* no timings, which includes at least compilation of mli's *)
-    | _ ->
-      let all = ref None in
-      let major_categories_and_durations =
-        List.filter_map categories_and_durations ~f:(fun (timing_category, duration) ->
-          match timing_category with
-           (* included in generate I think *)
-          | "assemble" | "clambda" | "cmm" | "compile_phrases" | "comballoc"
-          | "cse" | "liveness" | "deadcode" | "spill" | "regalloc" | "linearize"
-          | "scheduling" | "emit" | "flambda_pass" | "split" | "selection"
-          (* included in parsing *)
-          | "-pp" | "parser" | "-ppx"
-            -> None
-          | "all" -> assert (Option.is_none !all); all := Some duration; None
-          | "transl" | "generate" -> Some ("ocaml backend", duration)
-          | "preprocessing" -> None (* included in parsing with my change, and useless
-                                       without my change, as it uses Sys.time to measure
-                                       time spent in a subprocess *)
-          | "parsing"  | "typing" as s -> Some ("ocaml " ^ s, duration)
-          | s -> failwithf "unknown -dtiming category: %s" s ())
-      in
-      match !all with
-      | None -> raise_s [%sexp (start : Job_summary.Start.t)]
-      | Some all -> Some (major_categories_and_durations, all)
-  end else None
+  then
+    if String.is_substring start.prog ~substring:"/4.03"
+    || String.is_substring start.prog ~substring:"/4.04"
+    || String.is_substring start.prog ~substring:"/4.05"
+    then parse_dtimings_output_4_03 start output
+    else parse_dtimings_output_4_06 output
+  else None
 
 let category ((start, _, _) as job_summary) =
   match categorize_ocaml_passes job_summary with

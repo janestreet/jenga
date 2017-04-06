@@ -57,6 +57,6 @@ module Stable : sig
     val upgrade : t -> model
   end
   module V2 : sig
-    type t = model [@@deriving bin_io]
+    type t = model [@@deriving bin_io, sexp_of]
   end
 end

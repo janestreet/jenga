@@ -219,13 +219,11 @@ let glob_fs_only : (t -> Glob.t -> Path.Set.t Builder.t) =
     | Ok `does_not_exist -> return Path.Set.empty
     | Ok (`listing listing) -> return (Db.Listing.paths listing)
 
-let ensure_directory : (t -> dir:Path.Rel.t -> unit Builder.t) =
-  fun t ~dir ->
-    Builder.of_tenacious (Fs.ensure_directory t.fs ~dir:(Path.of_relative dir))
-    *>>= function
-    | `ok -> return ()
-    | `not_a_dir -> error (Reason.No_directory_for_target "not a directory")
-    | `failed _err -> error (Reason.No_directory_for_target "failed to create")
+let ensure_directory t ~mkdir_root ~dir =
+  Builder.of_tenacious (Fs.ensure_directory t.fs ~mkdir_root ~dir)
+  *>>= function
+  | Ok () -> return ()
+  | Error e -> error (Reason.No_directory_for_target (Error.to_string_hum e))
 
 (*----------------------------------------------------------------------
  stale artifacts
@@ -1182,10 +1180,32 @@ let get_scheme : (t -> dir:Path.t -> Scheme.t Builder.t) =
       ~name:"get_scheme"
       ~key_to_string:Path.to_string
       ~f:(fun () ->
-        jenga_root t *>>= fun env ->
-        apply_user_function (fun () ->
-          Env.get_scheme env ~dir
-        )
+        match Path.case dir with
+        | `absolute _ -> return Scheme.empty
+        | `relative rel ->
+          jenga_root t *>>= fun env ->
+          apply_user_function (fun () ->
+            Env.per_directory_information env ~dir
+          ) *>>= fun { scheme; directories_generated_from } ->
+          begin match directories_generated_from with
+          | None ->
+            (* Ideally, we would refuse the use of directories that don't exist,
+               however we currently rely on this in C dependencies. We could say
+               that non-existing directory have an empty scheme, but since we don't
+               delete stale directories, it might cause problems. *)
+            if true
+            then return ()
+            else ensure_directory t ~mkdir_root:None ~dir:rel
+          | Some mkdir_root ->
+            if not (Path.is_descendant ~dir:mkdir_root dir)
+            then error (Misc (sprintf !"directories_generated_from %{Path} is not an \
+                                        ancestor of %{Path}" mkdir_root dir))
+            else
+              match Path.case mkdir_root with
+              | `absolute _ -> assert false (* implied by the is_descendant check *)
+              | `relative mkdir_root -> ensure_directory t ~mkdir_root:(Some mkdir_root) ~dir:rel
+          end
+          *>>| fun () -> scheme
       )
 
 let validate_scheme_glob ~dir glob =
@@ -1606,12 +1626,6 @@ let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
 
 let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
   fun t goal ->
-    ensure_directory t ~dir:(Goal.directory goal)
-    *>>= fun () ->
-    build_goal t goal
-
-let build_goal : (t -> Goal.t -> Proxy_map.t Builder.t) =
-  fun t goal ->
     share_builder
       ~key: goal
       ~name:"build_goal"
@@ -1958,6 +1972,7 @@ let build_once :
 
     let effort_string = Progress.Snap.to_effort_string snap in
     let memory_metrics = Metrics.Memory.create_diff_from_previous_create () in
+    let system_resources_metrics = Metrics.System_resources.create_diff_from_previous_create () in
 
     let exit_code =
       if Progress.Snap.no_errors snap then (
@@ -1974,9 +1989,11 @@ let build_once :
 
     Metrics.Disk_format.append
       (Map.add ~key:"time" ~data:(Time.Span.to_sec duration, Second)
-         (Metrics.disjoint_union_exn
-            (Progress.Snap.to_metrics snap)
-            (Metrics.Memory.to_metrics memory_metrics)))
+         (List.reduce_exn ~f:Metrics.disjoint_union_exn
+            [ Progress.Snap.to_metrics snap
+            ; Metrics.Memory.to_metrics memory_metrics
+            ; Metrics.System_resources.to_metrics system_resources_metrics
+            ]))
     >>| fun () ->
 
     List.iter errors ~f:(fun (reason, stack_trace) ->

@@ -81,5 +81,5 @@ let scheme ~dir =
         ] *>>| List.concat)
     ]
 
-let env = Env.create scheme
+let env = Env.create (fun ~dir -> { scheme = scheme ~dir; directories_generated_from = None })
 let setup () = Deferred.return env

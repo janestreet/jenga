@@ -1,33 +1,6 @@
 open Core
 open Async
 
-let save_metrics ~jenga_jengaroot_version ~bench_name ~dst =
-  let started_at = Time.now () in
-  Deferred.repeat_until_finished ()
-    (fun () ->
-       Deferred.Or_error.try_with (fun () -> Reader.file_contents ".jenga/metrics")
-       >>= fun result ->
-       let result =
-         (* Let's avoid reading the file between its creation and jenga filling it *)
-         match result with
-         | Error _ as e -> e
-         | Ok contents as ok ->
-           if String.mem contents '\n'
-           then ok
-           else Or_error.errorf "the metrics file only contains %S" contents
-       in
-       match result with
-       | Error e ->
-         if Time.diff (Time.now ()) started_at > Time.Span.of_min 45.
-         then Error.raise e
-         else after (sec 0.1) >>| fun () -> `Repeat ()
-       | Ok contents -> return (`Finished contents))
-  >>= fun contents ->
-  Writer.with_file dst ~append:true ~f:(fun w ->
-    Writer.write w (String.concat ~sep:"%" [jenga_jengaroot_version; bench_name; contents]);
-    return ())
-;;
-
 let start = Time.now ()
 let eprintf_progress =
   fun fmt ->
@@ -49,6 +22,63 @@ let wait_for_compact_and_db_save () =
   Clock.after (Time.Span.of_sec 20.)
   >>| fun () ->
   eprintf " done\n";
+;;
+
+let save_metrics ~polling ~jenga_jengaroot_version ~bench_name ~dst =
+  let started_at = Time.now () in
+  Deferred.repeat_until_finished ()
+    (fun () ->
+       Deferred.Or_error.try_with (fun () -> Reader.file_contents ".jenga/metrics")
+       >>= fun result ->
+       let result =
+         (* Let's avoid reading the file between its creation and jenga filling it *)
+         match result with
+         | Error _ as e -> e
+         | Ok contents as ok ->
+           if String.mem contents '\n'
+           then ok
+           else Or_error.errorf "the metrics file only contains %S" contents
+       in
+       match result with
+       | Error e ->
+         if Time.diff (Time.now ()) started_at > Time.Span.of_min 45.
+         then Error.raise e
+         else after (sec 0.1) >>| fun () -> `Repeat ()
+       | Ok contents -> return (`Finished contents))
+  >>= fun contents ->
+  let disk_format =
+    Sexp.of_string_conv_exn contents
+      [%of_sexp: Jenga_lib.Metrics.Disk_format.t]
+  in
+  begin
+    if polling
+    then wait_for_compact_and_db_save ()
+    else return ()
+  end
+  >>= fun () ->
+  Sys.ls_dir ".jenga"
+  >>= fun dir ->
+  match List.filter dir ~f:(String.is_prefix ~prefix:"db-v") with
+  | [] | _ :: _ :: _ as l ->
+    raise_s [%sexp "expected exactly one db file", (l : string list)]
+  | [ db ] ->
+    Unix.stat (".jenga" ^/ db)
+    >>= fun stat ->
+    let disk_format =
+      { disk_format
+        with metrics = Map.add disk_format.metrics
+                         ~key:"db-size"
+                         ~data:(Int64.to_float stat.size, Byte)
+      }
+    in
+    Writer.with_file dst ~append:true ~f:(fun w ->
+      Writer.write w jenga_jengaroot_version;
+      Writer.write w "%";
+      Writer.write w bench_name;
+      Writer.write w "%";
+      Writer.write_sexp ~hum:false w (Jenga_lib.Metrics.Disk_format.sexp_of_t disk_format);
+      Writer.write w "\n";
+      return ())
 ;;
 
 let delete_metrics_file () =
@@ -100,12 +130,14 @@ let run_jenga ~exe ~args ~env ~log =
   let env =
     let map = String.Map.of_alist_exn env in
     let key = "JENGA_OPTIONS" in
-    let field = "(compact_and_save_delay 0s)" in
+    let field = Sexp.of_string "(compact_and_save_delay 0s)" in
     let new_value =
-      match Map.find map key with
-      | None -> sprintf "(%s)" field
-      | Some old_value ->
-        sprintf "(%s%s)" field (String.chop_prefix_exn old_value ~prefix:"(")
+      let old_list =
+        match Map.find map key with
+        | None -> []
+        | Some old_value -> Sexp.of_string_conv_exn old_value [%of_sexp: Sexp.t list]
+      in
+      Sexp.to_string ([%sexp_of: Sexp.t list] (field :: old_list))
     in
     Map.to_alist (Map.add map ~key ~data:new_value)
   in
@@ -135,7 +167,7 @@ let run_jenga_and_save_metrics ~jenga_jengaroot_version ~bench_name ~exe ~target
   >>= fun () ->
   run_jenga ~exe ~args:(targets @ flags) ~env ~log
   >>= function
-  | Ok () -> save_metrics ~jenga_jengaroot_version ~bench_name ~dst
+  | Ok () -> save_metrics ~polling:false ~jenga_jengaroot_version ~bench_name ~dst
   | Error e ->
     eprintf_progress "skipping failed build: %s\n" (Error.to_string_hum e);
     delete_metrics_file ()
@@ -145,7 +177,7 @@ let run_polling_jenga_and_wait ~exe ~targets ~env ~flags ~log =
   delete_metrics_file ()
   >>= fun () ->
   let def = run_jenga ~exe ~args:("-P" :: targets @ flags) ~env ~log in
-  save_metrics ~jenga_jengaroot_version:"" ~bench_name:"" ~dst:"/dev/null"
+  save_metrics ~polling:true ~jenga_jengaroot_version:"" ~bench_name:"" ~dst:"/dev/null"
   >>| fun () ->
   (def >>| ok_exn) (* we don't care about this error, as it doesn't say
                       whether we successfully reached the polling build *)
@@ -270,11 +302,9 @@ let polling_builds ~rev ~jenga_exe ~env ~flags ~dst ~log =
             [ make_fake_change, "fake change"
             ; make_actual_change, "actual change"
             ] ~f:(fun (make_change, descr) ->
-              wait_for_compact_and_db_save ()
-              >>= fun () ->
               make_change ~file
               >>= fun () ->
-              save_metrics
+              save_metrics ~polling:true
                 ~jenga_jengaroot_version
                 ~bench_name:(bench_name ^ " " ^ descr ^ " " ^ file)
                 ~dst)))

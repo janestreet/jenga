@@ -55,14 +55,15 @@ module Listing_result : sig
   ] [@@deriving compare, sexp]
 end
 
-module Ensure_directory_result : sig
-  type t = [`ok | `failed of Error.t | `not_a_dir]
-end
-
 val contents_file : t -> file:Path.t -> Contents_result.t Tenacious.t
 val digest_file : t -> file:Path.t -> Digest_result.t Tenacious.t
 val list_glob : t -> Glob.t -> Listing_result.t Or_error.t Tenacious.t
-val ensure_directory : t -> dir:Path.t -> Ensure_directory_result.t Tenacious.t
+
+(** This function either checks the directory exists if [mkdir_root] is None, or creates
+    all the directories between [mkdir_root] and [dir] ([mkdir_root] must be a non-strict
+    ancestor of [dir]). *)
+val ensure_directory
+  : t -> mkdir_root:Path.Rel.t option -> dir:Path.Rel.t -> unit Or_error.t Tenacious.t
 
 (** Locks [targets] for writing and masks the corresponding 'file changed' messages *)
 val lock_targets_and_mask_updates :

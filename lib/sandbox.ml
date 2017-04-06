@@ -213,11 +213,13 @@ let with_sandbox ~dir ~deps ~kind ~targets ~f =
     let `Dirs dirs, `Files files, `Arbitrary_files empty_files =
       Db.Proxy_map.filesystem_assumptions deps
     in
-    let dirs =
-      match Path.case dir with
-      | `absolute _ -> Hash_set.to_list dirs
-      | `relative dir -> dir :: (Hash_set.to_list dirs)
-    in
+    List.iter targets
+      ~f:(fun target -> Hash_set.add dirs (Path.Rel.dirname target));
+    begin match Path.case dir with
+    | `absolute _ -> ()
+    | `relative dir -> Hash_set.add dirs dir
+    end;
+    let dirs = Hash_set.to_list dirs in
     let empty_files = Hash_set.to_list (Hash_set.diff empty_files files) in
     let files = Hash_set.to_list files in
     let how_to_link, ignore_targets =

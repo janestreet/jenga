@@ -147,6 +147,10 @@ let same_unit u1 u2 =
 let mean a ~f =
   List.sum (module Float) a ~f /. Int.to_float (List.length a)
 
+let display_metric_name = function
+  | "major_collections" -> "gc cycle"
+  | s -> s
+
 let display (inputs : t list) ~show_dispersion ~display_non_baseline =
   let all_metrics =
     List.stable_dedup
@@ -249,7 +253,7 @@ let display (inputs : t list) ~show_dispersion ~display_non_baseline =
                 and_dispersion display_metric this_dispersion)
           in
           T.vcat ~align:`Right
-            (T.text metric_name :: cells_of_all_versions))
+            (T.text (display_metric_name metric_name) :: cells_of_all_versions))
       in
       left_column :: sample_size :: columns_of_data)
   in

@@ -22,6 +22,7 @@ module Rel : sig
   val basename : t -> string
   val parts : t -> string list
   val of_parts : string list -> t
+  val is_descendant : dir:t -> t -> bool
 
   (** [x = reach_from ~dir t] is such that [relative ~dir x = t],
       x starts with a "." or "..", and x is otherwise as short as possible *)

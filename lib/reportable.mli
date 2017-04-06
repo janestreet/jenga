@@ -7,6 +7,7 @@ open Async
 (** A [Reportable.t] is an updatable bag of reportable errors, with clients.
     When a client attaches it receives a snapshot and a pipe of updates. *)
 type t
+[@@deriving sexp_of]
 
 (** [Reportable.Error.t] is a reportable error *)
 module Error : sig

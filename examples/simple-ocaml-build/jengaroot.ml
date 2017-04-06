@@ -162,5 +162,5 @@ let scheme ~dir =
       ocaml_rules ~dir;
      ])]
 
-let env = Env.create scheme
+let env = Env.create (fun ~dir -> { scheme = scheme ~dir; directories_generated_from = None })
 let setup () = Async.Deferred.return env
