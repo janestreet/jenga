@@ -402,10 +402,10 @@ and memoize_with_shared_dep
         Graph.edge_until thread ~blocked_on:shared_computation_node
           (Heart.or_broken my_cancel shared_computation)
         >>= fun shared_result ->
-        retake_running ()
-        >>| fun () ->
         match shared_result with
         | Some res ->
+          retake_running ()
+          >>| fun () ->
           combine_result' res ~with_:my_dep
         | None -> (* this client has cancelled *)
           assert (!count >= 1);
@@ -414,6 +414,8 @@ and memoize_with_shared_dep
             state := Wait (shared_computation, shared_computation_node);
             Glass.break stop_glass
           );
+          retake_running ()
+          >>| fun () ->
           None
       in
       begin
@@ -432,22 +434,35 @@ and memoize_with_shared_dep
       join
     in
     fun ~thread ~cancel ~dep ->
-      match !state with
-      | Wait (result, node) ->
-        let join = start ~last_result:result ~last_node:node in
-        join ~thread ~cancel ~dep
-      | Running join ->
-        join ~thread ~cancel ~dep
-      | Ready(x, certificate) ->
-        if Heart.is_broken certificate
-        then begin
-          let join = start
-            ~last_result:(Deferred.return None)
-            ~last_node:(Graph.Node.create (lazy "memoize_last_broken"))
-          in
+      (* If we are called with broken [cancel] or [dep] and the state is [Wait], we would
+         switch from [Wait] to [Running] and almost immediately back to [Wait], where the
+         graph node in the new [Wait] would be blocked on the old one. Doing do repeatedly
+         means creating an ever longer chain, and ultimately make the cycle check overflow
+         the stack on these chains. This check avoids this.
+         One may wonder why [cancel] and [dep] would be broken, and well, this module does
+         not abort computations as quickly as possible, and in fact doing so changes the
+         behavior of jenga, because it doesn't report mtimes check errors anymore (because
+         of how jenga self-triggers when detecting on mtimes check errors). Instead it
+         retries to run the command. *)
+      if Heart.is_broken cancel || Heart.is_broken dep
+      then Deferred.return None
+      else
+        match !state with
+        | Wait (result, node) ->
+          let join = start ~last_result:result ~last_node:node in
           join ~thread ~cancel ~dep
-        end
-        else Deferred.return (Some (x, Heart.combine2 certificate dep))
+        | Running join ->
+          join ~thread ~cancel ~dep
+        | Ready(x, certificate) ->
+          if Heart.is_broken certificate
+          then begin
+            let join = start
+              ~last_result:(Deferred.return None)
+              ~last_node:(Graph.Node.create (lazy "memoize_last_broken"))
+            in
+            join ~thread ~cancel ~dep
+          end
+          else Deferred.return (Some (x, Heart.combine2 certificate dep))
 
 and memoize : 'a . 'a state ref -> name:(String.t Lazy.t) -> 'a t -> 'a semantics =
   fun r ~name -> memoize_with_shared_dep r ~name ~shared_dep:Heart.unbreakable

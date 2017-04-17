@@ -210,7 +210,7 @@ let look_for_source : (t -> Path.t -> Proxy.t option Builder.t) =
     | `missing        -> return None
     | `is_a_dir       -> return None
 
-let glob_fs_only : (t -> Glob.t -> Path.Set.t Builder.t) =
+let glob_fs_only__must_be_cutoff : (t -> Glob.t -> Path.Set.t Builder.t) =
   fun t glob ->
     let err s = Reason.Glob_error (glob,s) in
     Builder.of_tenacious (Fs.list_glob t.fs glob) *>>= function
@@ -251,13 +251,13 @@ let blow_stale_files_away t ~dir stale_files =
           remove_stale_artifact t path
         )))
 
-let on_filesystem t ~dir =
+let on_filesystem__must_be_cutoff t ~dir =
   (* Treat symbolic-links the same as regular files.
      To allow [source_files] to be used in user-rule for [artifacts].
      Means symbolic-links to directories are not handled correctly.
      But matches [Fs.is_digestable] which also handles [`Link] and [`File] the same. *)
   let glob = Fs.Glob.create ~dir ~kinds:[`File;`Link] "*" in
-  glob_fs_only t glob
+  glob_fs_only__must_be_cutoff t glob
 
 let determine_and_remove_stale_artifacts : (
   t -> dir:Path.t -> targets:Path.Set.t
@@ -269,7 +269,7 @@ let determine_and_remove_stale_artifacts : (
     | `relative rel ->
       t.delete_eagerly ~dir t *>>= fun delete ->
       Builder.cutoff ~equal:Path.Set.equal
-        (on_filesystem t ~dir
+        (on_filesystem__must_be_cutoff t ~dir
          *>>| fun files_on_disk ->
          let non_targets_on_disk = Set.diff files_on_disk targets in
          Set.filter non_targets_on_disk ~f:(fun non_target -> delete ~non_target))
@@ -355,7 +355,7 @@ let glob_fs_or_buildable =
             return Path.Set.empty
         end
         *>>= fun filtered_targets ->
-        glob_fs_only t glob
+        glob_fs_only__must_be_cutoff t glob
         *>>= fun filesystem ->
         merge_fs_and_buildable t ~dir ~filesystem ~buildable:filtered_targets
         ))
@@ -363,7 +363,7 @@ let glob_fs_or_buildable =
 let scheme_glob_fs_or_buildable t glob ~buildable =
   Builder.cutoff
     ~equal:(List.equal ~equal:Path.equal)
-    (glob_fs_only t glob
+    (glob_fs_only__must_be_cutoff t glob
      *>>= fun filesystem ->
      merge_fs_and_buildable t ~dir:(Glob.dir glob) ~filesystem ~buildable
      *>>| fun set ->
@@ -588,8 +588,10 @@ let read_jenga_conf : (t -> conf:Path.t -> Jenga_conf_rep.t Builder.t) =
 let path_exists : (t -> Path.t -> bool Builder.t) =
   fun t path ->
     let glob = Glob.create_from_path ~kinds:None path in
-    glob_fs_only t glob *>>| fun paths ->
-    not (Path.Set.is_empty paths)
+    Builder.cutoff ~equal:Bool.equal (
+      glob_fs_only__must_be_cutoff t glob *>>| fun paths ->
+      not (Path.Set.is_empty paths)
+    )
 
 let check_path_is_digestable t path =
   let err prob = Some (sprintf !"%{Path}: %s" path prob) in
@@ -850,10 +852,10 @@ let run_action_for_stdout_if_necessary t ~deps ~need action =
     mtimes_of_proxy_map t deps *>>= fun mtimes ->
     Builder.uncancellable (
       run_action_for_stdout t rr env action ~deps ~need *>>= fun stdout ->
-      check_mtimes_unchanged t mtimes *>>= fun () ->
+      check_mtimes_unchanged t mtimes *>>| fun () ->
       let output_proxy = {Output_proxy. deps; stdout;} in
       Hashtbl.set (Persist.modify "actioned" (actioned t)) ~key:action_proxy ~data:output_proxy;
-      return stdout
+      stdout
     )
   in
   match (Hashtbl.find (actioned t) action_proxy) with
@@ -910,7 +912,7 @@ let source_files : (t -> dir:Path.t -> Path.Set.t Builder.t) =
       (* We use [cutoff] to avoid triggering dependents as buildable files are generated
          for the first time & appear on the filesystem. *)
         Builder.cutoff ~equal:(fun set1 set2 -> Path.Set.equal set1 set2)
-          (Builder.both (on_filesystem t ~dir) (t.buildable_targets t ~dir)
+          (Builder.both (on_filesystem__must_be_cutoff t ~dir) (t.buildable_targets t ~dir)
            *>>| fun (filesystem,buildable) ->
            Path.Set.diff filesystem buildable))
 
@@ -1005,7 +1007,8 @@ let build_depends t depends ~need =
 
     | Dep.Glob_listing_OLD glob ->
       (* CARRY the glob listing; dont put into the proxy-map *)
-      glob_fs_only t glob *>>| fun paths ->
+      Builder.cutoff ~equal:Set.equal (glob_fs_only__must_be_cutoff t glob)
+      *>>| fun paths ->
       (paths, Proxy_map.empty)
 
     | Dep.Glob_listing glob ->
@@ -1015,7 +1018,8 @@ let build_depends t depends ~need =
 
     | Dep.Glob_change_OLD glob ->
       (* Dont carry the glob listing; do put into the PROXY-MAP *)
-      glob_fs_only t glob *>>| fun paths ->
+      Builder.cutoff ~equal:Set.equal (glob_fs_only__must_be_cutoff t glob)
+      *>>| fun paths ->
       let dir = Glob.dir glob in
       let pm = Proxy_map.single (Pm_key.of_glob glob) (Proxy.of_listing ~dir paths) in
       ((), pm)
@@ -1137,7 +1141,8 @@ let reflect_depends t depends ~need =
       (paths, Path.Set.empty)
 
     | Dep.Glob_listing_OLD glob ->
-      glob_fs_only t glob *>>| fun paths ->
+      Builder.cutoff ~equal:Set.equal (glob_fs_only__must_be_cutoff t glob)
+      *>>| fun paths ->
       (paths, Path.Set.empty)
 
     | Dep.Glob_listing glob ->
@@ -1491,7 +1496,7 @@ let build_target_rule :
           match (Proxy_map_op.create_by_path path_tagged_proxys) with
           | Error _inconsistency -> error Reason.Inconsistent_proxies
           | Ok targets_proxy_map ->
-            check_mtimes_unchanged t mtimes *>>= fun () ->
+            check_mtimes_unchanged t mtimes *>>| fun () ->
             let rule_proxy = {
               Rule_proxy.
               targets = targets_proxy_map;
@@ -1503,7 +1508,7 @@ let build_target_rule :
             (* We remove data associated with the [other_targets]. Its not essential for
                correctness, but it avoid cruft from building up in the persistent state *)
             List.iter other_targets ~f:(fun other -> Hashtbl.remove (ruled t) other);
-            return path_tagged_proxys
+            path_tagged_proxys
       )
     in
     match (Hashtbl.find (ruled t) head_target) with
@@ -1535,8 +1540,8 @@ let build_target_rule :
                 if Config.show_checked t.config then  (
                   Message.message "NOT RUNNING: %s" (Action.to_sh_ignoring_dir action);
                 );
-                Builder.sensitize heart *>>= fun () ->
-                return path_tagged_proxys
+                Builder.sensitize heart *>>| fun () ->
+                path_tagged_proxys
 
 let build_target_rule :
     (t -> Path.Rel.t -> PPs.t Builder.t) =
