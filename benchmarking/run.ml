@@ -412,7 +412,7 @@ let build_all_needed_jengas jengas ~log =
       match invocation.exe with
       | `Build_at rev -> Some rev
       | `Path _ | `From_rev -> None)
-    |> List.dedup ~compare:String.compare
+    |> List.dedup_and_sort ~compare:String.compare
   in
   Deferred.List.iter revs ~f:(fun rev ->
     eprintf_progress "building jenga at rev %s\n" rev;
