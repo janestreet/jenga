@@ -288,7 +288,9 @@ module Dep : sig
   val contents_cutoff : Path.t -> string t
 
   (** The semantics of [glob_listing] and [glob_change] includes files which exist on the
-      file-system AND files which are buildable by some jenga rule *)
+     file-system AND files which are buildable by some jenga rule. Therefore it is an
+     error (dependency cycle) to glob a directory while generating the scheme for that
+     same directory. Use [Scheme.glob] instead. *)
   val glob_listing : Glob.t -> Path.t list t
   val glob_change : Glob.t -> unit t
 
