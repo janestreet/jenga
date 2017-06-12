@@ -262,6 +262,7 @@ module Proxy_map = struct
     }
     val compare_group : group -> group -> int
     val hash_fold_group : Hash.state -> group -> Hash.state
+    val hash_group : group -> int
     val sexp_of_group : group -> Sexp.t
   end = struct
     include T_with_shallow_ops

@@ -58,7 +58,7 @@ module String(X : sig val who : string end) = struct
 
   let compare t1 t2 = String.compare (extern t1) (extern t2)
   let hash_fold_t state t = hash_fold_string state (extern t)
-  let hash = [%hash: t]
+  let hash = Ppx_hash_lib.Std.Hash.of_fold hash_fold_t
 
   (* For sexp conversion, we use extern/intern *)
   let sexp_of_t t = String.sexp_of_t (Shared.extern t)
