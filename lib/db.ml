@@ -66,8 +66,11 @@ module Stats = struct
 end
 
 module Digest = struct
-  module IS = Interning.String(struct let who = "<digest>" end)
-  include IS
+  include Interning.String(struct let who = "<digest>" end)
+  let t_of_sexp sexp = intern (Digest.from_hex (string_of_sexp sexp))
+  let _ = t_of_sexp (* we silence the warning to keep shadowing the implementation
+                       from the functor *)
+  let sexp_of_t t = sexp_of_string (Digest.to_hex (extern t))
 end
 
 module Listing = struct

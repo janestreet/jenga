@@ -23,8 +23,12 @@ let reach_from_common =
   fun ~dir path -> go (dir, path)
 
 (* The string representations for root-relative and absolute paths are disjoint:
-   Absolute strings start with a /
-   Relative strings dont start with a /, or are empty (the root) *)
+   - Absolute paths start with a /
+   - Relative paths dont start with a /, or are empty (the root)
+   In both cases, paths are canonicalized by removing all "" and "." and ".." components.
+   The type of relative-or-absolute path is the flat union of absolute paths and relative
+   paths, except that the root is represented as "." (instead of "" in relative paths).
+*)
 
 module Rel = struct
 
@@ -160,6 +164,11 @@ module Abs : sig
 
   type t [@@deriving sexp_of, hash, compare, bin_io]
   val create : string -> t
+
+  (** [of_canonical_string str] is a cheaper version of [create], for when [str] is
+      already known to be in canonical form, probably because it comes from the output of
+      [to_string]. *)
+  val of_canonical_string : string -> t
   val to_string : t -> string
   val relative_seg : dir:t -> string -> t
   val relative : dir:t -> string -> t
@@ -180,7 +189,8 @@ end = struct
 
   let unix_root = IPS.intern "/"
 
-  let to_string t = IPS.extern t
+  let to_string = IPS.extern
+  let of_canonical_string = IPS.intern
 
   let dirname t = IPS.intern (Filename.dirname (IPS.extern t))
   let basename t = Filename.basename (IPS.extern t)
@@ -315,7 +325,7 @@ let of_absolute x = intern (Abs.to_string x)
 let case t =
   let s = IPS.extern t in
   if starts_with_slash s
-  then `absolute (Abs.create s)
+  then `absolute (Abs.of_canonical_string s)
   else `relative (Rel.Inner.create_from_path s)
 
 let is_absolute t = starts_with_slash (extern t)
@@ -399,3 +409,8 @@ let of_absolute_string s =
   of_absolute_relativizing (Abs.create s)
 
 let is_a_root path = (=) (dirname path) path
+
+let%test_unit "case" =
+  match case (of_absolute (Abs.create "/./a")) with
+  | `relative _ -> assert false
+  | `absolute abs -> [%test_eq: string] (Abs.to_string abs) "/a"

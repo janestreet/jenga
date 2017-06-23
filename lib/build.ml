@@ -71,13 +71,6 @@ let ( *>>= ) t f = Builder.bind t ~f
 let ( *>>|= ) = Builder.bind_result
 let error    = Builder.error
 
-let build_all_in_sequence xs ~f = (* stopping on first error *)
-  let rec loop acc = function
-    | [] -> return (List.rev acc)
-    | x::xs -> f x *>>= fun v -> loop (v::acc) xs
-  in
-  loop [] xs
-
 let memo_builder :(
   memo: 'a Builder.t option ref -> (unit -> 'a Builder.t) -> 'a Builder.t
 ) =
@@ -1448,9 +1441,11 @@ let check_targets :
      - this function may be called before the action is run.
      - and will definitely be called after an action successfully completes. *)
   fun t paths ->
-    build_all_in_sequence paths ~f:(fun path ->
-      look_for_source t (Path.of_relative path) *>>= fun res -> return (path,res)
-    ) *>>= fun tagged ->
+    Builder.all
+      (List.map paths ~f:(fun path ->
+         look_for_source t (Path.of_relative path)
+         *>>| fun res -> (path,res)))
+    *>>| fun tagged ->
     let good,bad =
       List.partition_map tagged ~f:(function
       | (path,Some proxy) -> `Fst (Path.of_relative path, proxy)
@@ -1458,8 +1453,8 @@ let check_targets :
       )
     in
     match bad with
-    | _::_ -> return (`missing bad)
-    | [] -> return (`ok good)
+    | _ :: _ -> `missing bad
+    | [] -> `ok good
 
 let build_target_rule :
   (* run a rule/action, iff:

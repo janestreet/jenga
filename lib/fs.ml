@@ -97,8 +97,7 @@ end = struct
             ~f:(fun fd ->
               Fd.with_file_descr_deferred_exn fd (fun fd ->
                 let fd = Core.Unix.File_descr.to_int fd in
-                In_thread.run (fun () -> digest_fd fd))))
-        |> Deferred.Or_error.map ~f:Caml.Digest.to_hex))
+                In_thread.run (fun () -> digest_fd fd))))))
 
   let%test_unit _ =
     set 20;
@@ -108,7 +107,7 @@ end = struct
     let our_digest =
       Thread_safe.block_on_async_exn (fun () -> of_file (Path.absolute file) >>| ok_exn)
     in
-    let actual_digest = Caml.Digest.to_hex (Caml.Digest.file file) in
+    let actual_digest = Caml.Digest.file file in
     [%test_result: string] our_digest ~expect:actual_digest;
     [%test_pred: string Or_error.t] Result.is_error
       (Thread_safe.block_on_async_exn (fun () -> of_file (Path.absolute cwd)))
