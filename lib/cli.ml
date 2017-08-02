@@ -16,6 +16,7 @@ let main ?(argv=Array.to_list Sys.argv) ~run () =
     ; "errors"        , Cmd_errors.command
     ; "internal"      , Cmd_internal.command
     ; "monitor"       , Cmd_monitor.command
+    ; "root"          , Cmd_root.command
     ; "stop"          , Cmd_stop.command
     ]
   in

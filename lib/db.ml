@@ -53,14 +53,13 @@ module Stats = struct
 
   let equal = equal_using_compare compare
 
-  let of_unix_stats u =
-    let module U = Unix.Stats in
+  let of_unix_stats (u : Core.Unix.stats) =
     {
-      dev = U.dev u;
-      ino = U.ino u;
-      kind = U.kind u;
-      size = U.size u;
-      mtime = Mtime.of_float (Time.to_span_since_epoch (U.mtime u) |> Time.Span.to_sec);
+      dev = u.st_dev;
+      ino = u.st_ino;
+      kind = Async.Unix.File_kind.of_unix u.st_kind;
+      size = u.st_size;
+      mtime = u.st_mtime;
     }
 
 end

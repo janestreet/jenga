@@ -1760,77 +1760,35 @@ let delete_union =
  buildable
 ----------------------------------------------------------------------*)
 
-let build_one_root_goal :
-    (
-      jr_spec: Jr_spec.t ->
-      Fs.t ->
-      Persist.t ->
-      Memo.t ->
-      Config.t ->
-      Progress.t ->
-      goal:Goal.t ->
-      unit Builder.t
-    ) =
+let create ~jr_spec fs persist memo config progress =
+  { config;
+    fs;
+    persist;
+    memo;
+    progress;
+    jr_spec;
+    build_goal;
+    reflect_path;
+    reflect_alias;
+    buildable_targets;
+    delete_eagerly;
+    delete_if_depended_upon;
+    delete_union;
+  }
+
+let build_one_root_goal t ~goal =
   (* Entry point to build a single root goal
-     Here the downwards "t" parameter is constructed from various components.
-     And here we break out of the Builder monad, and revert to the plain
+     Here we break out of the Builder monad, and revert to the plain
      tenacious monad - ignoring the proxy map or any errors.
   *)
-  fun ~jr_spec fs persist memo
-    config progress ~goal ->
-    let t = {
-      config;
-      fs;
-      persist;
-      memo;
-      progress;
-      jr_spec;
-      build_goal;
-      reflect_path;
-      reflect_alias;
-      buildable_targets;
-      delete_eagerly;
-      delete_if_depended_upon;
-      delete_union;
-    } in
-    build_goal t goal
-    *>>| fun (_ :Proxy_map.t) -> ()
+  build_goal t goal *>>| fun (_ :Proxy_map.t) -> ()
 
-let get_env_option :
-    (
-      jr_spec: Jr_spec.t ->
-      Fs.t ->
-      Persist.t ->
-      Memo.t ->
-      Config.t ->
-      Progress.t ->
-      Env.t option Tenacious.t
-    ) =
-  fun ~jr_spec fs persist memo config progress ->
-    let t = {
-      config;
-      fs;
-      persist;
-      memo;
-      progress;
-      jr_spec;
-      build_goal;
-      reflect_path;
-      reflect_alias;
-      buildable_targets;
-      delete_eagerly;
-      delete_if_depended_upon;
-      delete_union;
-    } in
-    let builder = jenga_root t
-    in
-    let tenacious =
-      Tenacious.map (Builder.expose builder) ~f:(function
-      | Error _ -> None
-      | Ok env -> (Some env)
-      )
-    in
-    tenacious
+let get_env_option t =
+  let builder = jenga_root t in
+  Tenacious.map (Builder.expose builder) ~f:(function
+    | Error _ -> None
+    | Ok env -> (Some env)
+  )
 
 
 (*----------------------------------------------------------------------
@@ -2045,12 +2003,8 @@ let build_forever =
 
     let memo = Memo.create () in
 
-    let get_env_opt =
-      get_env_option
-        ~jr_spec
-        fs persist memo
-        config progress
-    in
+    let t = create ~jr_spec fs persist memo config progress in
+    let get_env_opt = get_env_option t in
 
     Cycle_checking.start_cycle_checking progress config;
 
@@ -2066,7 +2020,7 @@ let build_forever =
       let top_builder =
         Builder.all_unit (
           List.map top_level_goals ~f:(fun goal ->
-            build_one_root_goal ~jr_spec fs persist memo config progress ~goal
+            build_one_root_goal t ~goal
           )
         )
       in

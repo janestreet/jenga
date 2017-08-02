@@ -26,7 +26,7 @@ end
 module Stats : sig  (** reduced stat info *)
   type t
   [@@deriving sexp, hash, compare]
-  val of_unix_stats : Async.Unix.Stats.t -> t
+  val of_unix_stats : Core.Unix.stats -> t
   val equal : t -> t -> bool
   val kind : t -> Kind.t
   val mtime : t -> Mtime.t

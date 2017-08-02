@@ -205,11 +205,31 @@ let root t = t.root
 
 module M = Unique_id.Int()
 
+let initialize_exn =
+  let v =
+    Lazy_deferred.create (fun () ->
+      Process.run_expect_no_output_exn ~prog:"rm" ~args:[ "-rf"; ".jenga/sandbox" ] ()
+      >>= fun () ->
+      (* We place the hg directory outside each sandbox, so paths relative to hg
+         will be wrong (hg root is not necessarily the jenga root, so it's not that
+         straightforward to make hg root work). We write a [requires] file to give
+         a somewhat decent error message. *)
+      Unix.mkdir ~p:() ".jenga/sandbox/.hg"
+      >>= fun () ->
+      Writer.save ".jenga/sandbox/.hg/requires"
+        (* this must be in one line *)
+        ~contents:"it is not allowed to use [hg root] within jenga. Call [jenga root] or \
+                   [Jenga_rules_integration.blocking_root] instead."
+    )
+  in
+  fun () ->
+    Lazy_deferred.force_exn v
+
 let with_sandbox ~dir ~deps ~kind ~targets ~f =
   Monitor.try_with (fun () ->
-    let root =
-      Path.root_relative (sprintf ".jenga/separate-dir%d" (M.create () :> int))
-    in
+    initialize_exn ()
+    >>= fun () ->
+    let root = Path.root_relative (sprintf ".jenga/sandbox/%d" (M.create () :> int)) in
     let `Dirs dirs, `Files files, `Arbitrary_files empty_files =
       Db.Proxy_map.filesystem_assumptions deps
     in
@@ -219,6 +239,9 @@ let with_sandbox ~dir ~deps ~kind ~targets ~f =
     | `absolute _ -> ()
     | `relative dir -> Hash_set.add dirs dir
     end;
+    (* Add jenga.conf so commands can find the root whether the command is running
+       sandboxed or not (or even not within jenga). *)
+    Hash_set.add empty_files Special_paths.jenga_conf;
     let dirs = Hash_set.to_list dirs in
     let empty_files = Hash_set.to_list (Hash_set.diff empty_files files) in
     let files = Hash_set.to_list files in

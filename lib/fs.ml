@@ -2,6 +2,12 @@ open Core
 open! Int.Replace_polymorphic_compare
 open Async
 
+(* force to specify Core.Unix or Async.Unix. The preferred way to do syscalls is to use
+   In_thread.run (fun () -> several syscalls using Core.Unix ). But if there is only
+   one syscall to do, or if the syscall doesn't matter performance-wise, sticking to
+   Async.Unix is fine. *)
+module Unix = struct end
+
 module Heart = Tenacious.Heart
 module Glass = Heart.Glass
 
@@ -40,23 +46,26 @@ module Digest = Db.Digest
  System lstat - counted; exns caught
 ----------------------------------------------------------------------*)
 
-let unix_stat ~follow_symlinks path =
+let unix_stat_blocking ~follow_symlinks path =
   Metrics.Counter.incr Progress.lstat_counter;
-  try_with ~extract_exn:true (fun () ->
-    (*Message.message "stat: %s" path;*)
-    if follow_symlinks then Unix.stat path
-    else Unix.lstat path
-  )
+  Result.try_with (fun () ->
+    if follow_symlinks
+    then Core.Unix.stat path
+    else Core.Unix.lstat path)
+;;
 
-let stat ~follow_symlinks path =
+let stat_blocking ~follow_symlinks path =
   let path = Path.to_absolute_string path in
-  unix_stat ~follow_symlinks path >>| function
+  match unix_stat_blocking ~follow_symlinks path with
   | Ok u -> `ok (Stats.of_unix_stats u)
-  | Error (Unix.Unix_error ((ENOENT | ENOTDIR), _, _)) ->
+  | Error (Core.Unix.Unix_error ((ENOENT | ENOTDIR), _, _)) ->
     `does_not_exist
   | Error exn ->
     (* things like "permission denied" *)
     `unknown_error (Error.of_exn exn)
+
+let stat ~follow_symlinks path =
+  In_thread.run (fun () -> stat_blocking ~follow_symlinks path)
 
 let is_dir stats =
   match Stats.kind stats with
@@ -65,8 +74,7 @@ let is_dir stats =
 
 let is_digestable stats =
   match Stats.kind stats with
-  | `File -> true
-  | `Link -> true
+  | `File | `Link -> true
   | _ -> false
 
 (*----------------------------------------------------------------------
@@ -88,16 +96,17 @@ end = struct
 
   external digest_fd : int -> string = "caml_md5_fd"
 
+  let of_file_blocking path =
+    Or_error.try_with (fun () ->
+      Metrics.Counter.incr Progress.digest_counter;
+      let fd = Core.Unix.openfile (Path.to_absolute_string path) ~mode:[O_RDONLY] in
+      match digest_fd (Core.Unix.File_descr.to_int fd) with
+      | res -> Core.Unix.close fd; res
+      | exception e -> Core.Unix.close fd; raise e)
+
   let of_file path =
     Throttle.enqueue (Option.value_exn !throttle) (fun () ->
-      File_access.enqueue (fun () ->
-        Metrics.Counter.incr Progress.digest_counter;
-        Deferred.Or_error.try_with (fun () ->
-          Unix.with_file (Path.to_absolute_string path) ~mode:[`Rdonly]
-            ~f:(fun fd ->
-              Fd.with_file_descr_deferred_exn fd (fun fd ->
-                let fd = Core.Unix.File_descr.to_int fd in
-                In_thread.run (fun () -> digest_fd fd))))))
+      In_thread.run (fun () -> of_file_blocking path))
 
   let%test_unit _ =
     set 20;
@@ -117,56 +126,39 @@ end
 
 (*----------------------------------------------------------------------
   Listing (count!)
-----------------------------------------------------------------------*)
+  ----------------------------------------------------------------------*)
+
+let run_ls_impl_blocking dir =
+  Metrics.Counter.incr Progress.ls_counter;
+  let path_string = Path.to_string dir in
+  Or_error.try_with (fun () ->
+    Exn.protectx (Core.Unix.opendir path_string)
+      ~finally:Core.Unix.closedir
+      ~f:(fun dir_handle ->
+         let rec loop acc =
+           match Core.Unix.readdir_opt dir_handle with
+           | Some ("." | "..") -> loop acc
+           | None -> Listing.create ~dir ~elems:acc
+           | Some base ->
+             let path_string = path_string ^ "/" ^ base in
+             match unix_stat_blocking ~follow_symlinks:false path_string with
+             | Error _ ->
+               (* File disappeared between readdir & lstat system calls.
+                  Handle as if readdir never told as about it *)
+               loop acc
+             | Ok u ->
+               let kind = Async.Unix.File_kind.of_unix u.st_kind in
+               loop (Listing.Elem.create ~base ~kind :: acc)
+         in
+         loop []))
+;;
 
 let run_ls ~dir =
-  let open Listing in
   Locking.lock_directory_for_listing ~dir (fun () ->
-    let path_string = Path.to_string dir in
     File_access.enqueue (fun () ->
-      Metrics.Counter.incr Progress.ls_counter;
-      try_with (fun () -> Unix.opendir path_string) >>= function
-      | Error exn -> return (Error (Error.of_exn exn)) (* opendir failed *)
-      | Ok dir_handle ->
-          (* opendir succeeded, we must be sure to close *)
-        let close () =
-          try_with (fun () -> Unix.closedir dir_handle) >>| function | Ok () -> ()
-          | Error exn ->
-            Message.error "Unix.closedir failed: %s\n%s" path_string (Exn.to_string exn)
-        in
-          (* catch all exns while processing so we can close in every case *)
-        try_with (fun () ->
-          let rec loop acc =
-            Unix.readdir_opt dir_handle >>= function
-            | Some "." -> loop acc
-            | Some ".." -> loop acc
-            | Some base ->
-              begin
-                let path_string = Path.to_string dir ^ "/" ^ base in
-                unix_stat ~follow_symlinks:false path_string >>= function
-                | Error _e ->
-                    (* File disappeared between readdir & lstat system calls.
-                       Handle as if readdir never told as about it *)
-                  loop acc
-                | Ok u ->
-                  let kind = u.Unix.Stats.kind in
-                  loop (Elem.create ~base ~kind :: acc)
-              end
-            | None -> return (create ~dir ~elems:acc)
-          in
-          loop []
-
-        ) >>= fun res ->
-          (* convert exn -> Or_error *)
-        let ore =
-          match res with
-          | Error exn -> Error (Error.of_exn exn)
-          | Ok x -> Ok x
-        in
-          (* close in every case *)
-        close () >>= fun () ->
-        return ore
-    ))
+      In_thread.run (fun () ->
+        run_ls_impl_blocking dir)))
+;;
 
 (*----------------------------------------------------------------------
  Watcher (inotify wrapper)
@@ -544,7 +536,7 @@ end = struct
         | `Link ->
           Tenacious.lift (fun () ->
             let open Deferred in
-            Unix.readlink (Path.to_absolute_string path)
+            Async.Unix.readlink (Path.to_absolute_string path)
             (* This 'unbreakable' is guarded by 'lstat' above:
                We assume 'readlink' will return the same result as long as the stat
                stays unchanged. *)
@@ -642,9 +634,7 @@ let contents_file fsm ~file =
     Tenacious.lift (fun () ->
       File_access.enqueue (fun () ->
         Deferred.Or_error.try_with (fun () ->
-          Reader.file_contents (Path.to_absolute_string file)
-        )
-      )
+          Reader.file_contents (Path.to_absolute_string file)))
       >>| unbreakable
     ) *>>| function
     | Error e -> `file_read_error e
@@ -889,14 +879,15 @@ let stat_directory memo ~dir =
     else Or_error.errorf !"%{Path.Rel} is not a directory" dir
 ;;
 
+let mkdir_ignoring_eexist_blocking dir =
+  Metrics.Counter.incr Progress.mkdir_counter;
+  match Core.Unix.mkdir (Path.Rel.to_string dir) with
+  | () -> Ok ()
+  | exception (Core.Unix.Unix_error (EEXIST, _, _)) -> Ok ()
+  | exception e -> Error (Error.of_exn e)
+
 let mkdir_ignoring_eexist dir =
-  Monitor.try_with (fun () -> Unix.mkdir (Path.Rel.to_string dir))
-  >>| function
-  | Ok () -> Ok ()
-  | Error e ->
-    match Monitor.extract_exn e with
-    | Unix.Unix_error (EEXIST, _, _) -> Ok ()
-    | _ -> Error (Error.of_exn e)
+  In_thread.run (fun () -> mkdir_ignoring_eexist_blocking dir)
 
 let rec ensure_directory memo watcher ~mkdir_root ~dir : unit Or_error.t Tenacious.t =
   (* In theory, we should probably cache the prefixes of these computations. In practice,
@@ -909,7 +900,6 @@ let rec ensure_directory memo watcher ~mkdir_root ~dir : unit Or_error.t Tenacio
   end *>>= function
   | Error _ as e -> Tenacious.return e
   | Ok () ->
-    Metrics.Counter.incr Progress.mkdir_counter;
     Tenacious.lift (fun () -> mkdir_ignoring_eexist dir >>| unbreakable)
     *>>= fun (_ : unit Or_error.t) ->
     Tenacious.cutoff
@@ -924,7 +914,6 @@ let rec ensure_directory memo watcher ~mkdir_root ~dir : unit Or_error.t Tenacio
     | Ok `ok -> Tenacious.return (Ok ())
     | Ok `does_not_exist ->
       (* Here we potentially self trigger by breaking the stat above. Oh well. *)
-      Metrics.Counter.incr Progress.mkdir_counter;
       Tenacious.lift (fun () -> mkdir_ignoring_eexist dir >>| unbreakable)
 ;;
 
@@ -1104,8 +1093,8 @@ let%test_module _ = (module struct
 
   let caml_batched_mtimes_with_same_error l =
     try caml_batched_mtimes l
-    with Unix.Unix_error (a, b, c) ->
-      raise (Unix.Unix_error (a, b, sprintf "((filename %s))" c))
+    with Core.Unix.Unix_error (a, b, c) ->
+      raise (Core.Unix.Unix_error (a, b, sprintf "((filename %s))" c))
 
   let compare l =
     [%test_eq: float array Or_error.t]
@@ -1120,7 +1109,7 @@ let mtime_files_right_now files =
   let files_as_strings = List.map files ~f:Path.to_string in
   In_thread.run (fun () ->
     match caml_batched_mtimes files_as_strings with
-    | exception (Unix.Unix_error (_, _, file)) -> Error file
+    | exception (Core.Unix.Unix_error (_, _, file)) -> Error file
     | mtimes -> Ok mtimes)
   >>| Result.map ~f:(fun mtimes ->
     List.mapi files ~f:(fun i file ->
@@ -1132,7 +1121,7 @@ let mtime_files_right_now files =
  syncronize for delivery of inotify events when finish running an action
 ----------------------------------------------------------------------*)
 
-let pid_string = Pid.to_string (Unix.getpid ())
+let pid_string = Pid.to_string (Core.Unix.getpid ())
 let genU = (let r = ref 1 in fun () -> let u = !r in r:=1+u; u)
 
 let created_but_not_deleted = Bag.create ()
@@ -1152,7 +1141,7 @@ let unless_shutting_down ~f =
 
 let () =
   don't_wait_for (
-    Unix.mkdir ~p:() tmp_jenga
+    Async.Unix.mkdir ~p:() tmp_jenga
   )
 
 let heart_broken ~timeout heart =
@@ -1211,7 +1200,7 @@ let sync_inotify_delivery : (t -> unit Deferred.t) =
       let bag_elem = Bag.add created_but_not_deleted (path_string,remove) in
       unless_shutting_down ~f:(fun () ->
         File_access.enqueue (fun () ->
-          Unix.with_file path_string ~mode:[ `Wronly; `Creat ]
+          Async.Unix.with_file path_string ~mode:[ `Wronly; `Creat ]
             ~f:(fun (_ : Fd.t) -> Deferred.unit)
         )
       ) >>= fun () ->
