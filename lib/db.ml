@@ -66,10 +66,11 @@ end
 
 module Digest = struct
   include Interning.String(struct let who = "<digest>" end)
-  let t_of_sexp sexp = intern (Digest.from_hex (string_of_sexp sexp))
+  let t_of_sexp sexp = intern (Md5.to_binary (Md5.t_of_sexp sexp))
   let _ = t_of_sexp (* we silence the warning to keep shadowing the implementation
                        from the functor *)
-  let sexp_of_t t = sexp_of_string (Digest.to_hex (extern t))
+  let sexp_of_t t = Md5.sexp_of_t (Md5.of_binary_exn (extern t))
+  let intern md5 = intern (Md5.to_binary md5)
 end
 
 module Listing = struct

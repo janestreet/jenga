@@ -5,7 +5,9 @@ open Async
 (* force to specify Core.Unix or Async.Unix. The preferred way to do syscalls is to use
    In_thread.run (fun () -> several syscalls using Core.Unix ). But if there is only
    one syscall to do, or if the syscall doesn't matter performance-wise, sticking to
-   Async.Unix is fine. *)
+   Async.Unix is fine.
+   Beware that Path functions oftentimes look things up in the intern table, so calling
+   them in an In_thread.run can race. *)
 module Unix = struct end
 
 module Heart = Tenacious.Heart
@@ -55,7 +57,6 @@ let unix_stat_blocking ~follow_symlinks path =
 ;;
 
 let stat_blocking ~follow_symlinks path =
-  let path = Path.to_absolute_string path in
   match unix_stat_blocking ~follow_symlinks path with
   | Ok u -> `ok (Stats.of_unix_stats u)
   | Error (Core.Unix.Unix_error ((ENOENT | ENOTDIR), _, _)) ->
@@ -65,6 +66,7 @@ let stat_blocking ~follow_symlinks path =
     `unknown_error (Error.of_exn exn)
 
 let stat ~follow_symlinks path =
+  let path = Path.to_absolute_string path in
   In_thread.run (fun () -> stat_blocking ~follow_symlinks path)
 
 let is_dir stats =
@@ -83,7 +85,7 @@ let is_digestable stats =
 
 module Ocaml_digest : sig
   val init: Config.t -> unit
-  val of_file : Path.t -> string Or_error.t Deferred.t
+  val of_file : Path.t -> Md5.t Or_error.t Deferred.t
 end = struct
   let throttle = ref None
   let set max_concurrent_jobs =
@@ -94,33 +96,15 @@ end = struct
     | Some _ -> failwith "Fs.Ocaml_digest.init called more than once"
     | None -> set (Config.d_number config)
 
-  external digest_fd : int -> string = "caml_md5_fd"
-
   let of_file_blocking path =
     Or_error.try_with (fun () ->
       Metrics.Counter.incr Progress.digest_counter;
-      let fd = Core.Unix.openfile (Path.to_absolute_string path) ~mode:[O_RDONLY] in
-      match digest_fd (Core.Unix.File_descr.to_int fd) with
-      | res -> Core.Unix.close fd; res
-      | exception e -> Core.Unix.close fd; raise e)
+      Core.Md5.digest_file_blocking path)
 
   let of_file path =
     Throttle.enqueue (Option.value_exn !throttle) (fun () ->
+      let path = Path.to_absolute_string path in
       In_thread.run (fun () -> of_file_blocking path))
-
-  let%test_unit _ =
-    set 20;
-    let open Core in
-    let cwd = Sys.getcwd () in
-    let file = Filename.concat cwd (Filename.basename [%here].pos_fname) in
-    let our_digest =
-      Thread_safe.block_on_async_exn (fun () -> of_file (Path.absolute file) >>| ok_exn)
-    in
-    let actual_digest = Caml.Digest.file file in
-    [%test_result: string] our_digest ~expect:actual_digest;
-    [%test_pred: string Or_error.t] Result.is_error
-      (Thread_safe.block_on_async_exn (fun () -> of_file (Path.absolute cwd)))
-  ;;
 
 end
 
@@ -128,11 +112,10 @@ end
   Listing (count!)
   ----------------------------------------------------------------------*)
 
-let run_ls_impl_blocking dir =
+let run_ls_impl_blocking ~dir ~dir_as_string =
   Metrics.Counter.incr Progress.ls_counter;
-  let path_string = Path.to_string dir in
   Or_error.try_with (fun () ->
-    Exn.protectx (Core.Unix.opendir path_string)
+    Exn.protectx (Core.Unix.opendir dir_as_string)
       ~finally:Core.Unix.closedir
       ~f:(fun dir_handle ->
          let rec loop acc =
@@ -140,7 +123,7 @@ let run_ls_impl_blocking dir =
            | Some ("." | "..") -> loop acc
            | None -> Listing.create ~dir ~elems:acc
            | Some base ->
-             let path_string = path_string ^ "/" ^ base in
+             let path_string = dir_as_string ^ "/" ^ base in
              match unix_stat_blocking ~follow_symlinks:false path_string with
              | Error _ ->
                (* File disappeared between readdir & lstat system calls.
@@ -156,8 +139,9 @@ let run_ls_impl_blocking dir =
 let run_ls ~dir =
   Locking.lock_directory_for_listing ~dir (fun () ->
     File_access.enqueue (fun () ->
+      let dir_as_string = Path.to_string dir in
       In_thread.run (fun () ->
-        run_ls_impl_blocking dir)))
+        run_ls_impl_blocking ~dir ~dir_as_string)))
 ;;
 
 (*----------------------------------------------------------------------
@@ -681,8 +665,8 @@ end = struct
             Ocaml_digest.of_file file >>| unbreakable
           ) *>>= function
           | Error e -> (remove(); Tenacious.return (`digest_error e))
-          | Ok digest_string ->
-            let digest = Digest.intern digest_string in
+          | Ok digest ->
+            let digest = Digest.intern digest in
             Hashtbl.set (Persist.modify "digest" cache) ~key:file ~data:(stats,digest);
             Tenacious.return (`digest digest)
 
@@ -881,12 +865,13 @@ let stat_directory memo ~dir =
 
 let mkdir_ignoring_eexist_blocking dir =
   Metrics.Counter.incr Progress.mkdir_counter;
-  match Core.Unix.mkdir (Path.Rel.to_string dir) with
+  match Core.Unix.mkdir dir with
   | () -> Ok ()
   | exception (Core.Unix.Unix_error (EEXIST, _, _)) -> Ok ()
   | exception e -> Error (Error.of_exn e)
 
 let mkdir_ignoring_eexist dir =
+  let dir = Path.Rel.to_string dir in
   In_thread.run (fun () -> mkdir_ignoring_eexist_blocking dir)
 
 let rec ensure_directory memo watcher ~mkdir_root ~dir : unit Or_error.t Tenacious.t =

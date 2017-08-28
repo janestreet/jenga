@@ -38,7 +38,7 @@ module Digest : sig  (** proxy for the contents of a file in the file-system *)
 
   type t
   [@@deriving sexp_of, hash, compare]
-  val intern : string -> t
+  val intern : Md5.t -> t
 
   module With_store : sig
     type 'a t [@@deriving bin_io]

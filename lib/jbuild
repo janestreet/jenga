@@ -10,9 +10,9 @@
               sexplib
               str
               tenacious_lib))
-  (c_names (digest_stubs batched_mtimes_stubs))
+  (c_names (batched_mtimes_stubs))
   (preprocess (pps (ppx_jane ppx_driver.runner)))
-))
+  ))
 
 ;; Embed the API into the library as a string
 (rule
