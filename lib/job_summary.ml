@@ -8,41 +8,9 @@ module Q : sig
 
 end = struct
 
-  let is_special_char_to_bash = function
-    | '\\' | '\'' | '"' | '`' | '<' | '>' | '|' | ';' | ' ' | '\t' | '\n'
-    | '(' | ')' | '[' | ']' | '?' | '#' | '$' | '^' | '&' | '*' | '=' | '!' | '~'
-      -> true
-    | _
-      -> false
-
-  let vanilla_shell_escape s =
-    "'" ^ String.concat_map s ~f:(function
-    | '\'' -> "'\\''"
-    | c -> String.make 1 c
-    ) ^ "'"
-
-  let needs_quoting = function
-    | "" -> true
-    | s -> String.exists s ~f:is_special_char_to_bash
-
-  let shell_escape s =
-    (* quote a string (if necessary) to prevent interpretation of any chars which have a
-       special meaning to bash *)
-    if needs_quoting s
-    then
-      if String.contains s '\''
-      (* already contains single-quotes; quote using backslash escaping *)
-      then vanilla_shell_escape s
-      else
-        (* no embedded single quotes; just wrap with single quotes;
-           same behavior as [shell_escape], but perhaps more efficient *)
-        sprintf "'%s'" s
-    else
-      (* does not need quoting *)
-      s
-
+  let shell_escape = Sys.quote
   let shell_escape_list l =
-    String.concat ~sep:" " (List.map l ~f:(fun x -> shell_escape x))
+    String.concat ~sep:" " (List.map l ~f:shell_escape)
 
 end
 
