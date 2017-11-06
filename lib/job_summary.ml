@@ -15,7 +15,9 @@ end = struct
 end
 
 let pretty_span span =
-  let { Time.Span.Parts.sign = _; hr; min; sec; ms; us = _ } = Time.Span.to_parts span in
+  let { Time.Span.Parts.sign = _; hr; min; sec; ms; us = _; ns = _ } =
+    Time.Span.to_parts span
+  in
   let mins = 60 * hr + min in
   if mins > 0     then sprintf "%dm %02ds" mins sec
   else if sec > 0 then sprintf "%d.%03ds"  sec ms
