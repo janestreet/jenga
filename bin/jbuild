@@ -1,6 +1,7 @@
 
 (executables
  ((names (jenga))
+  (flags (:standard -safe-string))
   (libraries (async core jenga_lib))
   (preprocess (pps (ppx_jane ppx_driver.runner)))))
 

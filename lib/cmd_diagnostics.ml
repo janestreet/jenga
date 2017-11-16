@@ -41,7 +41,7 @@ module Tenacious_graph = struct
     go writer 0
 
   let command =
-    Command.async_or_error'
+    Command.async_or_error
       ~summary:(sprintf !"dump the dependency graph of a running server to stdout")
       [%map_open
         let sexp = flag "sexp" no_arg ~doc:" print in sexp format" in

@@ -191,7 +191,7 @@ let config_param : Config.t Command.Param.t =
 ;;
 
 let command ~toplevel ~run () =
-  Command.basic'
+  Command.basic
     ~summary:("build specified targets" ^
               if toplevel then "" else " (default subcommand)")
     ~readme:(fun () ->

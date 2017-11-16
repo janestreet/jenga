@@ -433,7 +433,7 @@ let build_all_needed_jengas jengas ~log =
 let command =
   let open Command.Let_syntax in
   let return = Async.return in
-  Command.async'
+  Command.async
     ~summary:"Runs benches and outputs the result on stdout"
     ~readme:(fun () -> config_text)
     [%map_open

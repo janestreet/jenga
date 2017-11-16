@@ -6,7 +6,7 @@ open Command.Let_syntax
 let return = Async.return
 
 let command =
-  Command.async_or_error'
+  Command.async_or_error
     ~summary:"stop the jenga running in the current repo"
     [%map_open
       let signal =

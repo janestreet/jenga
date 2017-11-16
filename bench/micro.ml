@@ -232,7 +232,7 @@ let selected_benches =
 let command =
   let open Command.Let_syntax in
   let return = Async.return in
-  Command.async'
+  Command.async
     ~summary:"Runs micro-benchmarks on the given jenga executable"
     ~readme:(fun () ->
       "Outputs debugging information in .tmp/logs, and the result of the benches \

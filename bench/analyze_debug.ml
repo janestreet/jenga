@@ -393,7 +393,7 @@ let main debug_file ~totals ~graph =
 
 let command =
   let open Command.Let_syntax in
-  Command.async'
+  Command.async
     ~summary:" report bench result by analysing .jenga/metrics files"
     [%map_open
       let debug_file = anon (".jenga/debug" %: file)

@@ -88,7 +88,7 @@ let run_watch_errors ~sexp =
 open Command.Let_syntax
 
 let command =
-  Command.async_or_error'
+  Command.async_or_error
     ~summary:"connect to running jenga, and watch the error pipe"
     [%map_open
       let sexp =

@@ -270,7 +270,7 @@ let display (inputs : t list) ~show_dispersion ~display_non_baseline =
 open Command.Let_syntax
 
 let command =
-  Command.basic'
+  Command.basic
     ~summary:" report bench result by analysing .jenga/metrics files"
     ~readme:(fun () ->
       "Takes input files with lines of the form VERSION%BENCH%METRICS, where\n\

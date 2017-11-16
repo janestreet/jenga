@@ -37,7 +37,7 @@ let print_info_line ~as_sexp info =
   end
 
 let get =
-  Command.async_or_error' ~summary:"show the value of a registered environment variable"
+  Command.async_or_error ~summary:"show the value of a registered environment variable"
     [%map_open
       let name = anon ("NAME" %: string)
       and as_sexp = flag "sexp" no_arg ~doc:" print in sexp format" in
@@ -59,7 +59,7 @@ let anon_strings name =
     args1 @ args2]
 
 let set =
-  Command.async_or_error'
+  Command.async_or_error
     ~summary:"set the value of a registered environment variable"
     [%map_open
       let name = anon ("NAME" %: string)
@@ -73,7 +73,7 @@ let set =
         >>| Or_error.join]
 
 let unset =
-  Command.async_or_error' ~summary:"unset a registered environment variable"
+  Command.async_or_error ~summary:"unset a registered environment variable"
     [%map_open
       let name = anon ("NAME" %: string)
       in fun () ->
@@ -85,7 +85,7 @@ let unset =
     ]
 
 let print =
-  Command.async_or_error' ~summary:"show the values of all registered environment variables"
+  Command.async_or_error ~summary:"show the values of all registered environment variables"
     [%map_open
       let as_sexp = flag "sexp" no_arg ~doc:" print in sexp format"
       in fun () ->

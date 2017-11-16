@@ -6,7 +6,7 @@ open Command.Let_syntax
 let return = Async.return
 
 let to_sexp =
-  Command.async_or_error'
+  Command.async_or_error
     ~summary:"cat .jenga/db in sexp format (big!)"
     [%map_open
       let path =
@@ -36,7 +36,7 @@ let memory_use_of_result_of =
     res, Byte_units.create `Words (Float.of_int (after - before))
 
 let stats =
-  Command.async_or_error'
+  Command.async_or_error
     ~summary:"print various stats to stdout"
     [%map_open
       let () = return ()

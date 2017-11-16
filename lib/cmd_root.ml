@@ -4,7 +4,7 @@ open! Int.Replace_polymorphic_compare
 open Command.Let_syntax
 
 let command =
-  Command.basic'
+  Command.basic
     ~summary:"prints the absolute path to the jenga root"
     [%map_open
       let () = return ()
