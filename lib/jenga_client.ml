@@ -48,10 +48,11 @@ let with_menu_connection_with_detailed_error ~root_dir ~f =
       try_with (fun () ->
         Rpc.Connection.with_client
           ~heartbeat_config:Rpc_server.heartbeat_config
-          ~host ~port (fun conn ->
-            Versioned_rpc.Connection_with_menu.create conn >>=? fun cwm ->
-            f cwm >>| fun x ->
-            Ok x
+          (Tcp.Where_to_connect.of_host_and_port {host; port})
+          (fun conn ->
+             Versioned_rpc.Connection_with_menu.create conn >>=? fun cwm ->
+             f cwm >>| fun x ->
+             Ok x
           )
         >>| function
         | Ok (Ok _ as ok) -> ok

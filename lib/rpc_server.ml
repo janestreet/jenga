@@ -89,7 +89,7 @@ let really_go ~root_dir progress =
   | Error (`Duplicate_implementations _descrs) -> assert false
   | Ok implementations ->
     let start_server () =
-      Tcp.Server.create Tcp.on_port_chosen_by_os ~on_handler_error:`Ignore
+      Tcp.Server.create Tcp.Where_to_listen.of_port_chosen_by_os ~on_handler_error:`Ignore
         (fun _addr reader writer ->
            Rpc.Connection.server_with_close reader writer ~implementations
              ~heartbeat_config
