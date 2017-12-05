@@ -66,7 +66,7 @@ let save_metrics ~polling ~jenga_jengaroot_version ~bench_name ~dst =
     >>= fun stat ->
     let disk_format =
       { disk_format
-        with metrics = Map.add disk_format.metrics
+        with metrics = Map.set disk_format.metrics
                          ~key:"db-size"
                          ~data:(Int64.to_float stat.size, Byte)
       }
@@ -139,7 +139,7 @@ let run_jenga ~exe ~args ~env ~log =
       in
       Sexp.to_string ([%sexp_of: Sexp.t list] (field :: old_list))
     in
-    Map.to_alist (Map.add map ~key ~data:new_value)
+    Map.to_alist (Map.set map ~key ~data:new_value)
   in
   let prog = exe in
   Process.create_exn ~env:(`Extend env) ~prog ~args ()

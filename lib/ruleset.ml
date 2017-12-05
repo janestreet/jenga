@@ -49,8 +49,8 @@ let targets t = Map.keys t.by_target
 let map_union m1 ~into:m2 ~f =
   Map.fold m1 ~init:m2 ~f:(fun ~key ~data:d1 acc ->
     match Map.find acc key with
-    | None -> Map.add acc ~key ~data:d1
-    | Some d2 -> Map.add acc ~key ~data:(f key d1 ~into:d2))
+    | None -> Map.set acc ~key ~data:d1
+    | Some d2 -> Map.set acc ~key ~data:(f key d1 ~into:d2))
 ;;
 
 let union t1 ~into:t2 =

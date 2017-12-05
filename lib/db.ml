@@ -437,7 +437,7 @@ module Proxy_map = struct
             (* just find/report one inconsistency *)
             Error [ (key,[proxy;proxy']) ]
         | None ->
-          loop (Map.add acc_t ~key:key ~data:proxy) xs
+          loop (Map.set acc_t ~key:key ~data:proxy) xs
     in
     fun xs -> loop Pm_key.Map.empty xs
   let of_alist xs =

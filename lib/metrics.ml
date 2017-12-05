@@ -162,10 +162,10 @@ module Memory = struct
 
   let to_metrics =
     let int acc field _t value =
-      Map.add acc ~key:(Fieldslib.Field.name field)
+      Map.set acc ~key:(Fieldslib.Field.name field)
         ~data:(Float.of_int value, Unit.Dimensionless) in
     let byte_units acc field _t value =
-      Map.add acc ~key:(Fieldslib.Field.name field)
+      Map.set acc ~key:(Fieldslib.Field.name field)
         ~data:(Byte_units.bytes value, Unit.Byte)
     in
     fun t ->

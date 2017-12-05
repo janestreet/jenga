@@ -72,19 +72,21 @@ let configure_scheduler ~report_long_cycle_times =
   );
   Async.Scheduler.handle_thread_pool_stuck (fun ~stuck_for ->
     let sched = Async.Scheduler.t () in
-    let completed_before = Async_unix.Thread_pool.num_work_completed sched.thread_pool in
+    let completed_before =
+      Async_unix.Async_unix_private.Thread_pool.num_work_completed sched.thread_pool in
     (* A 1ms pause shouldn't matter since this is called at most once per second, but it
        should be enough to convince the kernel to give other threads a chance to grab the
        ocaml lock. If threads are stuck for a different reason, then we will get the
        standard warning because of the call to the default handler below.
 
-       This assumes async threads only grab the lock once, just before finishing their async job.
-    *)
+       This assumes async threads only grab the lock once, just before finishing their
+       async job.  *)
     let time_to_wait_for = ref 0.001 in
     while !time_to_wait_for >. 0.; do
       time_to_wait_for := Core.Unix.nanosleep !time_to_wait_for;
     done;
-    let completed_after = Async_unix.Thread_pool.num_work_completed sched.thread_pool in
+    let completed_after =
+      Async_unix.Async_unix_private.Thread_pool.num_work_completed sched.thread_pool in
     if completed_before = completed_after then
       Async.Scheduler.default_handle_thread_pool_stuck ~stuck_for;
     if Jenga_options.t.sigstop_on_thread_pool_stuck && Time_ns.Span.(stuck_for > of_sec 5.) then
