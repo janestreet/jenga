@@ -1,4 +1,5 @@
 open Core
+open Async
 open! Int.Replace_polymorphic_compare
 
 module Rel = Path.Rel
@@ -41,7 +42,7 @@ let jenga_conf =
     | None -> "jenga.conf"
     | Some x -> x)
 
-let find_ancestor_directory_containing ~one_of =
+let find_ancestor_directory_containing ?start_dir ~one_of =
   if List.is_empty one_of then invalid_arg "find_ancestor_directory_containing";
   let exists_in ~dir =
     let exists path =
@@ -51,7 +52,11 @@ let find_ancestor_directory_containing ~one_of =
     in
     List.exists one_of ~f:exists
   in
-  let start_dir = Core.Sys.getcwd() in
+  let start_dir =
+    match start_dir with
+    | None -> Core.Sys.getcwd ()
+    | Some str -> Filename.realpath str
+  in
   let rec loop dir =
     if exists_in ~dir
     then Ok (Path.Abs.create dir)
@@ -76,7 +81,16 @@ let find_ancestor_directory_containing ~one_of =
    - in ../jenga-rules/PATH/jenga
    - in ../jenga-rules/integration/jenga_rules_integration.ml
    Keep them up-to-date if you change this. *)
-let discover_root () = find_ancestor_directory_containing ~one_of:[jenga_root; jenga_conf]
+let discover_root ?start_dir () =
+  find_ancestor_directory_containing ?start_dir ~one_of:[jenga_root; jenga_conf]
 
-let discover_and_set_root () =
-  Result.map ~f:Path.Repo.set_root (discover_root ())
+let discover_and_set_root ?start_dir () =
+  Result.map ~f:Path.Repo.set_root (discover_root ?start_dir ())
+
+let when_did_build_finish_most_recently ~root_dir =
+  try_with (fun () ->
+    Unix.stat ((Path.Abs.to_string root_dir) ^/ (Path.Rel.to_string Dot_jenga.metrics))
+    >>| Unix.Stats.mtime)
+  >>| Result.ok
+;;
+

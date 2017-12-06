@@ -3,6 +3,7 @@
     other files, like the "jengaroot.ml". *)
 
 open! Core
+open! Async
 
 (** Files created in the [.jenga] sub-directory. *)
 module Dot_jenga : sig
@@ -29,8 +30,12 @@ val jenga_conf : Path.Rel.t
 (** To be used with [Path.Repo.set_root] to initialize the repo-root-dependent parts of
     [Path] module (see [discover_and_set_root]).
     Can't be async because we need to call it before initializing Async.Parallel. *)
-val discover_root : unit -> Path.Abs.t Or_error.t
-val discover_and_set_root : unit -> unit Or_error.t
+val discover_root : ?start_dir:string -> unit -> Path.Abs.t Or_error.t
+val discover_and_set_root : ?start_dir:string -> unit -> unit Or_error.t
 
 (** Look for the closest ancestor directory containing one of the given files. *)
-val find_ancestor_directory_containing : one_of:Path.Rel.t list -> Path.Abs.t Or_error.t
+val find_ancestor_directory_containing :
+  ?start_dir:string -> one_of:Path.Rel.t list -> Path.Abs.t Or_error.t
+
+val when_did_build_finish_most_recently :
+  root_dir:Path.Abs.t -> Time.t option Deferred.t
