@@ -41,7 +41,6 @@ module Fork = struct
   let rpc = Rpc.Rpc.create ~name:"fork" ~version:0 ~bin_query ~bin_response
 
   let implementation { Request. putenv; dir_as_string; prog; args } =
-    Core.Unix.create_process_backend := `spawn_vfork;
     let start = Time.now () in
     List.iter putenv ~f:(fun (key, data) ->
       match data with
