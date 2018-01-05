@@ -218,8 +218,10 @@ let initialize_exn =
       >>= fun () ->
       Writer.save ".jenga/sandbox/.hg/requires"
         (* this must be in one line *)
-        ~contents:"it is not allowed to use [hg root] within jenga. Call [jenga root] or \
-                   [Jenga_rules_integration.blocking_root] instead."
+        ~contents:"ATTN: [hg root] may produce unexpected results when called from jenga \
+                   builds; sandboxed builds forbid it. Consider using paths relative to \
+                   [jenga root] (or [Jenga_rules_integration.blocking_root] in OCaml) \
+                   instead."
     )
   in
   fun () ->
