@@ -3,9 +3,7 @@ open Core
 open! Int.Replace_polymorphic_compare
 open Async
 
-module P = Ocaml_plugin.Std
-
-module Plugin = P.Ocaml_compiler.Make(struct
+module Plugin = Ocaml_plugin.Compiler.Make(struct
   type t = (module Jenga_root_interface.S)
   let t_repr = "Jenga_lib.Jenga_root_interface.S"
   let univ_constr = Jenga_root_interface.univ_constr
@@ -52,7 +50,7 @@ let get_env spec =
     Path.to_absolute_string (Path.of_relative Special_paths.Dot_jenga.plugin_cache)
   in
   let plugin_cache =
-    P.Plugin_cache.Config.create
+    Ocaml_plugin.Plugin_cache.Config.create
       ~dir:plugin_cache_dir
       ~try_old_cache_with_new_exec:true
       ()

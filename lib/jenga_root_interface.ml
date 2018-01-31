@@ -10,5 +10,4 @@ module type S = sig
 end
 
 let univ_constr =
-  let open Ocaml_plugin.Std in
-  (Ocaml_dynloader.Univ_constr.create () : (module S) Ocaml_dynloader.Univ_constr.t)
+  (Ocaml_plugin.Dynloader.Univ_constr.create () : (module S) Ocaml_plugin.Dynloader.Univ_constr.t)
