@@ -35,7 +35,7 @@ module Tenacious_tests(T1: Tenacious_intf.S) : sig end = struct
   let ( *>>| ) t f = Tenacious.map t ~f
   let return = Tenacious.return
 
-  let stabilize = Async_kernel_private.Scheduler.run_cycles_until_no_jobs_remain
+  let stabilize = Async_kernel_scheduler.run_cycles_until_no_jobs_remain
 
   let push x l = (l := x :: !l)
 

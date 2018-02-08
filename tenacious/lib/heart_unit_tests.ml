@@ -15,7 +15,7 @@ let%test_unit _ = (
   Gc.full_major();
   Gc.full_major();
   Glass.break g1;
-  Async_kernel_private.Scheduler.run_cycles_until_no_jobs_remain();
+  Async_kernel_scheduler.run_cycles_until_no_jobs_remain();
   assert (Deferred.is_determined def)
 )
 
