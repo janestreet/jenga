@@ -121,7 +121,7 @@ module Dump = struct
             Here
               begin
                 let nodes =
-                  List.sort ~cmp:Node.compare
+                  List.sort ~compare:Node.compare
                     (Bag.to_list (Node.blocked_on node))
                 in
                 List.map nodes ~f:go

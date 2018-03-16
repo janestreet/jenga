@@ -619,7 +619,7 @@ let jenga_conf_load_spec : (t -> conf:Path.t -> Load_root.Spec.t Builder.t) =
           match String.rsplit2 ~on:'/' s with | Some (_,s) -> s | None -> s)
       in
       (* duplicates checked w.r..t basenames *)
-      match List.find_a_dup basenames with
+      match List.find_a_dup basenames ~compare:Poly.compare with
       | Some dup ->
         error_before_loading_rules ~path:conf (sprintf "duplicate module name: %s" dup)
       | None ->

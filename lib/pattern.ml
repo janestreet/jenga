@@ -60,6 +60,6 @@ let t_of_sexp sexp = create (t_of_sexp sexp)
 let to_regexp t =
   match Hashtbl.find_exn the_pat_cache t with
   | regexp -> regexp
-  | exception Not_found -> assert false
+  | exception (Not_found_s _ | Caml.Not_found) -> assert false
 
 let matches t string = Regexp.pmatch ~rex:(to_regexp t) string

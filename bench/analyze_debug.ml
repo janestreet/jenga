@@ -335,7 +335,7 @@ let main debug_file ~totals ~graph =
   let all_categories =
     Map.to_alist !all_categories
     |> List.map ~f:(fun (a, b) -> (b, a))
-    |> List.sort ~cmp:[%compare: Time.Span.t * string]
+    |> List.sort ~compare:[%compare: Time.Span.t * string]
   in
   let report_totals writer = report_totals all_categories ~writer in
   let report_schedule writer =

@@ -3,7 +3,7 @@
   (public_name jenga.tenacious)
   (flags (:standard -safe-string))
   (libraries (core async))
-  (preprocess (pps (ppx_jane ppx_driver.runner)))))
+  (preprocess (pps (ppx_jane ppxlib.runner)))))
 
 ;(alias ((name lib_artifacts) (deps ((alias runtest)))))
 

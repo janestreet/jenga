@@ -15,11 +15,11 @@ depends: [
   "core"
   "fieldslib"
   "ocaml_plugin"
-  "ppx_driver"
   "ppx_jane"
   "sexplib"
-  "jbuilder"                {build & >= "1.0+beta12"}
+  "jbuilder"                {build & >= "1.0+beta18.1"}
   "ocaml-migrate-parsetree" {>= "1.0"}
+  "ppxlib"                  {>= "0.1.1"}
 ]
 available: [ ocaml-version >= "4.04.1" ]
 descr: "

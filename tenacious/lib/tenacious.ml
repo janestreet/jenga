@@ -504,6 +504,8 @@ let embed f =
 let all_unit ts =
   map (all ts) ~f:(fun (_:unit list) -> ())
 
+let all_ignore = all_unit
+
 let race a b =
   Embed (fun ~thread ~cancel ~dep ->
     let cancel_a = Heart.Glass.create () in
@@ -845,7 +847,6 @@ module For_tests = struct
       (race_errors (List.map ts ~f:(map ~f:(fun x -> Ok x))))
 end
 
-let all_ignore = all_unit
 let join x = bind x ~f:(fun x -> x)
 let ignore_m = map ~f:ignore
 let (>>|) x f = map x ~f

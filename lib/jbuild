@@ -12,7 +12,7 @@
               str
               tenacious_lib))
   (c_names (batched_mtimes_stubs))
-  (preprocess (pps (ppx_jane ppx_driver.runner)))
+  (preprocess (pps (ppx_jane ppxlib.runner)))
   ))
 
 ;; Embed the API into the library as a string
