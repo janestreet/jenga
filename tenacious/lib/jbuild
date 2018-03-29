@@ -1,7 +1,6 @@
 (library
  ((name tenacious_lib)
   (public_name jenga.tenacious)
-  (flags (:standard -safe-string))
   (libraries (core async))
   (preprocess (pps (ppx_jane ppxlib.runner)))))
 

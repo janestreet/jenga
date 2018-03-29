@@ -1,6 +1,5 @@
 (executables
  ((names (bench))
-  (flags (:standard -safe-string))
   (libraries (core core_extended async jenga_lib textutils))
   (modules (:standard \ analyze))
   (preprocess (pps (ppx_jane ppxlib.runner)))))

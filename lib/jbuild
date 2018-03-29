@@ -1,7 +1,6 @@
 (library
  ((name jenga_lib)
   (public_name jenga)
-  (flags (:standard -safe-string))
   (libraries (async
               async_inotify
               command_rpc
