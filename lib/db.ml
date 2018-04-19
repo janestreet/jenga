@@ -3,8 +3,6 @@ open Core
 open! Int.Replace_polymorphic_compare
 module Unix = Async.Unix
 
-let equal_using_compare compare = fun x1 x2 -> 0 = compare x1 x2
-
 module Kind = struct
   type t =
   [ `File | `Directory | `Char | `Block | `Link | `Fifo | `Socket ]
@@ -15,7 +13,7 @@ end
 module Mtime = struct
   type t = float [@@deriving sexp, bin_io, hash, compare]
   let of_float f = f
-  let equal = equal_using_compare compare
+  let equal = [%compare.equal: t]
 end
 
 module Stats = struct
@@ -51,7 +49,7 @@ module Stats = struct
     mtime : Mtime.t;
   } [@@deriving fields, sexp, bin_io, hash, compare]
 
-  let equal = equal_using_compare compare
+  let equal = [%compare.equal: t]
 
   let of_unix_stats (u : Core.Unix.stats) =
     {
@@ -110,7 +108,7 @@ module Listing = struct
 
   let create ~dir ~elems = { dir; listing = elems }
 
-  let equal = equal_using_compare compare
+  let equal = [%compare.equal: t]
 
   let of_file_paths_exn ~dir paths =
     let elems = List.map paths ~f:(fun path ->
@@ -204,7 +202,7 @@ module Pm_key = struct
     include C.Map.Provide_hash(T)
   end
 
-  let equal = equal_using_compare compare
+  let equal = [%compare.equal: t]
 
   let of_path x = Path x
   let of_abs_path x = Path (Path.of_absolute x)
@@ -240,7 +238,7 @@ module Proxy = struct
   let of_listing ~dir paths =
     Fs_proxy (Listing.of_file_paths_exn ~dir (Path.Set.to_list paths))
 
-  let equal = equal_using_compare compare
+  let equal = [%compare.equal: t]
 
 end
 
@@ -424,6 +422,8 @@ module Proxy_map = struct
   let group t =
     create Pm_key.Map.empty (Group_set.singleton (create_group t))
 
+  type inconsistency = (Pm_key.t * Proxy.t list) list [@@deriving sexp_of]
+
   let map_of_alist =
     (* If [of_alist_reduce] gave us the key, we could use it in here. *)
     let rec loop acc_t = function
@@ -444,6 +444,11 @@ module Proxy_map = struct
     match map_of_alist xs with
     | Ok map -> Ok (create map no_groups)
     | Error _ as e -> e
+
+  let create_by_path xs =
+    of_alist (List.map xs ~f:(fun (path,v) -> (Pm_key.of_path path,v)))
+
+  let equal = [%compare.equal: t]
 
   (* This does not avoid visiting the same group twice, so we should only traverse short
      prefixes. *)
@@ -469,10 +474,10 @@ module Proxy_map = struct
     Sequence.append diff_map diff_groups
   ;;
 
-  let equal_or_witness t1 t2 =
-    match compare t1 t2 with
-    | 0 -> Ok ()
-    | _ -> Error (Sequence.to_list (Sequence.take (difference t1 t2) 5))
+  let diff ~before ~after =
+    match compare before after with
+    | 0 -> None
+    | _ -> Some (Sequence.to_list (Sequence.take (difference before after) 5))
   ;;
 
   let filesystem_assumptions (t : t) =

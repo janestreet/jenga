@@ -187,7 +187,7 @@ let setup_limits () =
   In_thread.run (fun () ->
     let open Core in
     Unix.RLimit.set Unix.RLimit.stack
-      { cur = Limit (Int64.of_int (20_000 * 1024)); max = Infinity })
+      { cur = Limit (Int64.of_int (24 * 1024 * 1024)); max = Infinity })
 ;;
 
 let clean_all () =

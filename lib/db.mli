@@ -103,8 +103,17 @@ module Proxy_map : sig
   val empty  : t
   val single : Pm_key.t -> Proxy.t -> t
   val group : t -> t
-  val of_alist : (Pm_key.t * Proxy.t) list -> (t, (Pm_key.t * Proxy.t list) list) Result.t
-  val equal_or_witness : t -> t -> (unit, Pm_key.t list) Result.t
+
+  type inconsistency = (Pm_key.t * Proxy.t list) list
+  [@@deriving sexp_of]
+
+  val create_by_path : (Path.t * Proxy.t) list -> (t, inconsistency) Result.t
+
+  val equal : t -> t -> bool
+
+  (** Return [None] if [before] and [after] are equal and [Some l] where [l] is a
+      witness of the differences otherwise *)
+  val diff : before:t -> after:t -> Pm_key.t list option
 
   (** [Error] means the proxy map is inconsistent. However, some inconsistent proxy maps
       are [Ok]. *)

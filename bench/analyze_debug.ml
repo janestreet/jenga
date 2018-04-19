@@ -187,60 +187,77 @@ let categorize_ocaml_passes ((start, finish, output) : Job_summary.t) =
     else parse_dtimings_output_4_06 output
   else None
 
-let category ((start, _, _) as job_summary) =
+let source =
+  let is_strict_suffix x ~suffix =
+    String.is_suffix x ~suffix && String.length x > String.length suffix
+  in
+  fun args ->
+    List.find args ~f:(fun x ->
+      is_strict_suffix x ~suffix:".ml"
+      || is_strict_suffix x ~suffix:".ml-gen"
+      || is_strict_suffix x ~suffix:".mli")
+
+let simple_category ((start, _, _) : Job_summary.t) =
+  if String.is_substring start.prog ~substring:"ocamldep"
+  then "ocamldep", source start.args
+  else if String.is_substring start.prog ~substring:"ocamlopt"
+       && List.mem start.args "-c"    ~equal:String.equal
+       && List.mem start.args "-impl" ~equal:String.equal
+  then ".ml", source start.args
+  else if String.is_substring start.prog ~substring:"ocamlc"
+       && List.mem start.args "-c"    ~equal:String.equal
+       && List.mem start.args "-impl" ~equal:String.equal
+  then ".ml byte", source start.args
+  else if (String.is_substring start.prog ~substring:"ocamlc"
+           || String.is_substring start.prog ~substring:"ocamlopt")
+       && List.mem start.args "-c"    ~equal:String.equal
+       && List.mem start.args "-intf" ~equal:String.equal
+  then ".mli", source start.args
+  else if (String.is_substring start.prog ~substring:"ocamlc"
+           || String.is_substring start.prog ~substring:"ocamlopt")
+       && match List.rev (List.take (List.rev start.args) 2) with
+         [ "-o"; name ] ->
+           (match String.rsplit2 name ~on:'.' with
+           | None | Some (_, "exe") -> true
+           | _ -> false)
+       | _ -> false
+  then "link", None
+  else if String.is_substring start.need ~substring:"fgrep"
+  then "test/bench grep", None
+  else if List.exists (start.prog :: start.args)
+            ~f:(String.is_substring ~substring:"ocamlobjinfo")
+  then "ocamlobjinfo", None
+  else if String.(=) start.prog "gcc"
+       || String.(=) start.prog "g++"
+       || (String.is_substring start.prog ~substring:"ocamlc"
+           && Option.exists (List.hd start.args) ~f:(String.is_suffix ~suffix:".c"))
+  then "c/c++", None
+  else if String.is_prefix ~prefix:".liblinks" start.where
+  then "liblinks", None
+  else if List.exists start.args ~f:(String.(=) "./inline_tests_runner")
+       || String.is_substring start.prog ~substring:"enforce-style"
+       || String.(=) start.need ".runtest"
+  then "test", None
+  else if String.(=) start.prog "hg"
+       || List.exists start.args ~f:(String.is_substring ~substring:"hg showconfig")
+  then "hg", None
+  else if String.is_substring start.prog ~substring:"ocamlyacc"
+       || String.is_substring start.prog ~substring:"ocamllex"
+       || String.is_substring start.prog ~substring:"menhir"
+  then "codegen", None
+  else if (String.is_substring start.prog ~substring:"ocamlopt"
+           && Option.exists (List.last start.args) ~f:(String.is_suffix ~suffix:".cmxa"))
+  then "archive", None
+  else if List.exists start.args ~f:(String.is_substring ~substring:"ocaml_embed_compiler")
+  then "ocaml-plugin", None
+  else if String.(=) start.prog "bash"
+  then "bash", None
+  else "other", None (* raise_s [%sexp (start : Job_summary.Start.t)] *)
+
+let category job_summary =
   match categorize_ocaml_passes job_summary with
   | Some v -> `Detailed v
-  | None ->
-    `Simple (
-      if String.is_substring start.prog ~substring:"ocamldep"
-      then "ocamldep"
-      else if String.is_substring start.prog ~substring:"ocamlopt"
-           && List.mem start.args "-c"    ~equal:String.equal
-           && List.mem start.args "-impl" ~equal:String.equal
-      then ".ml"
-      else if String.is_substring start.prog ~substring:"ocamlc"
-           && List.mem start.args "-c"    ~equal:String.equal
-           && List.mem start.args "-impl" ~equal:String.equal
-      then ".ml byte"
-      else if (String.is_substring start.prog ~substring:"ocamlc"
-               || String.is_substring start.prog ~substring:"ocamlopt")
-           && List.mem start.args "-c"    ~equal:String.equal
-           && List.mem start.args "-intf" ~equal:String.equal
-      then ".mli"
-      else if String.is_substring start.prog ~substring:"link-quietly"
-      then "link"
-      else if String.is_substring start.need ~substring:"fgrep"
-      then "test/bench grep"
-      else if List.exists (start.prog :: start.args)
-                ~f:(String.is_substring ~substring:"ocamlobjinfo")
-      then "ocamlobjinfo"
-      else if String.(=) start.prog "gcc"
-           || String.(=) start.prog "g++"
-           || (String.is_substring start.prog ~substring:"ocamlc"
-               && Option.exists (List.hd start.args) ~f:(String.is_suffix ~suffix:".c"))
-      then "c/c++"
-      else if String.is_prefix ~prefix:".liblinks" start.where
-      then "liblinks"
-      else if List.exists start.args ~f:(String.(=) "./inline_tests_runner")
-           || String.is_substring start.prog ~substring:"enforce-style"
-           || String.(=) start.need ".runtest"
-      then "test"
-      else if String.(=) start.prog "hg"
-           || List.exists start.args ~f:(String.is_substring ~substring:"hg showconfig")
-      then "hg"
-      else if String.is_substring start.prog ~substring:"ocamlyacc"
-           || String.is_substring start.prog ~substring:"ocamllex"
-           || String.is_substring start.prog ~substring:"menhir"
-      then "codegen"
-      else if (String.is_substring start.prog ~substring:"ocamlopt"
-               && Option.exists (List.last start.args) ~f:(String.is_suffix ~suffix:".cmxa"))
-      then "archive"
-      else if List.exists start.args ~f:(String.is_substring ~substring:"ocaml_embed_compiler")
-      then "ocaml-plugin"
-      else if String.(=) start.prog "bash"
-      then "bash"
-      else "other" (* raise_s [%sexp (start : Job_summary.Start.t)] *)
-    )
+  | None -> `Simple (fst (simple_category job_summary))
 ;;
 
 let categories_and_durations ((_, finish, _) as job_summary : Job_summary.t) =
@@ -303,7 +320,35 @@ let report_schedule ~writer:w ~all_categories ~interval_map ~first_time =
     fprintf w "\n")
 ;;
 
-let main debug_file ~totals ~graph =
+let to_csv debug_file ~line_columns =
+  let count_lines file =
+    In_channel.with_file file ~f:(fun ch ->
+      In_channel.fold_lines ch ~init:0 ~f:(fun acc _ -> acc + 1))
+  in
+  printf "end_time,duration,category,dir,source";
+  if line_columns then printf ",line_count,line_per_second";
+  printf "\n";
+  iter_over_events debug_file ~f:(fun time event ->
+    match event with
+    | Job_started _ -> return ()
+    | Job_completed (start, finish, _ as job_summary) ->
+      let category, source = simple_category job_summary in
+      let dir = start.where in
+      printf !"%{Time},%{Time.Span},%s,%s,%s"
+        time finish.duration category dir (Option.value source ~default:"");
+      if line_columns then begin
+        match source with
+        | None -> printf ",,"
+        | Some source ->
+          let line_count = count_lines (dir ^/ source) in
+          printf ",%d,%.0f"
+            line_count (Float.of_int line_count /. Time.Span.to_sec finish.duration);
+      end;
+      printf "\n";
+      return ())
+;;
+
+let main debug_file ~totals ~graph ~csv ~csv_line_counts =
   let unfinished = Int.Table.create () in
   let state = ref (M.create ~left_of_leftmost:String.Map.empty ~value_right_of:Time.Map.empty) in
   let first_time = ref Time.epoch in
@@ -345,62 +390,67 @@ let main debug_file ~totals ~graph =
       ~first_time:!first_time
       ~writer
   in
-  match graph with
-  | None ->
-    (if totals
-     then report_totals (force Writer.stdout)
-     else report_schedule (force Writer.stdout));
-    return ()
-  | Some output ->
-    Unix.mkdir ~p:() output
-    >>= fun () ->
-    let totals_csv = output ^/ "totals.csv" in
-    let totals_sexp = output ^/ "totals.sexp" in
-    Writer.with_file totals_csv ~f:(fun w -> report_totals w; return ())
-    >>= fun () ->
-    let schedule_csv = output ^/ "schedule.csv" in
-    let schedule_sexp = output ^/ "schedule.sexp" in
-    Writer.with_file schedule_csv ~f:(fun w -> report_schedule w; return ())
-    >>= fun () ->
-    Process.run_exn
-      ~prog:"htmlplot"
-      ~args:[ "csv"; "hi"; totals_csv; "-sexp"; "-output"; totals_sexp
-            ; "-kind"; "pie"; "-colors"; "spinner" ]
-      ()
-    >>| print_string
-    >>= fun () ->
-    Process.run_exn
-      ~prog:"htmlplot"
-      ~args:[ "csv"; "hi"; schedule_csv; "-sexp"; "-output"; schedule_sexp
-            ; "-kind"; "area"; "-colors"; "spinner"; "-height"; "600"; "-width"; "1000" ]
-      ()
-    >>| print_string
-    >>= fun () ->
-    (* htmlplot doesn't support stacked area charts, so we fiddle with javascript
-       directly *)
-    Process.run_expect_no_output_exn
-      ~prog:"sed"
-      ~args:["-ie"; "s/'plotOptions':{/'plotOptions':{'area':{'stacking':'normal'},/"
-            ; schedule_sexp ]
-      ()
-    >>= fun () ->
-    Process.run_exn
-      ~prog:"htmlplot"
-      ~args:[ "csv"; "of-sexps"; schedule_sexp; totals_sexp; "-output"; output ^/ "graph.html" ]
-      ()
-    >>| print_string
+  if csv
+  then to_csv debug_file ~line_columns:csv_line_counts
+  else
+    match graph with
+    | None ->
+      (if totals
+       then report_totals (force Writer.stdout)
+       else report_schedule (force Writer.stdout));
+      return ()
+    | Some output ->
+      Unix.mkdir ~p:() output
+      >>= fun () ->
+      let totals_csv = output ^/ "totals.csv" in
+      let totals_sexp = output ^/ "totals.sexp" in
+      Writer.with_file totals_csv ~f:(fun w -> report_totals w; return ())
+      >>= fun () ->
+      let schedule_csv = output ^/ "schedule.csv" in
+      let schedule_sexp = output ^/ "schedule.sexp" in
+      Writer.with_file schedule_csv ~f:(fun w -> report_schedule w; return ())
+      >>= fun () ->
+      Process.run_exn
+        ~prog:"htmlplot"
+        ~args:[ "csv"; "hi"; totals_csv; "-sexp"; "-output"; totals_sexp
+              ; "-kind"; "pie"; "-colors"; "spinner" ]
+        ()
+      >>| print_string
+      >>= fun () ->
+      Process.run_exn
+        ~prog:"htmlplot"
+        ~args:[ "csv"; "hi"; schedule_csv; "-sexp"; "-output"; schedule_sexp
+              ; "-kind"; "area"; "-colors"; "spinner"; "-height"; "600"; "-width"; "1000" ]
+        ()
+      >>| print_string
+      >>= fun () ->
+      (* htmlplot doesn't support stacked area charts, so we fiddle with javascript
+         directly *)
+      Process.run_expect_no_output_exn
+        ~prog:"sed"
+        ~args:["-ie"; "s/'plotOptions':{/'plotOptions':{'area':{'stacking':'normal'},/"
+              ; schedule_sexp ]
+        ()
+      >>= fun () ->
+      Process.run_exn
+        ~prog:"htmlplot"
+        ~args:[ "csv"; "of-sexps"; schedule_sexp; totals_sexp; "-output"; output ^/ "graph.html" ]
+        ()
+      >>| print_string
 ;;
 
 let command =
   let open Command.Let_syntax in
   Command.async
-    ~summary:" report bench result by analysing .jenga/metrics files"
+    ~summary:" report bench result by analysing .jenga/debug files"
     [%map_open
       let debug_file = anon (".jenga/debug" %: file)
       and totals = flag "totals" no_arg  ~doc:""
       and graph = flag "graph" (optional file) ~doc:"DIR where the graph will be written"
+      and csv = flag "csv" no_arg ~doc:" output a simplified version of the input as a csv"
+      and csv_line_counts = flag "csv-line-counts" no_arg ~doc:" add information to -csv output"
       in fun () ->
         Writer.behave_nicely_in_pipeline ();
-        main debug_file ~totals ~graph
+        main debug_file ~totals ~graph ~csv ~csv_line_counts
     ]
 ;;

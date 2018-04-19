@@ -4,8 +4,6 @@ open Async
 
 module Heart = Tenacious.Heart
 
-let equal_using_compare compare = fun x1 x2 -> 0 = compare x1 x2
-
 let exit_code_upon_control_c = ref Exit_code.incomplete
 
 module Target_rule = Rule.Target_rule
@@ -23,46 +21,6 @@ module PPs = struct (* list of path-tagged proxies *)
 end
 
 module RR = Run_reason
-
-(*----------------------------------------------------------------------
- proxy map operations
-----------------------------------------------------------------------*)
-
-module Proxy_map_op : sig
-
-  type t = Db.Proxy_map.t [@@deriving hash, compare]
-
-  val empty  : t
-  val single : Pm_key.t -> Proxy.t -> t
-
-  type inconsistency = (Pm_key.t * Proxy.t list) list
-  [@@deriving sexp_of]
-
-  val create_by_path : PPs.t -> (t, inconsistency) Result.t
-  val merge : t list -> (t, inconsistency) Result.t
-
-  val equal : t -> t -> bool
-  val diff : before:t -> after:t -> Pm_key.t list option
-
-end = struct
-
-  include Db.Proxy_map
-
-  type inconsistency = (Pm_key.t * Proxy.t list) list [@@deriving sexp_of]
-
-  let create = of_alist
-
-  let create_by_path xs =
-    create (List.map xs ~f:(fun (path,v) -> (Pm_key.of_path path,v)))
-
-  let equal = equal_using_compare compare
-
-  let diff ~before ~after =
-    match Db.Proxy_map.equal_or_witness before after with
-    | Ok () -> None
-    | Error l -> Some l
-
-end
 
 module Problem = Builder.Problem
 let return   = Builder.return
@@ -755,7 +713,7 @@ end = struct
 
   let keys t = List.map t ~f:fst
 
-  let equal = equal_using_compare compare
+  let equal = [%compare.equal: t]
 
   let diff ~before ~after =
     (* expect to only be called on [Mtimes.t] values with the same path-keys *)
@@ -854,7 +812,7 @@ let run_action_for_stdout_if_necessary t ~deps ~need action =
   match (Hashtbl.find (actioned t) action_proxy) with
   | None -> run_and_cache RR.No_record_of_being_run_before
   | Some prev ->
-    match (Proxy_map_op.diff ~before:prev.Output_proxy.deps ~after:deps) with
+    match (Proxy_map.diff ~before:prev.Output_proxy.deps ~after:deps) with
     | Some keys -> run_and_cache (RR.Deps_have_changed keys)
     | None ->
       (* Nothing has changed, use cached stdout *)
@@ -874,7 +832,7 @@ let need_abs_path : (t -> Path.Abs.t -> Proxy_map.t Builder.t) =
     | `is_a_dir -> error (Reason.Unexpected_directory path)
     | `file digest ->
       let proxy = Proxy.of_digest digest in
-      let pm = Proxy_map_op.single (Pm_key.of_abs_path abs) proxy in
+      let pm = Proxy_map.single (Pm_key.of_abs_path abs) proxy in
       return pm
 
 let need_path : (t -> Path.t -> Proxy_map.t Builder.t) =
@@ -885,7 +843,7 @@ let need_path : (t -> Path.t -> Proxy_map.t Builder.t) =
 
 let build_merged_proxy_maps : (Proxy_map.t list -> Proxy_map.t Builder.t) =
   fun pms ->
-    match (Proxy_map_op.merge pms) with
+    match (Proxy_map.merge pms) with
     | Error _inconsistency -> error Reason.Inconsistent_proxies
     | Ok pm -> return pm
 
@@ -918,7 +876,7 @@ let build_depends t depends ~need =
     match dep with
 
     | Dep.Return x ->
-      return (x, Proxy_map_op.empty)
+      return (x, Proxy_map.empty)
 
     | Dep.Map (x, f) ->
       exec ~need x *>>|= fun (v1, pm) ->
@@ -933,7 +891,7 @@ let build_depends t depends ~need =
 
     | Dep.Cutoff (equal,body) ->
       Builder.cutoff
-        ~equal:(fun (x1,pm1) (x2,pm2) -> equal x1 x2 && Proxy_map_op.equal pm1 pm2)
+        ~equal:(fun (x1,pm1) (x2,pm2) -> equal x1 x2 && Proxy_map.equal pm1 pm2)
         (exec ~need body)
 
     | Dep.All xs ->
@@ -1488,7 +1446,7 @@ let build_target_rule :
         check_targets t targets *>>= function
         | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
         | `ok path_tagged_proxys ->
-          match (Proxy_map_op.create_by_path path_tagged_proxys) with
+          match (Proxy_map.create_by_path path_tagged_proxys) with
           | Error _inconsistency -> error Reason.Inconsistent_proxies
           | Ok targets_proxy_map ->
             check_mtimes_unchanged t mtimes *>>| fun () ->
@@ -1509,11 +1467,10 @@ let build_target_rule :
     match (Hashtbl.find (ruled t) head_target) with
     | None -> run_and_cache RR.No_record_of_being_run_before
     | Some prev ->
-      match (equal_using_compare
-               Action_proxy.compare prev.Rule_proxy.action action_proxy) with
+      match ([%compare.equal: Action_proxy.t] prev.Rule_proxy.action action_proxy) with
       | false -> run_and_cache RR.Action_changed
       | true ->
-        match (Proxy_map_op.diff ~before:prev.Rule_proxy.deps ~after:deps_proxy_map) with
+        match (Proxy_map.diff ~before:prev.Rule_proxy.deps ~after:deps_proxy_map) with
         | Some keys -> run_and_cache (RR.Deps_have_changed keys)
         | None ->
           (* de-sensitize to the pre-action state of targets...
@@ -1523,10 +1480,10 @@ let build_target_rule :
           match opt with
           | `missing paths -> run_and_cache (RR.Targets_missing paths)
           | `ok path_tagged_proxys ->
-            match (Proxy_map_op.create_by_path path_tagged_proxys) with
+            match (Proxy_map.create_by_path path_tagged_proxys) with
             | Error _inconsistency -> error Reason.Inconsistent_proxies
             | Ok targets_proxy_map ->
-              match (Proxy_map_op.diff ~before:prev.Rule_proxy.targets ~after:targets_proxy_map) with
+              match (Proxy_map.diff ~before:prev.Rule_proxy.targets ~after:targets_proxy_map) with
               | Some keys ->
                 let paths = List.map keys ~f:Pm_key.to_path_exn in
                 run_and_cache (RR.Targets_not_as_expected paths)
