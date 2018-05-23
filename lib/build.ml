@@ -15,6 +15,7 @@ module Proxy_map = Db.Proxy_map
 module Rule_proxy = Db.Rule_proxy
 module Output_proxy = Db.Output_proxy
 module Action_proxy = Db.Action_proxy
+module Targets_proxy = Db.Targets_proxy
 
 module PPs = struct (* list of path-tagged proxies *)
   type t = (Path.t * Proxy.t) list
@@ -230,9 +231,10 @@ let determine_and_remove_stale_artifacts : (
       let prev_targets =
         match (Hashtbl.find (generated t) rel) with
         | Some x -> x
-        | None -> Path.Set.empty
+        | None -> String.Set.empty
       in
-      if not (Path.Set.equal prev_targets targets) then (
+      let targets = Set.map (module String) targets ~f:Path.basename in
+      if not (String.Set.equal prev_targets targets) then (
         Hashtbl.set (Persist.modify "generated" (generated t)) ~key:rel ~data:targets;
       )
 ;;
@@ -798,23 +800,29 @@ let check_mtimes_unchanged : (t -> Mtimes.t -> unit Builder.t) =
 
 let run_action_for_stdout_if_necessary t ~deps ~need action =
   jenga_root t *>>= fun env ->
-  let action_proxy = Action.proxy ~default_sandbox:t.config.sandbox_actions action in
+  let action_proxy_digest =
+    Action.proxy ~default_sandbox:t.config.sandbox_actions action
+    |> Action_proxy.digest
+  in
+  let deps_digest = Proxy_map.digest deps in
   let run_and_cache rr =
     mtimes_of_proxy_map t deps *>>= fun mtimes ->
     Builder.uncancellable (
       run_action_for_stdout t rr env action ~deps ~need *>>= fun stdout ->
       check_mtimes_unchanged t mtimes *>>| fun () ->
-      let output_proxy = {Output_proxy. deps; stdout;} in
-      Hashtbl.set (Persist.modify "actioned" (actioned t)) ~key:action_proxy ~data:output_proxy;
+      let output_proxy = {Output_proxy. deps = deps_digest; stdout;} in
+      Hashtbl.set (Persist.modify "actioned" (actioned t))
+        ~key:action_proxy_digest
+        ~data:output_proxy;
       stdout
     )
   in
-  match (Hashtbl.find (actioned t) action_proxy) with
+  match (Hashtbl.find (actioned t) action_proxy_digest) with
   | None -> run_and_cache RR.No_record_of_being_run_before
   | Some prev ->
-    match (Proxy_map.diff ~before:prev.Output_proxy.deps ~after:deps) with
-    | Some keys -> run_and_cache (RR.Deps_have_changed keys)
-    | None ->
+    if not (Db.Proxy_map.Digest.equal deps_digest prev.deps) then
+      run_and_cache RR.Rule_changed
+    else
       (* Nothing has changed, use cached stdout *)
       return prev.Output_proxy.stdout
 
@@ -1423,7 +1431,7 @@ let build_target_rule :
      - one of the targets is different from expected
      Record a successful run in the persistent state.
   *)
-    (t -> Target_rule.t -> PPs.t Builder.t) =
+  (t -> Target_rule.t -> PPs.t Builder.t) =
   fun t tr ->
     let targets = Target_rule.targets tr in
     (* The persistent caching is keyed of the [head_target] *)
@@ -1433,6 +1441,13 @@ let build_target_rule :
     *>>= fun (action,deps_proxy_map) ->
     jenga_root t *>>= fun env ->
     let action_proxy = Action.proxy ~default_sandbox:t.config.sandbox_actions action in
+    let rule_digest =
+      Rule_proxy.digest
+        { targets
+        ; deps   = deps_proxy_map
+        ; action = action_proxy
+        }
+    in
     let run_and_cache rr =
       mtimes_of_proxy_map t deps_proxy_map *>>= fun mtimes ->
       Builder.uncancellable (
@@ -1446,54 +1461,44 @@ let build_target_rule :
         check_targets t targets *>>= function
         | `missing paths -> error (Reason.Rule_failed_to_generate_targets paths)
         | `ok path_tagged_proxys ->
-          match (Proxy_map.create_by_path path_tagged_proxys) with
-          | Error _inconsistency -> error Reason.Inconsistent_proxies
-          | Ok targets_proxy_map ->
-            check_mtimes_unchanged t mtimes *>>| fun () ->
-            let rule_proxy = {
-              Rule_proxy.
-              targets = targets_proxy_map;
-              deps = deps_proxy_map;
-              action = action_proxy;
-            }
-            in
-            Hashtbl.set (Persist.modify "ruled" (ruled t)) ~key:head_target ~data:rule_proxy;
-            (* We remove data associated with the [other_targets]. Its not essential for
-               correctness, but it avoid cruft from building up in the persistent state *)
-            List.iter other_targets ~f:(fun other -> Hashtbl.remove (ruled t) other);
-            path_tagged_proxys
+          check_mtimes_unchanged t mtimes *>>| fun () ->
+          let targets_digest =
+            Targets_proxy.digest (List.map path_tagged_proxys ~f:snd)
+          in
+          Hashtbl.set (Persist.modify "ruled" (ruled t)) ~key:head_target
+            ~data:(rule_digest, targets_digest);
+          (* We remove data associated with the [other_targets]. Its not essential for
+             correctness, but it avoid cruft from building up in the persistent state *)
+          List.iter other_targets ~f:(fun other -> Hashtbl.remove (ruled t) other);
+          path_tagged_proxys
       )
     in
     match (Hashtbl.find (ruled t) head_target) with
-    | None -> run_and_cache RR.No_record_of_being_run_before
-    | Some prev ->
-      match ([%compare.equal: Action_proxy.t] prev.Rule_proxy.action action_proxy) with
-      | false -> run_and_cache RR.Action_changed
-      | true ->
-        match (Proxy_map.diff ~before:prev.Rule_proxy.deps ~after:deps_proxy_map) with
-        | Some keys -> run_and_cache (RR.Deps_have_changed keys)
-        | None ->
-          (* de-sensitize to the pre-action state of targets...
-             in case we have to run the action
-          *)
-          Builder.desensitize (check_targets t targets) *>>= fun (opt,heart) ->
-          match opt with
-          | `missing paths -> run_and_cache (RR.Targets_missing paths)
-          | `ok path_tagged_proxys ->
-            match (Proxy_map.create_by_path path_tagged_proxys) with
-            | Error _inconsistency -> error Reason.Inconsistent_proxies
-            | Ok targets_proxy_map ->
-              match (Proxy_map.diff ~before:prev.Rule_proxy.targets ~after:targets_proxy_map) with
-              | Some keys ->
-                let paths = List.map keys ~f:Pm_key.to_path_exn in
-                run_and_cache (RR.Targets_not_as_expected paths)
-              | None ->
-                (* Everything is as it should be! re-sensitize to the targets. *)
-                if Config.show_checked t.config then  (
-                  Message.message "NOT RUNNING: %s" (Action.to_sh_ignoring_dir action);
-                );
-                Builder.sensitize heart *>>| fun () ->
-                path_tagged_proxys
+    | None -> run_and_cache No_record_of_being_run_before
+    | Some (prev_rule_digest, prev_targets_digest) ->
+      if not (Rule_proxy.Digest.equal prev_rule_digest rule_digest) then
+        run_and_cache Rule_changed
+      else
+        (* de-sensitize to the pre-action state of targets...
+           in case we have to run the action
+        *)
+        Builder.desensitize (check_targets t targets) *>>= fun (opt,heart) ->
+        match opt with
+        | `missing paths -> run_and_cache (Targets_missing paths)
+        | `ok path_tagged_proxys ->
+          let targets_digest =
+            Targets_proxy.digest (List.map path_tagged_proxys ~f:snd)
+          in
+          if not (Targets_proxy.Digest.equal prev_targets_digest targets_digest) then
+            run_and_cache Targets_not_as_expected
+          else begin
+            (* Everything is as it should be! re-sensitize to the targets. *)
+            if Config.show_checked t.config then  (
+              Message.message "NOT RUNNING: %s" (Action.to_sh_ignoring_dir action);
+            );
+            Builder.sensitize heart *>>| fun () ->
+            path_tagged_proxys
+          end
 
 let build_target_rule :
     (t -> Path.Rel.t -> PPs.t Builder.t) =
@@ -1661,7 +1666,8 @@ let internal_artifacts t ~dir =
   (* Determine artifacts as what was previously build by jenga. Not completely reliable -
      doesn't work if jenga.db is removed - but avoids any effort from the rule-author. *)
   match Hashtbl.find (generated t) dir with
-  | Some previous_targets -> (fun ~non_target -> Set.mem previous_targets non_target)
+  | Some previous_targets -> (fun ~non_target ->
+    Set.mem previous_targets (Path.basename non_target))
   | None -> delete_nothing
 
 let delete_eagerly =

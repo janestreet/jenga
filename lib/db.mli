@@ -38,14 +38,8 @@ module Digest : sig  (** proxy for the contents of a file in the file-system *)
 
   type t
   [@@deriving sexp_of, hash, compare]
+  val equal : t -> t -> bool
   val intern : Md5.t -> t
-
-  module With_store : sig
-    type 'a t [@@deriving bin_io]
-    val snapshot : 'a -> 'a t
-    val value : 'a t -> 'a
-  end
-
 end
 
 module Listing : sig (** result of globbing *)
@@ -107,8 +101,6 @@ module Proxy_map : sig
   type inconsistency = (Pm_key.t * Proxy.t list) list
   [@@deriving sexp_of]
 
-  val create_by_path : (Path.t * Proxy.t) list -> (t, inconsistency) Result.t
-
   val equal : t -> t -> bool
 
   (** Return [None] if [before] and [after] are equal and [Some l] where [l] is a
@@ -155,6 +147,13 @@ module Proxy_map : sig
       -> 'a
   end
   val to_paths_for_mtimes_check : t -> Path.t list * Group.t list
+
+  module Digest : sig
+    type t
+    val equal : t -> t -> bool
+  end
+
+  val digest : t -> Digest.t
 end
 
 module Sandbox_kind : sig
@@ -196,40 +195,61 @@ module Action_proxy : sig
     | Save of Save_proxy.t
   [@@deriving sexp_of, compare]
   include Hashable_binable with type t := t
+
+  module Digest : sig
+    type t
+    module Table : Hashtbl.S with type key := t
+  end
+
+  val digest : t -> Digest.t
 end
 
 module Rule_proxy : sig
-  type t = {
-    targets : Proxy_map.t;
-    deps : Proxy_map.t;
-    action : Action_proxy.t
-  } [@@deriving hash, compare, fields]
+  type t =
+    { targets : Path.Rel.t list
+    ; deps    : Proxy_map.t
+    ; action  : Action_proxy.t
+    } [@@deriving compare, fields]
+
+  module Digest : sig
+    type t
+    val equal : t -> t -> bool
+  end
+
+  val digest : t -> Digest.t
+end
+
+module Targets_proxy : sig
+  type t = Proxy.t list
+
+  module Digest : sig
+    type t
+    val equal : t -> t -> bool
+  end
+
+  val digest : t -> Digest.t
 end
 
 module Output_proxy : sig
-  type t = {
-    deps : Proxy_map.t;
-    stdout : string;
-  } [@@deriving hash, compare, fields]
+  type t =
+    { deps   : Proxy_map.Digest.t
+    ; stdout : string;
+    } [@@deriving hash, compare, fields]
 end
 
-type t
+type t [@@deriving bin_io, sexp_of]
 
 val create : unit -> t
 
 val digest_cache : t -> (Stats.t * Digest.t) Path.Table.t
-val generated : t -> Path.Set.t Path.Rel.Table.t
-val ruled : t -> Rule_proxy.t Path.Rel.Table.t (* actions run for target-rules *)
-val actioned : t -> Output_proxy.t Action_proxy.Table.t (* actions run for their stdout *)
 
-module With_index : sig
-  type outer_t
-  type t [@@deriving bin_io, sexp_of]
-  module Index : sig
-    type t
-    val iter : t -> f:(Proxy_map.t -> unit) -> unit
-  end
-  val snapshot : outer_t -> t
-  val value : t -> outer_t
-  val index : t -> Index.t
-end with type outer_t := t
+(** Table from directory names to basename of targets created by jenga in said
+    directory (for stale artifact deletion). *)
+val generated : t -> String.Set.t Path.Rel.Table.t
+
+(** Table storing the digest of [Rule_proxy.t] values for target-rules. It is indexed by
+    the head target. *)
+val ruled : t -> (Rule_proxy.Digest.t * Targets_proxy.Digest.t) Path.Rel.Table.t
+
+(** Table storing the [Output_proxy.t] for [Dep.action*] commands. *)
+val actioned : t -> Output_proxy.t Action_proxy.Digest.Table.t

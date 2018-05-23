@@ -10,6 +10,7 @@ type t =
   ; compact_and_save_delay : Time.Span.t
   ; turn_off_db_saves : bool
   ; turn_off_mtimes_check : bool
+  ; debug_group_dependencies : bool
   }
 
 val t : t

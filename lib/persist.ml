@@ -6,7 +6,7 @@ open Async
 module Digest = Db.Digest
 
 module Version = struct
-  let current = "6"
+  let current = "7"
 end
 
 let jenga_show_persist =
@@ -35,31 +35,6 @@ module Quality = struct
   let to_string t = Sexp.to_string (sexp_of_t t)
 end
 
-module State : sig
-
-  type t [@@deriving bin_io]
-  val snapshot : Db.t -> t
-  val value : t -> Db.t
-
-end = struct
-
-  type t = Db.With_index.t Digest.With_store.t Path.With_store.t
-  [@@deriving bin_io]
-
-  let snapshot db =
-    db
-    |> Db.With_index.snapshot
-    |> Digest.With_store.snapshot
-    |> Path.With_store.snapshot
-
-  let value x =
-    x
-    |> Path.With_store.value
-    |> Digest.With_store.value
-    |> Db.With_index.value
-
-end
-
 module Ops : sig
 
   val load_db_with_quality : db_filename:string -> (Db.t * Quality.t) Or_error.t Deferred.t
@@ -79,10 +54,10 @@ end = struct
     | `Yes ->
       Deferred.Or_error.try_with (fun () ->
         Reader.with_file db_filename ~f:(fun r ->
-          Reader.read_bin_prot ~max_len r State.bin_reader_t
+          Reader.read_bin_prot ~max_len r Db.bin_reader_t
         )
       ) >>| function
-      | Ok (`Ok state) -> Ok (State.value state, `good)
+      | Ok (`Ok db) -> Ok (db, `good)
       | Ok `Eof -> Or_error.error_string "reached eof while bin_read'ing"
       | Error _ as e -> e
 
@@ -93,9 +68,7 @@ end = struct
       Metrics.Counter.incr Progress.saves_done;
       Monitor.try_with (fun () ->
         Writer.with_file_atomic db_filename ~f:(fun w ->
-          (* snapshot & write must be in same async-block *)
-          let state = State.snapshot db in
-          Writer.write_bin_prot w State.bin_writer_t state;
+          Writer.write_bin_prot w Db.bin_writer_t db;
           set_is_saved();
           return ()
         )

@@ -13,6 +13,7 @@ type t =
      the build system works without self triggering.
      If you are not sure, use it in combination with [turn_off_db_saves] to to avoid
      breaking the future jenga runs. *)
+  ; debug_group_dependencies     : bool [@default false]
   }
 [@@deriving sexp]
 

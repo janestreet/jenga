@@ -63,12 +63,25 @@ module Stats = struct
 end
 
 module Digest = struct
-  include Interning.String(struct let who = "<digest>" end)
-  let t_of_sexp sexp = intern (Md5.to_binary (Md5.t_of_sexp sexp))
-  let _ = t_of_sexp (* we silence the warning to keep shadowing the implementation
-                       from the functor *)
-  let sexp_of_t t = Md5.sexp_of_t (Md5.of_binary_exn (extern t))
-  let intern md5 = intern (Md5.to_binary md5)
+  type t = Md5.t [@@deriving sexp, bin_io, hash, compare]
+  let equal = Md5.equal
+  let intern = Fn.id
+
+  module Table = struct
+    include Md5.Table
+    include Provide_bin_io(Md5)
+  end
+
+  let buf = Bigbuffer.create 16384
+
+  (* When using this function, be mindful that while digests for different values of the
+     same type don't conflict, digests for different values of different types can very
+     well conflict. So it may be necessary to add a version information to handle types
+     changing over time. *)
+  let digest_bin_prot w x =
+    protectx buf ~finally:Bigbuffer.clear ~f:(fun buf ->
+      Bigbuffer.add_bin_prot buf w x;
+      Bigbuffer.md5 buf)
 end
 
 module Listing = struct
@@ -87,23 +100,35 @@ module Listing = struct
     module Set = struct
       include C.Set
       include C.Set.Provide_hash(T)
+      include C.Set.Provide_bin_io(T)
     end
 
     let create ~base ~kind = { base; kind }
   end
 
-  type listing = Elem.t list [@@deriving sexp, bin_io]
+  module Listing = struct
+    type t = Elem.t list [@@deriving sexp, bin_io]
 
-  let compare_listing xs1 xs2 =
-    (* Allow differently ordering listings to be regarded as equal *)
-    Elem.Set.compare (Elem.Set.of_list xs1) (Elem.Set.of_list xs2)
+    let compare xs1 xs2 =
+      (* Allow differently ordering listings to be regarded as equal *)
+      Elem.Set.compare (Elem.Set.of_list xs1) (Elem.Set.of_list xs2)
 
-  let hash_fold_listing s xs =
-    Elem.Set.hash_fold_t s (Elem.Set.of_list xs)
+    let hash_fold_t s xs =
+      Elem.Set.hash_fold_t s (Elem.Set.of_list xs)
+
+    include Bin_prot.Utils.Make_binable(struct
+        module Binable = struct
+          type t = Elem.Set.t [@@deriving bin_io]
+        end
+        type nonrec t = t
+        let to_binable = Elem.Set.of_list
+        let of_binable = Elem.Set.to_list
+      end)
+  end
 
   type t = {
     dir : Path.t;
-    listing : listing;
+    listing : Listing.t;
   } [@@deriving sexp, bin_io, hash, compare]
 
   let create ~dir ~elems = { dir; listing = elems }
@@ -183,7 +208,6 @@ module Glob = struct
     sprintf "glob: %s/ %s"
       (Path.to_string (dir t))
       (Listing.Restriction.to_string (restriction t))
-
 end
 
 module Pm_key = struct
@@ -223,7 +247,6 @@ module Pm_key = struct
   let to_path_opt = function
     | Path path -> Some path
     | Glob _ -> None
-
 end
 
 module Proxy = struct
@@ -239,10 +262,11 @@ module Proxy = struct
     Fs_proxy (Listing.of_file_paths_exn ~dir (Path.Set.to_list paths))
 
   let equal = [%compare.equal: t]
-
 end
 
 module Proxy_map = struct
+
+  module Digest = Digest
 
   module Id = Unique_id.Int63()
 
@@ -260,6 +284,7 @@ module Proxy_map = struct
       hash : int;
       t : t;
       mutable cache : Cache.t;
+      digest : Digest.t;
     }
     val compare_group : group -> group -> int
     val hash_fold_group : Hash.state -> group -> Hash.state
@@ -287,6 +312,22 @@ module Proxy_map = struct
     include Provide_hash(T)
   end
 
+  module Group_set_for_digest = struct
+    type t = Group_set.t
+    include Bin_prot.Utils.Make_binable(struct
+        module Binable = struct
+          type t = Digest.t list [@@deriving bin_io]
+        end
+        type nonrec t = t
+        let to_binable t =
+          Group_set.to_list t
+          |> List.map ~f:(fun (group : T_with_shallow_ops.group) ->
+            group.digest)
+          |> List.sort ~compare:Digest.compare
+        let of_binable _ = assert false
+      end)
+  end
+
   (* We allow some values to compare as not equal even though we would prefer to think of
      them as equal when they only differ in the structure of groups.
      However in practice, it sounds like an inefficiency in the rules if the same big
@@ -296,14 +337,30 @@ module Proxy_map = struct
     map : Proxy.t Pm_key.Map.t;
     groups : Group_set.t;
   }
-  [@@deriving hash, compare]
+  [@@deriving hash, compare, sexp_of]
 
   type group = T_with_shallow_ops.group = {
     id : Id.t;
     hash : int;
     t : t;
     mutable cache : Cache.t;
+    digest : Digest.t;
   }
+
+  module For_digest = struct
+    type nonrec t = t =
+      { map    : Proxy.t Pm_key.Map.t
+      ; groups : Group_set_for_digest.t
+      }
+    [@@deriving bin_write, bin_shape]
+  end
+
+  let digest t =
+    Digest.digest_bin_prot For_digest.bin_writer_t t
+
+  let [@inline never] debug_group { id; t; _ } =
+    Caml.Printf.eprintf !"%{sexp#mach:Sexp.t}\n%!"
+      [%sexp Group { id : Id.t ; t : t} ]
 
   module Weak_group_set = Caml.Weak.Make(struct
     type t = group
@@ -313,74 +370,23 @@ module Proxy_map = struct
   end)
   let weak_group_set = lazy (Weak_group_set.create 1000)
   let create_group t =
-    let group = { hash = [%hash:t] t; t; id = Id.create (); cache = None } in
-    Weak_group_set.merge (force weak_group_set) group
-
-  module type Serialization_param = sig
-    (* identifiers on disk can be unrelated to the ones in memory once loaded *)
-    module Disk_id : sig include Binable.S include Sexpable.S with type t := t end
-    (* only one of [Saving] and [Loading] will be defined at a time *)
-    module Saving : sig
-      val to_disk : Id.t -> Disk_id.t
-    end
-    module Loading : sig
-      val group_of_id : Disk_id.t -> group
-      val define_group : Disk_id.t -> group -> unit
-    end
-  end
-
-  module T_with_serialization(X : Serialization_param) = struct
-    module Group_with_shallow_ops = struct
-      type t = group
-      let to_id t = X.Saving.to_disk t.id
-      let of_id id = X.Loading.group_of_id id
-      module Binable = Binable.Of_binable(X.Disk_id)(struct
-        type nonrec t = t
-        let to_binable = to_id
-        let of_binable = of_id
-      end)
-      module Sexpable = Sexpable.Of_sexpable(X.Disk_id)(struct
-          type nonrec t = t
-          let to_sexpable = to_id
-          let of_sexpable = of_id
-        end)
-      include Binable
-      include Sexpable
-      module Set =
-        Set.Make_binable_using_comparator(struct
-          type t = T_with_shallow_ops.group
-          include Group_comparator
-          include Binable
-          include Sexpable
-        end)
-    end
-    type nonrec t = t = {
-      map : Proxy.t Pm_key.Map.t;
-      groups : Group_with_shallow_ops.Set.t;
-    } [@@deriving bin_io, sexp_of]
-
-    module Group_in_index = struct
-      module Format = struct
-        type nonrec t = X.Disk_id.t * t [@@deriving bin_io, sexp_of]
-      end
-      type t = group
-      let to_format t = X.Saving.to_disk t.id, t.t
-      let of_format (id, t) =
-        let group = create_group t in
-        X.Loading.define_group id group;
-        group
-      include Binable.Of_binable(Format)(struct
-          type t = group
-          let to_binable = to_format
-          let of_binable = of_format
-        end)
-      let sexp_of_t t = Format.sexp_of_t (to_format t)
-    end
-  end
+    let id = Id.create () in
+    let group =
+      { hash = [%hash:t] t
+      ; t
+      ; id
+      ; cache = None
+      ; digest = digest t
+      }
+    in
+    let group = Weak_group_set.merge (force weak_group_set) group in
+    if Jenga_options.t.debug_group_dependencies && Id.equal id group.id then
+      debug_group group;
+    group
 
   (* Traverses subgroups in post-order, avoiding visiting the same group twice. *)
   let iter_groups' seen ~f =
-    let rec go_group ({ id; hash = _; t; cache = _ } as group) =
+    let rec go_group ({ id; hash = _; t; cache = _; digest = _ } as group) =
       if not (Hash_set.mem seen id)
       then begin
         Hash_set.add seen id;
@@ -400,14 +406,9 @@ module Proxy_map = struct
 
   let iter_bindings t ~f =
     let f { map; groups = _ } = Map.iteri map ~f in
-    iter_groups t ~f:(fun { id = _; hash = _; t; cache = _ } -> f t);
+    iter_groups t ~f:(fun { id = _; hash = _; t; cache = _; digest = _ } -> f t);
     f t
   ;;
-
-  (* We go recursively before enqueuing so the order in the index from group id to group
-     respects the dependencies between groups. This way, when we read an id, we have seen
-     its definition already, so we don't need an intermediate datastructure. *)
-  let build_index (seen, index) = iter_groups' seen ~f:(Queue.enqueue index)
 
   let shallow_length { map; groups } =
     Map.length map + Set.length groups
@@ -440,13 +441,6 @@ module Proxy_map = struct
           loop (Map.set acc_t ~key:key ~data:proxy) xs
     in
     fun xs -> loop Pm_key.Map.empty xs
-  let of_alist xs =
-    match map_of_alist xs with
-    | Ok map -> Ok (create map no_groups)
-    | Error _ as e -> e
-
-  let create_by_path xs =
-    of_alist (List.map xs ~f:(fun (path,v) -> (Pm_key.of_path path,v)))
 
   let equal = [%compare.equal: t]
 
@@ -456,7 +450,7 @@ module Proxy_map = struct
     Sequence.append
       (Map.to_sequence map)
       (Sequence.concat_map (Set.to_sequence groups) ~f:group_to_sequence)
-  and group_to_sequence { id = _; hash = _; t; cache = _ } =
+  and group_to_sequence { id = _; hash = _; t; cache = _; digest = _ } =
     to_sequence t
   ;;
 
@@ -544,7 +538,6 @@ module Proxy_map = struct
       let group = Group_set.union_list (List.map ts ~f:(fun t -> t.groups)) in
       Ok (create map group)
     | Error _ as err -> err
-
 end
 
 module Sandbox_kind = struct
@@ -571,11 +564,9 @@ module Process_proxy = struct
 
   let create ~dir ~prog ~args ~ignore_stderr ~sandbox =
     { dir ; prog; args; ignore_stderr; sandbox }
-
 end
 
 module Save_proxy = struct
-
   type t = {
     contents : string;
     target : Path.t;
@@ -584,7 +575,6 @@ module Save_proxy = struct
 
   let create ~contents ~target ~chmod_x =
     { contents; target; chmod_x }
-
 end
 
 module Action_proxy = struct
@@ -598,148 +588,95 @@ module Action_proxy = struct
   include T
   include Hashable.Make_binable(T)
 
+  module Digest = Digest
+
+  let digest t =
+    Digest.digest_bin_prot bin_writer_t t
+end
+
+module Versioned(M : sig type t [@@deriving bin_write] val version : int end) = struct
+  type t = M.t
+
+  let bin_write_t buf ~pos x =
+    let pos = bin_write_int buf ~pos M.version in
+    M.bin_write_t buf ~pos x
+
+  let bin_size_t =
+    let n = bin_size_int M.version in
+    fun x -> n + M.bin_size_t x
+
+  let bin_writer_t : t Bin_prot.Type_class.writer =
+    { write = bin_write_t
+    ; size  = bin_size_t
+    }
 end
 
 module Rule_proxy = struct
+  type t =
+    { targets : Path.Rel.t list
+    ; deps    : Proxy_map.t
+    ; action  : Action_proxy.t
+    } [@@deriving compare, fields, sexp_of]
 
-  type t = {
-    targets : Proxy_map.t;
-    deps : Proxy_map.t;
-    action : Action_proxy.t
-  } [@@deriving hash, compare, fields]
+  module Digest = Digest
 
-  let build_index acc { targets; deps; action = _ } =
-    Proxy_map.build_index acc targets;
-    Proxy_map.build_index acc deps
-  ;;
+  module For_digest = Versioned(struct
+    type nonrec t = t =
+      { targets : Path.Rel.t list
+      ; deps    : Proxy_map.For_digest.t
+      ; action  : Action_proxy.t
+      }
+    [@@deriving bin_write, bin_shape]
 
-  module T_with_serialization(X : Proxy_map.Serialization_param) = struct
-    module Proxy_map = Proxy_map.T_with_serialization(X)
-    type nonrec t = t = {
-      targets : Proxy_map.t;
-      deps : Proxy_map.t;
-      action : Action_proxy.t
-    } [@@deriving bin_io, sexp_of]
-  end
+    let version = 0
 
+    let%expect_test _ =
+      printf "%s\n" (Bin_prot.Shape.eval_to_digest_string [%bin_shape: t]);
+      (* Increase [version] when this changes *)
+      [%expect {| 8151b26156c334060a92cd44171131aa |}]
+  end)
+
+  let [@inline never] debug t =
+    Caml.Printf.eprintf !"%{sexp#mach:Sexp.t}\n%!"
+      [%sexp Rule (t : t)]
+
+  let digest t =
+    if Jenga_options.t.debug_group_dependencies then debug t;
+    Digest.digest_bin_prot For_digest.bin_writer_t t
+end
+
+module Targets_proxy = struct
+  (* Each element of [t] is the digest for the element at the same index in the targets of
+     the corresponding Rule_proxy. *)
+  type t = Proxy.t list [@@deriving bin_write]
+
+  module Digest = Digest
+
+  let digest t =
+    Digest.digest_bin_prot bin_writer_t t
 end
 
 module Output_proxy = struct
-
-  type t = {
-    deps : Proxy_map.t;
-    stdout : string;
-  } [@@deriving hash, compare, fields]
-
-  let build_index acc { deps; stdout = _ } = Proxy_map.build_index acc deps
-
-  module T_with_serialization(X : Proxy_map.Serialization_param) = struct
-    module Proxy_map = Proxy_map.T_with_serialization(X)
-    type nonrec t = t = {
-      deps : Proxy_map.t;
-      stdout : string;
-    } [@@deriving bin_io, sexp_of]
-  end
-
+  type t =
+    { deps   : Proxy_map.Digest.t
+    ; stdout : string
+    } [@@deriving hash, compare, bin_io, sexp_of, fields]
 end
 
-module T = struct
-  type t = {
-    digest_cache : (Stats.t * Digest.t) Path.Table.t;
-    generated : Path.Set.t Path.Rel.Table.t;
-    ruled : Rule_proxy.t Path.Rel.Table.t;
-    actioned : Output_proxy.t Action_proxy.Table.t;
-  } [@@deriving fields]
+module Generated = struct
+  type t = String.Set.t Path.Rel.Table.t [@@deriving sexp_of, bin_io]
 end
-include T
 
-let build_index acc { digest_cache = _; generated = _; ruled; actioned } =
-  Hashtbl.iter ruled ~f:(Rule_proxy.build_index acc);
-  Hashtbl.iter actioned ~f:(Output_proxy.build_index acc);
-;;
-
-module T_with_serialization(X : Proxy_map.Serialization_param) = struct
-  module Rule_proxy = Rule_proxy.T_with_serialization(X)
-  module Output_proxy = Output_proxy.T_with_serialization(X)
-  type nonrec t = t = {
-    digest_cache : (Stats.t * Digest.t) Path.Table.t;
-    generated : Path.Set.t Path.Rel.Table.t;
-    ruled : Rule_proxy.t Path.Rel.Table.t;
-    actioned : Output_proxy.t Action_proxy.Table.t;
-  } [@@deriving sexp_of, bin_io]
-end
+type t =
+  { digest_cache : (Stats.t * Digest.t) Path.Table.t
+  ; generated    : Generated.t
+  ; ruled        : (Rule_proxy.Digest.t * Targets_proxy.Digest.t) Path.Rel.Table.t
+  ; actioned     : Output_proxy.t Action_proxy.Digest.Table.t
+  } [@@deriving fields, bin_io, sexp_of]
 
 let create () = {
   digest_cache = Path.Table.create ();
   generated = Path.Rel.Table.create();
   ruled = Path.Rel.Table.create();
-  actioned = Action_proxy.Table.create();
+  actioned = Action_proxy.Digest.Table.create();
 }
-
-module With_index = struct
-
-  module Index = struct
-    type t = Proxy_map.group Queue.t
-    let iter t ~f = Queue.iter t ~f:(fun elt -> f elt.Proxy_map.t)
-  end
-
-  (* It's important for [index] to go first because its bin_io reading implementation is
-     side-effectful and the side-effects are necessary to load [t]. *)
-  type t = { index : Index.t; t : T.t }
-  [@@deriving bin_shape ~basetype:"89920580-490a-11e6-a091-1398e5058293"]
-
-  let index t = t.index
-
-  module T_with_serialization(X : Proxy_map.Serialization_param) = struct
-    module Proxy_map = Proxy_map.T_with_serialization(X)
-    module T = T_with_serialization(X)
-    type nonrec t = t = { index : Proxy_map.Group_in_index.t Queue.t; t : T.t }
-    [@@deriving bin_io, sexp_of]
-  end
-
-  let snapshot t =
-    let seen = Proxy_map.Id.Hash_set.create () in
-    let index = Queue.create () in
-    build_index (seen, index) t;
-    { index; t }
-  ;;
-
-  let value t = t.t
-
-  module Disk_id = Int
-
-  let bin_write_t, bin_size_t, sexp_of_t =
-    let module T =
-      T_with_serialization(struct
-        module Disk_id = Disk_id
-        module Loading = struct
-          let group_of_id _ = assert false
-          let define_group _ _ = assert false
-        end
-        module Saving = struct
-          let to_disk id = Proxy_map.Id.to_int_exn id
-        end
-      end) in
-    T.bin_write_t, T.bin_size_t, T.sexp_of_t
-
-  let bin_read_t buf ~pos_ref =
-    let table = Disk_id.Table.create () in
-    let module T =
-      T_with_serialization(struct
-        module Disk_id = Disk_id
-        module Loading = struct
-          let group_of_id id = Hashtbl.find_exn table id
-          let define_group id group = Hashtbl.add_exn table ~key:id ~data:group
-        end
-        module Saving = struct
-          let to_disk _ = assert false
-        end
-      end) in
-    T.bin_read_t buf ~pos_ref
-
-  let __bin_read_t__ _ ~pos_ref:_ = assert false
-
-  (* Define bin_writer, bin_reader etc. *)
-  include (struct type nonrec t = t [@@deriving bin_io] end
-           : sig type t [@@deriving bin_io] end with type t := t)
-end

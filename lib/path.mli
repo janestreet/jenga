@@ -99,9 +99,3 @@ val of_absolute_string : string -> t
 
 (** [is_a_root t = (t = the_root) || (t = unix_root)]*)
 val is_a_root : t -> bool
-
-module With_store : sig
-  type 'a t [@@deriving bin_io]
-  val snapshot : 'a -> 'a t
-  val value : 'a t -> 'a
-end
