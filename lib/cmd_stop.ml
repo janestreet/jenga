@@ -2,10 +2,9 @@ open Core
 open! Int.Replace_polymorphic_compare
 open Async
 
-open Command.Let_syntax
-let return = Async.return
 
 let command =
+  let open Command.Let_syntax in
   Command.async_or_error
     ~summary:"stop the jenga running in the current repo"
     [%map_open
@@ -13,6 +12,7 @@ let command =
         flag "-signal" (optional_with_default "sigterm" string)
           ~doc:"signal (default is sigterm)"
       in fun () ->
+        let open Deferred.Let_syntax in
         let signal = Signal.of_string signal in
         match Special_paths.discover_root () with
         | Error _ as e -> return e
@@ -24,4 +24,3 @@ let command =
             let server_pid = Server_lock.Info.pid info in
             Ok (Signal.send_exn signal (`Pid server_pid))
     ]
-

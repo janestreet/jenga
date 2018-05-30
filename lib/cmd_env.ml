@@ -1,7 +1,6 @@
 open Core
 open Async
 open! Int.Replace_polymorphic_compare
-open Command.Let_syntax
 let return = Async.return
 
 let with_menu_connection ~f =
@@ -37,11 +36,13 @@ let print_info_line ~as_sexp info =
   end
 
 let get =
+  let open Command.Let_syntax in
   Command.async_or_error ~summary:"show the value of a registered environment variable"
     [%map_open
       let name = anon ("NAME" %: string)
       and as_sexp = flag "sexp" no_arg ~doc:" print in sexp format" in
       fun () ->
+        let open Deferred.Let_syntax in
         with_menu_connection ~f:(fun cwm ->
           Rpc_intf.Getenv.dispatch_multi cwm (Var.Getenv.query name)
         )
@@ -50,6 +51,7 @@ let get =
     ]
 
 let anon_strings name =
+  let open Command.Let_syntax in
   [%map_open
     let args1 = anon (sequence (name %: string))
     and args2 =
@@ -59,12 +61,14 @@ let anon_strings name =
     args1 @ args2]
 
 let set =
+  let open Command.Let_syntax in
   Command.async_or_error
     ~summary:"set the value of a registered environment variable"
     [%map_open
       let name = anon ("NAME" %: string)
       and args = anon_strings "VALUE"
       in fun () ->
+        let open Deferred.Let_syntax in
         let value = String.concat ~sep:" " args in
         with_menu_connection ~f:(fun cwm ->
           Rpc_intf.Setenv.dispatch_multi cwm
@@ -73,10 +77,12 @@ let set =
         >>| Or_error.join]
 
 let unset =
+  let open Command.Let_syntax in
   Command.async_or_error ~summary:"unset a registered environment variable"
     [%map_open
       let name = anon ("NAME" %: string)
       in fun () ->
+        let open Deferred.Let_syntax in
         with_menu_connection ~f:(fun cwm ->
           Rpc_intf.Setenv.dispatch_multi cwm
             (Var.Setenv.query name ~value:None)
@@ -85,6 +91,7 @@ let unset =
     ]
 
 let print =
+  let open Command.Let_syntax in
   Command.async_or_error ~summary:"show the values of all registered environment variables"
     [%map_open
       let as_sexp = flag "sexp" no_arg ~doc:" print in sexp format"

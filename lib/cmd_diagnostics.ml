@@ -4,7 +4,6 @@ open! Int.Replace_polymorphic_compare
 
 open Tenacious_lib
 open Command.Let_syntax
-let return = Async.return
 
 module Tenacious_graph = struct
   let colored color s =
@@ -46,6 +45,7 @@ module Tenacious_graph = struct
       [%map_open
         let sexp = flag "sexp" no_arg ~doc:" print in sexp format" in
         fun () ->
+          let open Deferred.Let_syntax in
           match Special_paths.discover_root () with
           | Error e -> return (Error e)
           | Ok root_dir ->

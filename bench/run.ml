@@ -432,7 +432,6 @@ let build_all_needed_jengas jengas ~log =
 
 let command =
   let open Command.Let_syntax in
-  let return = Async.return in
   Command.async
     ~summary:"Runs benches and outputs the result on stdout"
     ~readme:(fun () -> config_text)
@@ -443,6 +442,7 @@ let command =
       and config =
         anon ("config" %: string)
       in fun () ->
+        let open Deferred.Let_syntax in
         let config = Sexp.of_string_conv_exn config [%of_sexp: config] in
         Unix.getlogin ()
         >>= fun user ->
