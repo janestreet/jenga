@@ -1,6 +1,10 @@
 (executables
  ((names (bench))
-  (libraries (core core_extended async jenga_lib textutils))
+  (libraries (async
+              core
+              core_extended
+              jenga_lib
+              textutils_kernel.text_block))
   (modules (:standard \ analyze))
   (preprocess (pps (ppx_jane ppxlib.runner)))))
 

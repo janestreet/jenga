@@ -1,6 +1,6 @@
 open Core
 open Int.Replace_polymorphic_compare
-module T = Textutils.Text_block
+module T = Text_block
 
 type t =
   { version : string
