@@ -2,7 +2,7 @@
  ((names (bench))
   (libraries (async
               core
-              core_extended
+              interval_map
               jenga_lib
               textutils_kernel.text_block))
   (modules (:standard \ analyze))

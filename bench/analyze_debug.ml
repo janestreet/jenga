@@ -291,7 +291,7 @@ let report_totals ~writer:w all_categories =
     fprintf w !"%s,%f\n" category (Time.Span.to_min span))
 ;;
 
-module M = Core_extended.Std.Interval_map.Make(Time)
+module M = Interval_map.Make(Time)
 
 let report_schedule ~writer:w ~all_categories ~interval_map ~first_time =
   fprintf w "time";
