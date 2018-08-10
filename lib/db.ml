@@ -81,7 +81,7 @@ module Digest = struct
   let digest_bin_prot w x =
     protectx buf ~finally:Bigbuffer.clear ~f:(fun buf ->
       Bigbuffer.add_bin_prot buf w x;
-      Bigbuffer.md5 buf)
+      Bigbuffer_blocking.md5 buf)
 end
 
 module Listing = struct

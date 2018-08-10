@@ -3,6 +3,7 @@
   (public_name jenga)
   (libraries (async
               async_inotify
+              core.bigbuffer_blocking
               command_rpc
               core
               fieldslib
