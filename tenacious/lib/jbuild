@@ -1,7 +1,7 @@
 (library
  ((name tenacious_lib)
   (public_name jenga.tenacious)
-  (libraries (core async))
+  (libraries (core async core_kernel.uuid))
   (preprocess (pps (ppx_jane ppxlib.runner)))))
 
 ;(alias ((name lib_artifacts) (deps ((alias runtest)))))

@@ -162,7 +162,7 @@ module Stable = struct
       } [@@deriving bin_io]
 
       let upgrade { data } =
-        let data = List.map ~f:Error.V1.upgrade data in
+        let data = Core.List.map ~f:Error.V1.upgrade data in
         { V2.Snap.data }
     end
 
