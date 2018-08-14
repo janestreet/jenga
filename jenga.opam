@@ -13,7 +13,6 @@ depends: [
   "async_inotify"
   "command_rpc"
   "core"
-  "core_kernel"
   "fieldslib"
   "ocaml_plugin"
   "ppx_jane"
