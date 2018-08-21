@@ -21,12 +21,12 @@ let lock_running_server ~root_dir ~port =
   let local_lock_filename =
     Path.Abs.to_string root_dir ^/ Path.Rel.to_string Special_paths.Dot_jenga.local_lock
   in
-  Lock_file.create local_lock_filename
+  Lock_file_async.create local_lock_filename
   >>= function
   | false ->
     let surely_not_taken = local_lock_filename ^ Uuid.to_string (Uuid.create ()) in
     begin
-      Lock_file.create ~unlink_on_exit:true surely_not_taken
+      Lock_file_async.create ~unlink_on_exit:true surely_not_taken
       >>= function
       | false ->
         Message.error "cannot take any lock in %S (running on nfs?)"
