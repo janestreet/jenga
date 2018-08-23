@@ -131,6 +131,7 @@ module Proxy_map : sig
 
   module Group : sig
     type t
+
     (** [find_or_add t ~unique_id_across_jenga:typ ~unique_f_across_jenga:f] computes
         [f (paths t)], making sure [f] is only called once per [t].
         Values for [typ] and [f] must be the same for every call of

@@ -8,6 +8,7 @@ open! Core
 module Action : sig
   type t = Action.t [@@deriving sexp_of]
   val dir : t -> Path.t
+
   (** [to_sh_ignoring_dir t] returns a shell script representing the action,
       that expects to be run from [dir t]. *)
   val to_sh_ignoring_dir : t -> string

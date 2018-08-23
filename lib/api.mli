@@ -96,6 +96,7 @@ end
 
 module Glob : sig
   type t [@@deriving sexp]
+
   (** [create ~dir pattern] refers to anything in [dir] whose basename matches
       the [pattern]. Note that patterns with slashes or path globs (**) in them
       do not work.
@@ -109,6 +110,7 @@ module Glob : sig
       {alt1,alt2} - matches both alt1 and alt2. can be nested.
   *)
   val create : dir:Path.t -> ?kinds: Kind.t list -> string -> t
+
   (** matches exactly the filename given *)
   val create_from_path : kinds:Fs.Kind.t list option -> Path.t -> t
 end
@@ -153,6 +155,7 @@ end
 
 module Action : sig
   type t [@@deriving sexp_of]
+
   (** [process ?ignore_stderr ~dir ~prog ~args] constructs an action, that when run
       causes a new process to be created to run [prog], passing [args], in [dir].
       The process fails if its exit code is not zero, or if print things on stderr
@@ -299,10 +302,12 @@ module Dep : sig
   val fs_glob_change : Glob.t -> unit t
 
   val subdirs : dir:Path.t -> Path.t list t
+
   (** [file_exists] makes the information about file existence available to the rules, but
       does not declare it as an action dependency.
   *)
   val file_exists : Path.t -> bool t
+
   (** [file_existence] declares an action dependency on file existence *)
   val file_existence : Path.t -> unit t
 
@@ -335,6 +340,7 @@ module Reflected : sig
     val to_sh_ignoring_dir : t -> string
     val string_for_one_line_make_recipe_ignoring_dir : t -> string
   end
+
   (** simple make-style rule triple, named [Trip.t] to distinguish from
       Jenga's more powerful rules [Rule.t] below. *)
   module Trip : sig
@@ -413,6 +419,7 @@ module Scheme : sig
   val sources : Path.t list -> t
 
   val dep : t Dep.t -> t
+
   (** Evaluates the schemes sequentially, which means that latter schemes can
       depend (using [glob]) on the targets of the former schemes. *)
   val all : t list -> t

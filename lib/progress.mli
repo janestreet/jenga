@@ -42,6 +42,7 @@ module Snap : sig
   val no_errors : t -> bool (*bad=0*)
   val built : t -> int
   val fraction : t -> (int*int) (* built/total *)
+
   (** [todo] and [to_act_string] are provided for display by build-manager *)
   val todo : t -> int
   val to_act_string : t -> string

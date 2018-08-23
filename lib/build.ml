@@ -315,7 +315,7 @@ let glob_fs_or_buildable =
 
 let scheme_glob_fs_or_buildable t glob ~buildable =
   Builder.cutoff
-    ~equal:(List.equal ~equal:Path.equal)
+    ~equal:(List.equal Path.equal )
     (glob_fs_only__must_be_cutoff t glob
      *>>= fun filesystem ->
      merge_fs_and_buildable t ~dir:(Glob.dir glob) ~filesystem ~buildable

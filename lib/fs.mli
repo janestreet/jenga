@@ -19,6 +19,7 @@ module Glob : sig (* glob specification *)
   val kind_allows_file : t -> bool
   val to_string : t -> string
   val create : dir:Path.t -> ?kinds: Kind.t list -> string -> t
+
   (** matches exactly one path *)
   val create_from_path : kinds:Kind.t list option -> Path.t -> t
 end
